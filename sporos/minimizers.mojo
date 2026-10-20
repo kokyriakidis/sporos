@@ -1,7 +1,7 @@
 """(w, k)-minimizers.
 
 The minimizer of a window of `w` consecutive k-mers is the k-mer with the
-smallest `window.order_key` (the top `31 - ceil(log2(w))` bits of its 32-bit
+smallest `window.order_key` (bits 30 down to `ceil(log2(w))` of its 32-bit
 ntHash, canonical by default), ties broken toward the leftmost k-mer. K-mers containing a non-ACGT base are never selected. Positions are
 reported once per run of consecutive windows sharing a minimizer, in
 increasing order. A sequence with fewer than `w` k-mers forms one window.

@@ -5,7 +5,7 @@ start positions is split into `LANES` contiguous chunks and every lane runs
 the same scalar algorithm in a SIMD register:
 
 1. roll the 32-bit forward (and reverse-complement) ntHash one base,
-2. key each k-mer by its top `31 - b` hash bits followed by its b-bit offset
+2. key each k-mer by hash bits 30..b followed by its b-bit offset
    inside a w-aligned block (`b = offset_bits(w)`); k-mers with a non-ACGT
    base get `HASH_NONE` and lose to every valid k-mer,
 3. maintain the minimum of the last `w` keys with the branch-free
@@ -88,8 +88,8 @@ def _lookup(table: _U8x16, index: SIMD[DType.uint8, 4 * LANES]) -> _U32V:
 def _transpose(
     src: ImmPointer[UInt8, _], chunk: Int, dst: MutPointer[UInt8, _]
 ):
-    """Writes `_TRANSPOSE` steps of `LANES` codes, step-major and scaled by
-    `_TIMES4`, into `dst`.
+    """Writes the seed-table indices of `_TRANSPOSE` steps of `LANES` codes,
+    step-major, into `dst` (see `_store_indices`).
 
     Lane `l` reads `src[l * chunk : l * chunk + 16]`; rounds of interleaves
     at doubling element widths turn the lane vectors into step vectors.
@@ -105,10 +105,7 @@ def _transpose(
     var b0 = bitcast[DType.uint32, 16](a0.interleave(a1))
     var b1 = bitcast[DType.uint32, 16](a2.interleave(a3))
     comptime if LANES == 8:
-        # Scale codes to seed-table byte offsets (see `_TIMES4`) 16 at a time.
-        dst.unsafe_store(
-            0, _TIMES4._dynamic_shuffle(bitcast[DType.uint8, 128](b0.interleave(b1)))
-        )
+        _store_indices(dst, bitcast[DType.uint8, _TRANSPOSE * LANES](b0.interleave(b1)))
     else:
         var a4 = bitcast[DType.uint16, 16](v[8].interleave(v[9]))
         var a5 = bitcast[DType.uint16, 16](v[10].interleave(v[11]))
@@ -118,9 +115,7 @@ def _transpose(
         var b3 = bitcast[DType.uint32, 16](a6.interleave(a7))
         var c0 = bitcast[DType.uint64, 16](b0.interleave(b1))
         var c1 = bitcast[DType.uint64, 16](b2.interleave(b3))
-        dst.unsafe_store(
-            0, _TIMES4._dynamic_shuffle(bitcast[DType.uint8, 256](c0.interleave(c1)))
-        )
+        _store_indices(dst, bitcast[DType.uint8, _TRANSPOSE * LANES](c0.interleave(c1)))
 
 
 @fieldwise_init
@@ -153,9 +148,9 @@ def offset_bits(w: Int) -> Int:
 
 @inline(.always)
 def order_key(hash: UInt32, w: Int) -> UInt32:
-    """The part of a k-mer hash that orders minimizers: its top
-    `31 - offset_bits(w)` bits (ties are broken toward the leftmost k-mer)."""
-    return (hash >> 1) >> UInt32(offset_bits(w))
+    """The part of a k-mer hash that orders minimizers: bits 30 down to
+    `offset_bits(w)` (ties are broken toward the leftmost k-mer)."""
+    return (hash & 0x7FFFFFFF) >> UInt32(offset_bits(w))
 
 
 @fieldwise_init
@@ -183,32 +178,29 @@ struct _Lanes(ImplicitlyCopyable, TrivialRegisterPassable):
     var rh: _U32V
     var run: _U32V
     var pos: _U32V
+    var block: _U32V
     var prefix: _U32V
     var prev: _U32V
 
 
 comptime _TIMES4 = _U8x16(0, 4, 8, 12, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80)
 """Maps a code c to 4c, and N to 0x80, which both tbl and pshufb read as zero."""
-def _replicate_mask() -> SIMD[DType.uint8, 4 * LANES]:
-    var mask = SIMD[DType.uint8, 4 * LANES](0)
-    for i in range(4 * LANES):
-        mask[i] = UInt8(i // 4)
-    return mask
-
-
-comptime _REPLICATE = _replicate_mask()
-"""Byte i takes lane i // 4's code."""
-comptime _BYTE_IN_WORD = iota[DType.uint8, 4 * LANES]() & 3
+comptime _BYTE_IN_WORD = iota[DType.uint8, 4 * _TRANSPOSE * LANES]() & 3
 
 
 @inline(.always)
-def _index(c4: SIMD[DType.uint8, LANES]) -> SIMD[DType.uint8, 4 * LANES]:
-    """Byte indices `4c .. 4c+3` per lane for `_lookup`, from codes already
-    scaled by `_TIMES4`; N's indices stay >= 0x80 and look up zero."""
-    comptime if LANES == 8:
-        return c4.join(c4)._dynamic_shuffle(_REPLICATE) + _BYTE_IN_WORD
-    else:
-        return rebind[_U8x16](c4)._dynamic_shuffle(_REPLICATE) + _BYTE_IN_WORD
+def _store_indices(
+    dst: MutPointer[UInt8, _], codes: SIMD[DType.uint8, _TRANSPOSE * LANES]
+):
+    """Stores, for each code c, the byte indices `4c .. 4c+3` that `_lookup`
+    needs (N maps to 0x80.., which looks up zero and sets the lane's sign)."""
+    var scaled = _TIMES4._dynamic_shuffle(codes)
+    var twice = scaled.interleave(scaled)
+    comptime n = _TRANSPOSE * LANES
+    var four = bitcast[DType.uint8, 4 * n](
+        bitcast[DType.uint16, n](twice).interleave(bitcast[DType.uint16, n](twice))
+    )
+    dst.unsafe_store(0, four + _BYTE_IN_WORD)
 
 
 @inline(.always)
@@ -217,7 +209,7 @@ def _step[
 ](
     mut lanes: _Lanes,
     consts: _Consts,
-    c8: SIMD[DType.uint8, LANES],
+    index: SIMD[DType.uint8, 4 * LANES],
     ri: Int,
     wi: Int,
     fring: MutPointer[_U32V, _],
@@ -231,8 +223,8 @@ def _step[
     is in `lanes.prefix` and the previous block's suffix minima are in
     `ring[wi + 1 ..]` (`ring[w]` is a permanent `HASH_NONE`).
     """
-    var valid = c8.lt(16)
-    var index = _index(c8)
+    # An N's index bytes are >= 0x80, so its lane is negative as a u32.
+    var valid = bitcast[DType.uint32, LANES](index).lt(0x80000000)
     lanes.run = valid.select(lanes.run + 1, _U32V(0))
 
     lanes.fh = (
@@ -253,11 +245,11 @@ def _step[
     else:
         h = lanes.fh
 
-    # Top (31 - b) hash bits above the b-bit block offset: `min` inside a
+    # Hash bits 30..b above the b-bit block offset: `min` inside a
     # block is leftmost on ties; across blocks only hash bits are compared,
     # so the older (left) k-mer wins ties there too.
     var key = lanes.run.ge(consts.k).select(
-        ((h >> 1) & consts.hash_mask) | UInt32(wi), _U32V(HASH_NONE)
+        (h & consts.hash_mask) | UInt32(wi), _U32V(HASH_NONE)
     )
     lanes.prefix = min(lanes.prefix, key)
     var suffix = ring[unsafe_offset=wi + 1]
@@ -269,15 +261,16 @@ def _step[
 
     var bits: UInt32 = 0
     comptime if emit:
-        var block_start = lanes.pos - UInt32(wi)
+        # `lanes.block` is the position of the current block's first k-mer.
         var minpos = (win & consts.pos_mask) + from_prefix.select(
-            block_start, block_start - consts.w
+            lanes.block, lanes.block - consts.w
         )
         var value: _U32V
         var keep: _Mask
         comptime if mode == MINIMIZERS:
-            value = win.eq(HASH_NONE).select(_U32V(SENTINEL), minpos)
-            keep = value.ne(lanes.prev) & value.ne(SENTINEL)
+            var found = win.ne(HASH_NONE)
+            value = found.select(minpos, _U32V(SENTINEL))
+            keep = value.ne(lanes.prev) & found
             lanes.prev = value
         else:
             value = lanes.pos - consts.back
@@ -289,7 +282,8 @@ def _step[
             keep = hit & lanes.run.ge(consts.span)
         obuf.unsafe_store(0, value)
         bits = UInt32(pack_bits[_Bits](keep))
-    lanes.pos += 1
+    comptime if mode != MINIMIZERS:
+        lanes.pos += 1
     return bits
 
 
@@ -363,11 +357,13 @@ def _scan_lanes[
         offset=_U32V(UInt32(params.offset)),
     )
     var lane_ids = iota[DType.uint32, LANES]()
+    var first_kmer = _U32V(UInt32(seg_start)) + lane_ids * UInt32(chunk) - UInt32(k - 1)
     var lanes = _Lanes(
         fh=_U32V(0),
         rh=_U32V(0),
         run=_U32V(0),
-        pos=_U32V(UInt32(seg_start)) + lane_ids * UInt32(chunk) - UInt32(k - 1),
+        pos=first_kmer,
+        block=first_kmer,
         prefix=_U32V(HASH_NONE),
         prev=_U32V(SENTINEL),
     )
@@ -380,7 +376,7 @@ def _scan_lanes[
     var rring_p = rring.unsafe_ptr()
     var ring_p = ring.unsafe_ptr()
 
-    var tbuf_alloc = alloc(Layout[UInt8](length=_ROUND * LANES))
+    var tbuf_alloc = alloc(Layout[UInt8](length=_ROUND * 4 * LANES))
     var tbuf = tbuf_alloc.unsafe_ptr()
     var obuf_alloc = alloc(Layout[UInt32](length=_BATCH * LANES))
     var obuf = obuf_alloc.unsafe_ptr()
@@ -401,17 +397,17 @@ def _scan_lanes[
     while t < steps:
         var round_len = min(_ROUND, steps - t)
         for r in range(0, round_len, _TRANSPOSE):
-            _transpose(src.unsafe_offset(t + r), chunk, tbuf.unsafe_offset(r * LANES))
+            _transpose(src.unsafe_offset(t + r), chunk, tbuf.unsafe_offset(r * 4 * LANES))
         var i = 0
         while i < round_len:
             var n = min(w - wi, round_len - i)
             if t + i >= first_out:
                 for _ in range(n):
-                    var c8 = tbuf.unsafe_load[width=LANES](i * LANES)
+                    var index = tbuf.unsafe_load[width=4 * LANES](i * 4 * LANES)
                     var bits = _step[mode, canonical, True](
                         lanes,
                         consts,
-                        c8,
+                        index,
                         ri,
                         wi,
                         fring_p,
@@ -431,9 +427,9 @@ def _scan_lanes[
             else:
                 n = min(n, first_out - (t + i))
                 for _ in range(n):
-                    var c8 = tbuf.unsafe_load[width=LANES](i * LANES)
+                    var index = tbuf.unsafe_load[width=4 * LANES](i * 4 * LANES)
                     _ = _step[mode, canonical, False](
-                        lanes, consts, c8, ri, wi, fring_p, rring_p, ring_p, obuf
+                        lanes, consts, index, ri, wi, fring_p, rring_p, ring_p, obuf
                     )
                     ri = 0 if ri + 1 == k else ri + 1
                     wi += 1
@@ -445,6 +441,7 @@ def _scan_lanes[
                         min(ring_p[unsafe_offset=j], ring_p[unsafe_offset=j + 1])
                     )
                 lanes.prefix = _U32V(HASH_NONE)
+                lanes.block += UInt32(w)
                 wi = 0
         t += round_len
 
