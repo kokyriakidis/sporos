@@ -16,13 +16,30 @@ prepare = "mkdir -p build"
 build = { cmd = "mojo precompile sporos -o build/sporos.mojoc", depends-on = ["prepare"] }
 build-test-seeds = { cmd = "mojo build -I . -I tests tests/test_seeds.mojo -o build/test_seeds", depends-on = ["prepare"] }
 build-test-mems = { cmd = "mojo build -I . -I tests tests/test_mems.mojo -o build/test_mems", depends-on = ["prepare"] }
+build-test-index = { cmd = "mojo build -I . -I tests tests/test_index.mojo -o build/test_index", depends-on = ["prepare"] }
 # Every kernel held to a brute-force oracle (tests/reference.mojo).
-test = { cmd = "./build/test_seeds && ./build/test_mems", depends-on = ["build-test-seeds", "build-test-mems"] }
+test = { cmd = "./build/test_seeds && ./build/test_mems && ./build/test_index", depends-on = ["build-test-seeds", "build-test-mems", "build-test-index"] }
 build-bench-seeds = { cmd = "mojo build -I . -I tests -I benchmarks benchmarks/bench_seeds.mojo -o build/bench_seeds", depends-on = ["prepare"] }
 # Single-thread minimizer/syncmer throughput on random DNA: `pixi run bench-seeds [length]`.
 bench-seeds = { cmd = "./build/bench_seeds", depends-on = ["build-bench-seeds"] }
 # The command-line tool: `pixi run build-cli`, then `build/sporos --help`.
 build-cli = { cmd = "mojo build -I . cli/sporos_cli.mojo -o build/sporos", depends-on = ["prepare"] }
-format = "mojo format -l 120 sporos tests cli benchmarks"
+build-bench-index = { cmd = "mojo build -I . -I tests -I benchmarks benchmarks/bench_index.mojo -o build/bench_index", depends-on = ["prepare"] }
+# Seed-index build and lookup throughput: `pixi run bench-index <reference.fa> <reads.fa> [k] [w] [max_occ]`.
+bench-index = { cmd = "./build/bench_index", depends-on = ["build-bench-index"] }
+format = "mojo format -l 120 sporos tests cli benchmarks c python"
 # Pulls the latest Mojo skills from github.com/modular/skills into .claude/skills for coding agents.
 sync-skills = "bash .claude/sync-skills.sh"
+# Builds a program on sporos into a folder that runs without pixi or Mojo, for a baseline CPU:
+# `pixi run bundle <program.mojo> [out-dir] [target-cpu]`; see `scripts/bundle.sh`.
+bundle = "bash scripts/bundle.sh"
+# What the Mojo library answers on fixed inputs, which the C and Python tests hold their bindings to.
+api-expected = { cmd = "mojo build -I . -I tests tests/api_expected.mojo -o build/api_expected && ./build/api_expected build/api_expected.txt", depends-on = ["prepare"] }
+# The C API (c/sporos.h) as a shared library in build/c beside its runtime libraries: `pixi run build-c [target-cpu]`.
+build-c = "bash scripts/build_c.sh"
+# Builds the C API and runs its C++ test against it.
+test-c = { cmd = "c++ -std=c++17 -O2 -pthread -I build/c tests/test_c_api.cpp -L build/c -lsporos -Wl,-rpath,$PIXI_PROJECT_ROOT/build/c -o build/test_c_api && ./build/test_c_api build/api_expected.txt", depends-on = ["build-c", "api-expected"] }
+# The Python package (python/sporos) in build/python beside its runtime libraries: `pixi run build-python [target-cpu]`.
+build-python = "bash scripts/build_python.sh"
+# Builds the Python package and runs its tests against it.
+test-python = { cmd = "PYTHONPATH=$PIXI_PROJECT_ROOT/build/python python3 tests/test_python.py build/api_expected.txt", depends-on = ["build-python", "api-expected"] }

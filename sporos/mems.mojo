@@ -233,7 +233,6 @@ struct MemIndex(Movable):
         var qstep = self.params.query_step
         var mask = _kmer_mask(k)
         var off = self.table.offsets.unsafe_ptr()
-        var ent = self.table.entries.unsafe_ptr()
         # Software pipeline over anchors: anchor n is hashed (its bucket bounds
         # prefetched), anchor n - _LAG has its bounds read (entries prefetched),
         # and anchor n - 2 * _LAG is matched.

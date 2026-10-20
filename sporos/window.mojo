@@ -303,8 +303,6 @@ def scan_segment[
     syncmers it is `j` itself when the k-mer at `j` is a syncmer. Lanes get
     `seg_windows // LANES` windows each; the few left over run scalar.
     """
-    var k = params.k
-    var w = params.w
     var chunk = seg_windows // LANES
     if chunk > 0:
         _scan_lanes[mode, canonical](codes, seg_start, chunk, params, out)

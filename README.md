@@ -76,3 +76,34 @@ var opens = syncmer_positions(seq, k=21, s=11, open_offset=5)    # open syncmers
 Requires [pixi](https://pixi.sh). `pixi run test` builds and runs the test suites, `pixi run bench-seeds`
 times the seed kernels, `pixi run format` formats the sources. Coding agents: see `CLAUDE.md` (the
 Modular Mojo skills are vendored in `.claude/skills` and injected by hooks).
+
+## C and Python
+
+```sh
+pixi run build-c        # build/c: libsporos, the Mojo runtime libraries it loads, and c/sporos.h
+pixi run build-python   # build/python/sporos: the package and its Mojo extension (Python >= 3.10)
+pixi run test-c && pixi run test-python
+```
+
+Both folders run without pixi or Mojo. From C (`-Lbuild/c -lsporos`, build/c on the rpath):
+
+```c
+#include "sporos.h"
+uint32_t pos[1000];
+int64_t n = sporos_minimizers(seq, len, 21, 11, /*canonical*/ 1, /*threads*/ 1, pos, 1000);  // len >= n
+sporos_index *index = sporos_index_new(refs, ref_lens, n_refs, /*min_len*/ 50, /*threads*/ 0);
+sporos_matches *mums = sporos_index_matches(index, query, qlen, SPOROS_MUM, /*reverse*/ 0, 0);
+const sporos_match *m = sporos_matches_data(mums);  // ref_seq, ref_pos, query_pos, length
+sporos_matches_free(mums);
+sporos_index_free(index);
+```
+
+From Python (`PYTHONPATH=build/python`):
+
+```python
+import sporos
+sporos.minimizers("ACGT...", k=21, w=11)               # array('I') of positions
+sporos.syncmers("ACGT...", k=21, s=11, open_offset=5)
+index = sporos.Index(["ACGT...", "GGCA..."], min_len=50, threads=8)
+index.matches(query, mode="mum", reverse=False)        # [(ref_index, ref_pos, query_pos, length), ...]
+```
