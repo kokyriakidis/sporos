@@ -102,11 +102,11 @@ def _lookup(table: _U8x16, index: SIMD[DType.uint8, 4 * LANES]) -> _U32V:
 
 
 @inline(.always)
-def _encode16(raw: _U8x16) -> _U8x16:
+def _encode[n: Int](raw: SIMD[DType.uint8, n]) -> SIMD[DType.uint8, n]:
     """ASCII to 2-bit codes, `N_CODE` for anything but A/C/G/T/U."""
     var lower = raw | 0x20
     var valid = lower.eq(0x61) | lower.eq(0x63) | lower.eq(0x67) | lower.eq(0x74) | lower.eq(0x75)
-    return valid.select(((raw >> 1) ^ (raw >> 2)) & 3, _U8x16(N_CODE))
+    return valid.select(((raw >> 1) ^ (raw >> 2)) & 3, SIMD[DType.uint8, n](N_CODE))
 
 
 @inline(.always)
@@ -122,10 +122,7 @@ def _transpose[
     comptime assert LANES == 8 or LANES == 16, "LANES must be 8 or 16"
     var v = List[_U8x16](capacity=LANES)
     comptime for l in range(LANES):
-        comptime if ascii:
-            v.append(_encode16(src.unsafe_load[width=16](l * chunk)))
-        else:
-            v.append(src.unsafe_load[width=16](l * chunk))
+        v.append(src.unsafe_load[width=16](l * chunk))
     var a0 = bitcast[DType.uint16, 16](v[0].interleave(v[1]))
     var a1 = bitcast[DType.uint16, 16](v[2].interleave(v[3]))
     var a2 = bitcast[DType.uint16, 16](v[4].interleave(v[5]))
@@ -133,7 +130,7 @@ def _transpose[
     var b0 = bitcast[DType.uint32, 16](a0.interleave(a1))
     var b1 = bitcast[DType.uint32, 16](a2.interleave(a3))
     comptime if LANES == 8:
-        _store_indices(dst, bitcast[DType.uint8, _TRANSPOSE * LANES](b0.interleave(b1)))
+        _store_indices[ascii](dst, bitcast[DType.uint8, _TRANSPOSE * LANES](b0.interleave(b1)))
     else:
         var a4 = bitcast[DType.uint16, 16](v[8].interleave(v[9]))
         var a5 = bitcast[DType.uint16, 16](v[10].interleave(v[11]))
@@ -143,7 +140,7 @@ def _transpose[
         var b3 = bitcast[DType.uint32, 16](a6.interleave(a7))
         var c0 = bitcast[DType.uint64, 16](b0.interleave(b1))
         var c1 = bitcast[DType.uint64, 16](b2.interleave(b3))
-        _store_indices(dst, bitcast[DType.uint8, _TRANSPOSE * LANES](c0.interleave(c1)))
+        _store_indices[ascii](dst, bitcast[DType.uint8, _TRANSPOSE * LANES](c0.interleave(c1)))
 
 
 @fieldwise_init
@@ -217,11 +214,17 @@ comptime _BYTE_IN_WORD = iota[DType.uint8, 4 * _TRANSPOSE * LANES]() & 3
 
 
 @inline(.always)
-def _store_indices(
-    dst: MutPointer[UInt8, _], codes: SIMD[DType.uint8, _TRANSPOSE * LANES]
-):
+def _store_indices[
+    ascii: Bool
+](dst: MutPointer[UInt8, _], bases: SIMD[DType.uint8, _TRANSPOSE * LANES]):
     """Stores, for each code c, the byte indices `4c .. 4c+3` that `_lookup`
     needs (N maps to 0x80.., which looks up zero and sets the lane's sign)."""
+    var codes: SIMD[DType.uint8, _TRANSPOSE * LANES]
+    comptime if ascii:
+        # Encode after the transpose: whole vectors, not one per lane.
+        codes = _encode(bases)
+    else:
+        codes = bases
     var scaled = _TIMES4._dynamic_shuffle(codes)
     var twice = scaled.interleave(scaled)
     comptime n = _TRANSPOSE * LANES
