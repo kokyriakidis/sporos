@@ -106,32 +106,28 @@ def mix64(x: UInt64) -> UInt64:
 
 
 @inline(.always)
-def match_forward(a: ImmPointer[UInt8, _], b: ImmPointer[UInt8, _]) -> Int:
-    """Length of the common prefix of `a` and `b` (stops at a mismatch)."""
+def match_forward(a: SeqText, i: Int, b: SeqText, j: Int) -> Int:
+    """Length of the common prefix of `a[i:]` and `b[j:]`, 32 bases at a time."""
     var n = 0
     while True:
-        var d = a.unsafe_offset(n).unsafe_bitcast[UInt64]()[] ^ b.unsafe_offset(
-            n
-        ).unsafe_bitcast[UInt64]()[]
+        var d = (a.window(i + n) ^ b.window(j + n)) | a.mask(i + n) | b.mask(j + n)
         if d != 0:
-            return n + Int(count_trailing_zeros(d) >> 3)
-        n += 8
+            return n + Int(count_trailing_zeros(d) >> 1)
+        n += 32
 
 
 @inline(.always)
-def match_backward(
-    a: ImmPointer[UInt8, _], b: ImmPointer[UInt8, _], limit: Int
-) -> Int:
-    """Length of the common suffix of the text ending just before `a`, `b`,
-    or some value >= `limit` once it reaches `limit`."""
+def match_backward(a: SeqText, i: Int, b: SeqText, j: Int, limit: Int) -> Int:
+    """Length of the common suffix of `a[:i]` and `b[:j]`, or some value
+    >= `limit` once it reaches `limit`."""
     var n = 0
     while n < limit:
-        var d = a.unsafe_offset(-n - 8).unsafe_bitcast[UInt64]()[] ^ b.unsafe_offset(
-            -n - 8
-        ).unsafe_bitcast[UInt64]()[]
+        var at = i - n - 32
+        var bt = j - n - 32
+        var d = (a.window(at) ^ b.window(bt)) | a.mask(at) | b.mask(bt)
         if d != 0:
-            return n + Int(count_leading_zeros(d) >> 3)
-        n += 8
+            return n + Int(count_leading_zeros(d) >> 1)
+        n += 32
     return n
 
 
@@ -143,9 +139,9 @@ comptime _PROBE_BATCH = 32
 
 
 @inline(.always)
-def _phase(position: Int, step: Int) -> Int:
-    """`position mod step` in `[0, step)`, for negative positions too."""
-    return ((position % step) + step) % step
+def _next_multiple(position: Int, step: Int) -> Int:
+    """The smallest multiple of `step` that is >= `position` (>= 0)."""
+    return (position + step - 1) // step * step
 
 
 @inline(.always)
@@ -156,7 +152,7 @@ def _kmer_mask(k: Int) -> UInt64:
 struct _AnchorCounts(ParallelTask):
     """Counts the indexable reference anchors of each chunk."""
 
-    var text: ImmPointer[UInt8, ImmUntrackedOrigin]
+    var text: ImmPointer[SeqText, ImmUntrackedOrigin]
     var counts: MutPointer[Int, MutUntrackedOrigin]
     var n: Int
     var k: Int
@@ -164,7 +160,7 @@ struct _AnchorCounts(ParallelTask):
 
     def __init__(
         out self,
-        text: ImmPointer[UInt8, ImmUntrackedOrigin],
+        text: ImmPointer[SeqText, ImmUntrackedOrigin],
         counts: MutPointer[Int, MutUntrackedOrigin],
         n: Int,
         k: Int,
@@ -179,16 +175,10 @@ struct _AnchorCounts(ParallelTask):
     def run(self, index: Int):
         var first = index * _BUILD_CHUNK
         var last = min(self.n - self.k + 1, first + _BUILD_CHUNK)
+        var kmask = _kmer_mask(self.k)
         var count = 0
-        var run = 0
-        var i0 = max(0, first - self.k + 1)
-        var phase = _phase(i0 - self.k + 1, self.step)
-        for i in range(i0, last + self.k - 1):
-            run = run + 1 if self.text[unsafe_offset=i] < 4 else 0
-            var start = i - self.k + 1
-            if phase == 0 and start >= first and run >= self.k:
-                count += 1
-            phase = 0 if phase + 1 == self.step else phase + 1
+        for start in range(_next_multiple(first, self.step), last, self.step):
+            count += Int(self.text[].mask(start) & kmask == 0)
         self.counts[unsafe_offset=index] = count
 
 
@@ -196,7 +186,7 @@ struct _AnchorFill(ParallelTask):
     """Writes each chunk's anchors (bucket, fingerprint << 32 | position) and
     counts them per bucket part (the bucket's top `part_bits` bits)."""
 
-    var text: ImmPointer[UInt8, ImmUntrackedOrigin]
+    var text: ImmPointer[SeqText, ImmUntrackedOrigin]
     var firsts: ImmPointer[Int, ImmUntrackedOrigin]
     var buckets: MutPointer[UInt32, MutUntrackedOrigin]
     var anchors: MutPointer[UInt64, MutUntrackedOrigin]
@@ -210,7 +200,7 @@ struct _AnchorFill(ParallelTask):
 
     def __init__(
         out self,
-        text: ImmPointer[UInt8, ImmUntrackedOrigin],
+        text: ImmPointer[SeqText, ImmUntrackedOrigin],
         firsts: ImmPointer[Int, ImmUntrackedOrigin],
         buckets: MutPointer[UInt32, MutUntrackedOrigin],
         anchors: MutPointer[UInt64, MutUntrackedOrigin],
@@ -242,24 +232,16 @@ struct _AnchorFill(ParallelTask):
         var histogram = self.histogram.unsafe_offset(index * self.parts)
         for p in range(self.parts):
             histogram[unsafe_offset=p] = 0
-        var kmer: UInt64 = 0
-        var run = 0
-        var i0 = max(0, first - self.k + 1)
-        var phase = _phase(i0 - self.k + 1, self.step)
-        for i in range(i0, last + self.k - 1):
-            var c = self.text[unsafe_offset=i]
-            kmer = ((kmer << 2) | UInt64(c & 3)) & mask
-            run = run + 1 if c < 4 else 0
-            var start = i - self.k + 1
-            var sampled = phase == 0
-            phase = 0 if phase + 1 == self.step else phase + 1
-            if sampled and start >= first and run >= self.k:
-                var h = mix64(kmer)
-                var bucket = UInt32(h >> self.shift)
-                self.buckets[unsafe_offset=slot] = bucket
-                self.anchors[unsafe_offset=slot] = (h << 32) | UInt64(start)
-                histogram[unsafe_offset=Int(bucket >> self.part_shift)] += 1
-                slot += 1
+        ref text = self.text[]
+        for start in range(_next_multiple(first, self.step), last, self.step):
+            if text.mask(start) & mask != 0:
+                continue
+            var h = mix64(text.window(start) & mask)
+            var bucket = UInt32(h >> self.shift)
+            self.buckets[unsafe_offset=slot] = bucket
+            self.anchors[unsafe_offset=slot] = (h << 32) | UInt64(start)
+            histogram[unsafe_offset=Int(bucket >> self.part_shift)] += 1
+            slot += 1
 
 
 struct _PartScatter(ParallelTask):
@@ -380,7 +362,7 @@ struct MemIndex(Movable):
         var k = params.k
         var step = params.ref_step
         var n = len(reference)
-        var text = reference.ptr().unsafe_origin_cast[ImmUntrackedOrigin]()
+        var text = Pointer(to=reference).unsafe_origin_cast[ImmUntrackedOrigin]()
 
         # Anchors per chunk, then each chunk's anchors at its offset. The
         # tasks reach these buffers through untracked pointers, so they are
@@ -471,28 +453,13 @@ struct MemIndex(Movable):
         var k = self.params.k
         var qstep = self.params.query_step
         var mask = _kmer_mask(k)
-        var qtext = query.ptr()
-        var first = begin + (qstep - begin % qstep) % qstep
         var batch_pos = Array[Int, _PROBE_BATCH](fill=0)
         var batch_hash = Array[UInt64, _PROBE_BATCH](fill=0)
         var batched = 0
-        var kmer: UInt64 = 0
-        var run = 0
-        # Warm up the rolling K-mer so the first anchor ends at first + k - 1.
-        var i = max(0, first - k + 1) if first < end else end
-        var phase = _phase(i - k + 1, qstep)
-        var stop = min(end + k - 1, len(query))
-        while i < stop:
-            var c = qtext[unsafe_offset=i]
-            kmer = ((kmer << 2) | UInt64(c & 3)) & mask
-            run = run + 1 if c < 4 else 0
-            var j = i - k + 1
-            i += 1
-            var sampled = phase == 0
-            phase = 0 if phase + 1 == qstep else phase + 1
-            if not sampled or j < first or run < k:
+        for j in range(_next_multiple(begin, qstep), min(end, len(query) - k + 1), qstep):
+            if query.mask(j) & mask != 0:
                 continue
-            var h = mix64(kmer)
+            var h = mix64(query.window(j) & mask)
             prefetch[_AHEAD](self.offsets.unsafe_ptr().unsafe_offset(Int(h >> self.shift)))
             batch_pos[batched] = j
             batch_hash[batched] = h
@@ -525,8 +492,6 @@ struct MemIndex(Movable):
         var k = self.params.k
         var period = self.params.ref_step * self.params.query_step
         var min_len = self.params.min_len
-        var rtext = reference.ptr()
-        var qtext = query.ptr()
         for a in range(count):
             var j = positions[a]
             var fp = hashes[a] << 32
@@ -538,14 +503,10 @@ struct MemIndex(Movable):
                 # Anchors of one MEM sit `period` apart on its diagonal, so
                 # this anchor is the MEM's first iff the match does not reach
                 # `period` bases to the left: stop looking there.
-                var left = match_backward(
-                    rtext.unsafe_offset(r), qtext.unsafe_offset(j), period
-                )
+                var left = match_backward(reference, r, query, j, period)
                 if left >= period:
                     continue
-                var right = match_forward(
-                    rtext.unsafe_offset(r), qtext.unsafe_offset(j)
-                )
+                var right = match_forward(reference, r, query, j)
                 if right < k or left + right < min_len:
                     continue
                 out.append(

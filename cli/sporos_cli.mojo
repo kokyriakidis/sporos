@@ -87,7 +87,7 @@ def run_mem(args: List[String]) raises:
     var ref_seqs = List[Span[UInt8, origin_of(reference.data)]]()
     for r in range(len(reference)):
         ref_seqs.append(reference.seq(r))
-    var rtext = SeqText(ref_seqs, is_query=False)
+    var rtext = SeqText(ref_seqs)
     _log(verbose, String(t"  text: {_seconds(start)} s"))
     var params = MemParams.choose(min_len, len(rtext), query.total_length())
     var index = MemIndex(rtext, params, threads)
@@ -109,14 +109,14 @@ def run_mem(args: List[String]) raises:
     for q in range(len(query)):
         var qseqs = List[Span[UInt8, origin_of(query.data)]]()
         qseqs.append(query.seq(q))
-        var qtext = SeqText(qseqs, is_query=True)
+        var qtext = SeqText(qseqs)
         if forward:
             total += _report(
                 out, index, rtext, qtext, query.names[q], False, mode,
                 four_column, reference, name_width, threads,
             )
         if reverse:
-            var rc = SeqText(reverse_complement_of=qtext)
+            var rc = SeqText(qseqs, reverse_complement=True)
             total += _report(
                 out, index, rtext, rc, query.names[q], True, mode,
                 four_column, reference, name_width, threads,

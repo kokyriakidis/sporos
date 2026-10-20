@@ -1,97 +1,70 @@
-"""Padded, concatenated sequence text used by the exact-match engines.
+"""Packed, concatenated sequence text used by the exact-match engines.
 
-Sequences are stored as 2-bit codes (0..3) in one buffer, separated by a
-sentinel byte and surrounded by `TEXT_PADDING` sentinel bytes, so that 8-byte
-comparisons can run off either end without bounds checks. The reference and
-the query use different codes for N and for sentinels, so a match can never
-extend through them.
+Sequences are stored 2 bits per base, 32 bases per `UInt64` word (base `i`
+in bits `2 * (i % 32)`), with a parallel mask holding `0b11` for every base
+that must never match: non-ACGT bases, the separator after each sequence,
+and the padding words around the text. Any 32 consecutive bases, and their
+mask, are one shifted 64-bit window, so k-mers are extracted in O(1) and
+matches extend 32 bases per comparison.
 """
 
-from std.memory import Allocation, Layout, alloc, dealloc
+from std.memory import bitcast
 
-from sporos.alphabet import N_CODE, encode_into
-
-comptime TEXT_PADDING = 32
-
-comptime REF_N: UInt8 = N_CODE
-comptime REF_SEP: UInt8 = 6
-comptime QUERY_N: UInt8 = 5
-comptime QUERY_SEP: UInt8 = 7
+comptime _PAD_WORDS = 4
+"""All-masked words before and after the text (128 bases each side)."""
+comptime _BASES = 32
 
 
 struct SeqText(Movable, Sized):
-    """One or more sequences, concatenated with sentinels between them.
+    """One or more sequences, concatenated with a masked separator after each.
 
-    `start(i)` is the text offset of sequence `i`; text offsets of bases are
+    `starts[i]` is the text offset of sequence `i`; text offsets of bases are
     what the match engines report.
     """
 
-    var _alloc: Allocation[UInt8]
+    var words: List[UInt64]
+    var masks: List[UInt64]
     var _len: Int
     var starts: List[Int]
     var lengths: List[Int]
-    var is_query: Bool
 
     def __init__[
         mut: Bool, //, origin: Origin[mut=mut]
-    ](out self, seqs: List[Span[UInt8, origin]], is_query: Bool):
+    ](out self, seqs: List[Span[UInt8, origin]], reverse_complement: Bool = False):
+        """Packs `seqs`; with `reverse_complement`, each sequence is stored as
+        its reverse complement instead of its forward strand."""
         var total = 0
         for s in seqs:
             total += len(s) + 1
         self._len = total
-        self._alloc = alloc(Layout[UInt8](length=total + 2 * TEXT_PADDING))
+        var nwords = (total + _BASES - 1) // _BASES + 2 * _PAD_WORDS
+        self.words = List[UInt64](length=nwords, fill=0)
+        self.masks = List[UInt64](length=nwords, fill=0)
+        for w in range(_PAD_WORDS):
+            self.masks[w] = UInt64.MAX
+            self.masks[nwords - 1 - w] = UInt64.MAX
         self.starts = List[Int](capacity=len(seqs))
         self.lengths = List[Int](capacity=len(seqs))
-        self.is_query = is_query
-        var n_code = QUERY_N if is_query else REF_N
-        var sep = QUERY_SEP if is_query else REF_SEP
-        var base = self._alloc.unsafe_ptr()
-        for i in range(TEXT_PADDING):
-            base.unsafe_offset(i).unsafe_write(sep)
-            base.unsafe_offset(TEXT_PADDING + total + i).unsafe_write(sep)
-        var p = base.unsafe_offset(TEXT_PADDING)
         var off = 0
         for s in seqs:
             self.starts.append(off)
             self.lengths.append(len(s))
-            encode_into(s, p.unsafe_offset(off), n_code)
-            off += len(s)
-            p.unsafe_offset(off).unsafe_write(sep)
-            off += 1
-
-    def __init__(out self, *, reverse_complement_of: SeqText):
-        """The reverse complement of a single-sequence query text."""
-        ref src = reverse_complement_of
-        self._len = src._len
-        self._alloc = alloc(Layout[UInt8](length=src._len + 2 * TEXT_PADDING))
-        self.starts = src.starts.copy()
-        self.lengths = src.lengths.copy()
-        self.is_query = src.is_query
-        var sep = QUERY_SEP if src.is_query else REF_SEP
-        var base = self._alloc.unsafe_ptr()
-        for i in range(TEXT_PADDING):
-            base.unsafe_offset(i).unsafe_write(sep)
-            base.unsafe_offset(TEXT_PADDING + self._len + i).unsafe_write(sep)
-        var dst = base.unsafe_offset(TEXT_PADDING)
-        var s = src.ptr()
-        for i in range(len(src.starts)):
-            var start = src.starts[i]
-            var n = src.lengths[i]
-            for j in range(n):
-                var c = s[unsafe_offset=start + n - 1 - j]
-                dst.unsafe_offset(start + j).unsafe_write(3 - c if c < 4 else c)
-            dst.unsafe_offset(start + n).unsafe_write(sep)
-
-    def __deinit__(deinit self):
-        dealloc(self._alloc^)
-
-    @inline(.always)
-    def ptr(ref self) -> Pointer[UInt8, origin_of(self._alloc._alloc)]:
-        """Pointer to text offset 0 (padding precedes it)."""
-        return self._alloc.unsafe_ptr().unsafe_offset(TEXT_PADDING)
+            _pack(s, off, reverse_complement, self.words, self.masks)
+            off += len(s) + 1
 
     def __len__(self) -> Int:
         return self._len
+
+    @inline(.always)
+    def window(self, i: Int) -> UInt64:
+        """Bases `i .. i + 31` (base `i` in the low bits), for
+        `-96 <= i <= len(self) + 64`."""
+        return _window(self.words.unsafe_ptr(), i)
+
+    @inline(.always)
+    def mask(self, i: Int) -> UInt64:
+        """The never-match mask of the same 32 bases as `window(i)`."""
+        return _window(self.masks.unsafe_ptr(), i)
 
     def sequence_of(self, offset: Int) -> Int:
         """Index of the sequence containing text offset `offset`."""
@@ -104,3 +77,80 @@ struct SeqText(Movable, Sized):
             else:
                 hi = mid - 1
         return lo
+
+
+@inline(.always)
+def _window(words: ImmPointer[UInt64, _], i: Int) -> UInt64:
+    var at = i + _PAD_WORDS * _BASES
+    var w = at >> 5
+    var shift = UInt64(2 * (at & 31))
+    var lo = words[unsafe_offset=w] >> shift
+    # (hi << 1) << (63 - shift) avoids an undefined shift by 64 when shift = 0.
+    var hi = (words[unsafe_offset=w + 1] << 1) << (63 - shift)
+    return lo | hi
+
+
+@inline(.always)
+def _pack32(codes: SIMD[DType.uint8, 32]) -> UInt64:
+    """Packs 32 two-bit values (one per byte) into a word, value i at bit 2i."""
+    var x = bitcast[DType.uint16, 16](codes)
+    var y = ((x | (x >> 6)) & 0x000F).cast[DType.uint8]()
+    var z = bitcast[DType.uint16, 8](y)
+    var b = ((z | (z >> 4)) & 0x00FF).cast[DType.uint8]()
+    return bitcast[DType.uint64, 1](b)[0]
+
+
+def _pack(
+    seq: Span[UInt8, _],
+    offset: Int,
+    reverse_complement: Bool,
+    mut words: List[UInt64],
+    mut masks: List[UInt64],
+):
+    """ORs `seq` (or its reverse complement) into the text at offset `offset`,
+    32 bases at a time; `masks` must be zero there and gets 0b11 per non-ACGT
+    base. The separator after the sequence is masked too."""
+    comptime W = 32
+    var n = len(seq)
+    var src = seq.unsafe_ptr()
+    var base = offset + _PAD_WORDS * _BASES
+    var wp = words.unsafe_ptr()
+    var mp = masks.unsafe_ptr()
+    var i = 0
+    while i < n:
+        var take = min(W, n - i)
+        var raw = SIMD[DType.uint8, W](ord("N"))
+        if reverse_complement:
+            # Bases n-1-i, n-2-i, ...: load the 32 bytes ending at n - i.
+            if take == W:
+                raw = src.unsafe_load[width=W](n - i - W).reversed()
+            else:
+                for j in range(take):
+                    raw[j] = src[unsafe_offset=n - 1 - i - j]
+        else:
+            if take == W:
+                raw = src.unsafe_load[width=W](i)
+            else:
+                for j in range(take):
+                    raw[j] = src[unsafe_offset=i + j]
+        var lower = raw | 0x20
+        var valid = (
+            lower.eq(0x61) | lower.eq(0x63) | lower.eq(0x67) | lower.eq(0x74) | lower.eq(0x75)
+        )
+        var code = ((raw >> 1) ^ (raw >> 2)) & 3
+        if reverse_complement:
+            code = 3 - code
+        var keep: UInt64 = UInt64.MAX if take == W else (UInt64(1) << UInt64(2 * take)) - 1
+        var value = _pack32(valid.select(code, SIMD[DType.uint8, W](0))) & keep
+        var bad = _pack32(valid.select(SIMD[DType.uint8, W](0), SIMD[DType.uint8, W](3))) & keep
+        var at = base + i
+        var w = at >> 5
+        var shift = UInt64(2 * (at & 31))
+        wp[unsafe_offset=w] |= value << shift
+        mp[unsafe_offset=w] |= bad << shift
+        if shift != 0:
+            wp[unsafe_offset=w + 1] |= value >> (64 - shift)
+            mp[unsafe_offset=w + 1] |= bad >> (64 - shift)
+        i += W
+    var sep = base + n
+    mp[unsafe_offset=sep >> 5] |= UInt64(3) << UInt64(2 * (sep & 31))

@@ -2,6 +2,7 @@ from std.testing import assert_equal, assert_true, TestSuite
 
 from sporos.mems import Mem, MemIndex, MemParams, filter_mums, find_mems
 from sporos.text import SeqText
+from sporos.alphabet import encode_base
 from reference import naive_count, naive_mems, random_dna
 
 
@@ -25,10 +26,10 @@ def _mutate(src: List[UInt8], rate_per_million: Int, rng_seed: Int) -> List[UInt
 def _check_mems(reference: List[UInt8], query: List[UInt8], params: MemParams, threads: Int) raises:
     var seqs = List[Span[UInt8, origin_of(reference)]]()
     seqs.append(Span(reference))
-    var rtext = SeqText(seqs, is_query=False)
+    var rtext = SeqText(seqs)
     var qseqs = List[Span[UInt8, origin_of(query)]]()
     qseqs.append(Span(query))
-    var qtext = SeqText(qseqs, is_query=True)
+    var qtext = SeqText(qseqs)
     var index = MemIndex(rtext, params)
     var got = find_mems(index, rtext, qtext, threads)
     var expected = naive_mems(reference, query, params.min_len)
@@ -70,6 +71,29 @@ def test_mems_match_reference() raises:
                 if min_len - k + 1 >= 6:
                     _check_mems(reference, query, MemParams(min_len, k, 3, 2), 1)
                     _check_mems(reference, query, MemParams(min_len, k, 2, 3), 1)
+
+
+def test_reverse_complement_query() raises:
+    var reference = random_dna(1500, 77, 0.002)
+    var query = _mutate(reference, 20_000, 78)
+    var rc = List[UInt8](capacity=len(query))
+    for i in reversed(range(len(query))):
+        var code = encode_base(query[i])
+        rc.append(UInt8(ord("TGCAN"[byte=Int(min(code, 4))])))
+    var seqs = List[Span[UInt8, origin_of(reference)]]()
+    seqs.append(Span(reference))
+    var rtext = SeqText(seqs)
+    var qseqs = List[Span[UInt8, origin_of(query)]]()
+    qseqs.append(Span(query))
+    var qtext = SeqText(qseqs, reverse_complement=True)
+    var params = MemParams.choose(20, len(reference), len(query))
+    var got = find_mems(MemIndex(rtext, params), rtext, qtext, 2)
+    var expected = naive_mems(reference, rc, 20)
+    assert_equal(len(got), len(expected))
+    for i in range(len(got)):
+        assert_equal(Int(got[i].ref_pos), expected[i][0])
+        assert_equal(Int(got[i].query_pos), expected[i][1])
+        assert_equal(Int(got[i].length), expected[i][2])
 
 
 def test_low_complexity_repeats() raises:

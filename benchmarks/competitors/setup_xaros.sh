@@ -113,7 +113,7 @@ fi
 # --- versions -------------------------------------------------------------------
 {
   printf "tool\tversion\n"
-  printf "sporos\t%s\n" "$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo mirror) (mojo $(cd "$REPO" && "$PIXI" run -q mojo --version 2>/dev/null | awk '{print $2}'))"
+  printf "sporos\t%s\n" "$(git -C "$REPO" describe --always --dirty 2>/dev/null || echo mirror) (mojo $(cd "$REPO" && "$PIXI" run -q mojo --version 2>/dev/null | awk '{print $2}'))"
   printf "mummer\t%s\n" "$("$ENVBIN/mummer" --version 2>&1 | head -1)"
   printf "mumemto\t%s\n" "$(cd "$BENCH/env" && "$PIXI" list mumemto 2>/dev/null | awk '$1=="mumemto"{print $2}')"
   printf "bwa\t%s\n" "$("$ENVBIN/bwa" 2>&1 | awk '/^Version/{print $2}')"
