@@ -25,7 +25,9 @@ habits:
 - Toolchain: latest Mojo from the nightly channel.
 - Pointers handed out by owning types must carry the owner's origin (see `CodeBuffer.unsafe_ptr`); an
   untracked pointer lets the owner be destroyed early. Buffers that tasks reach through untracked pointers
-  are explicit `alloc`/`dealloc` pairs: `_ = list^` after the tasks does not keep a `List` alive.
+  are explicit `alloc`/`dealloc` pairs: `_ = list^` after the tasks does not keep a `List` alive. Prefer tasks
+  generic over the origins of the data they read (`cli/sporos_cli.mojo`'s `_FormatTask`): tracked pointers keep
+  the owners alive while the task runs.
 - `unsafe_strided_load` on `UInt8` returns wrong lanes on the current nightly; gather explicitly.
 - Benchmark with min-of-N timings; other jobs share the machine.
 - Finished work merges straight into `main` and is pushed; no pull requests.

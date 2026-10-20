@@ -160,10 +160,10 @@ def _report(
     var slices = max(1, min(threads * 4, len(hits) // 50_000))
     var texts = List[List[UInt8]](length=slices, fill=List[UInt8]())
     var task = _FormatTask(
-        Pointer(to=hits).unsafe_origin_cast[MutUntrackedOrigin](),
-        Pointer(to=rtext).unsafe_origin_cast[ImmUntrackedOrigin](),
-        Pointer(to=reference).unsafe_origin_cast[ImmUntrackedOrigin](),
-        texts.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+        Pointer(to=hits).as_imm(),
+        Pointer(to=rtext),
+        Pointer(to=reference),
+        texts.unsafe_ptr(),
         slices,
         four_column,
         name_width,
@@ -174,23 +174,27 @@ def _report(
     return len(hits)
 
 
-struct _FormatTask(ParallelTask):
-    """Formats one slice of matches as MUMmer lines."""
+struct _FormatTask[
+    hit_origin: ImmOrigin, text_origin: ImmOrigin, fasta_origin: ImmOrigin, out_origin: MutOrigin
+](ParallelTask):
+    """Formats one slice of matches as MUMmer lines.
 
-    var hits: ImmPointer[List[Mem], ImmUntrackedOrigin]
-    var rtext: ImmPointer[SeqText, ImmUntrackedOrigin]
-    var reference: ImmPointer[FastaRecords, ImmUntrackedOrigin]
-    var texts: MutPointer[List[UInt8], MutUntrackedOrigin]
+    Tracked origins keep the inputs alive while the task runs."""
+
+    var hits: ImmPointer[List[Mem], Self.hit_origin]
+    var rtext: ImmPointer[SeqText, Self.text_origin]
+    var reference: ImmPointer[FastaRecords, Self.fasta_origin]
+    var texts: MutPointer[List[UInt8], Self.out_origin]
     var slices: Int
     var four_column: Bool
     var name_width: Int
 
     def __init__(
         out self,
-        hits: ImmPointer[List[Mem], ImmUntrackedOrigin],
-        rtext: ImmPointer[SeqText, ImmUntrackedOrigin],
-        reference: ImmPointer[FastaRecords, ImmUntrackedOrigin],
-        texts: MutPointer[List[UInt8], MutUntrackedOrigin],
+        hits: ImmPointer[List[Mem], Self.hit_origin],
+        rtext: ImmPointer[SeqText, Self.text_origin],
+        reference: ImmPointer[FastaRecords, Self.fasta_origin],
+        texts: MutPointer[List[UInt8], Self.out_origin],
         slices: Int,
         four_column: Bool,
         name_width: Int,
@@ -239,6 +243,52 @@ struct _FormatTask(ParallelTask):
             p[unsafe_offset=at + 1] = UInt8(ord(" "))
             at += 2
             at += put_padded(p.unsafe_offset(at), Int(m.length), 8)
+            p[unsafe_offset=at] = UInt8(ord("\n"))
+            at += 1
+        text.resize(unsafe_uninit_length=at)
+
+
+struct _SeedFormatTask[
+    seeds: ImmOrigin, names: ImmOrigin, out_origin: MutOrigin
+](ParallelTask):
+    """Formats one slice of seed positions as `name<TAB>position` lines.
+
+    Tracked origins keep the positions alive while the task runs."""
+
+    var positions: ImmPointer[List[UInt32], Self.seeds]
+    var name: ImmPointer[String, Self.names]
+    var texts: MutPointer[List[UInt8], Self.out_origin]
+    var slices: Int
+
+    def __init__(
+        out self,
+        positions: ImmPointer[List[UInt32], Self.seeds],
+        name: ImmPointer[String, Self.names],
+        texts: MutPointer[List[UInt8], Self.out_origin],
+        slices: Int,
+    ):
+        self.positions = positions
+        self.name = name
+        self.texts = texts
+        self.slices = slices
+
+    def run(self, index: Int):
+        ref positions = self.positions[]
+        var per = ceildiv(len(positions), self.slices)
+        var lo = index * per
+        var hi = min(len(positions), lo + per)
+        var name = self.name[].as_bytes()
+        ref text = self.texts[unsafe_offset=index]
+        text.resize(unsafe_uninit_length=max(0, hi - lo) * (len(name) + 12))
+        var p = text.unsafe_ptr()
+        var at = 0
+        for i in range(lo, hi):
+            for b in range(len(name)):
+                p[unsafe_offset=at + b] = name[b]
+            at += len(name)
+            p[unsafe_offset=at] = UInt8(ord("\t"))
+            at += 1
+            at += put_padded(p.unsafe_offset(at), Int(positions[i]), 0)
             p[unsafe_offset=at] = UInt8(ord("\n"))
             at += 1
         text.resize(unsafe_uninit_length=at)
@@ -295,11 +345,17 @@ def run_seeds(command: String, args: List[String]) raises:
             positions = syncmer_positions_from_codes(
                 codes.unsafe_ptr(), len(seq), k, s, canonical, open_offset, threads
             )
-        for p in positions:
-            out.write(records.names[r])
-            out.write_byte(ord("\t"))
-            out.write_int(Int(p))
-            out.write_byte(ord("\n"))
+        var slices = max(1, min(threads * 4, len(positions) // 100_000))
+        var texts = List[List[UInt8]](length=slices, fill=List[UInt8]())
+        var task = _SeedFormatTask(
+            Pointer(to=positions).as_imm(),
+            Pointer(to=records.names[r]).as_imm(),
+            texts.unsafe_ptr(),
+            slices,
+        )
+        parallel_for(task, slices, threads)
+        for text in texts:
+            out.write_bytes(Span(text))
     out.flush()
 
 
