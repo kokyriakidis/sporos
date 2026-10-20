@@ -130,6 +130,35 @@ def sporos_syncmers(
         return INVALID_ARGUMENT
 
 
+@export("sporos_syncmers_open")
+def sporos_syncmers_open(
+    seq: CBytes,
+    length: Int,
+    k: Int32,
+    s: Int32,
+    offsets: ImmPointer[Int32, ImmutAnyOrigin],
+    offset_count: Int,
+    canonical: Int32,
+    threads: Int32,
+    positions_out: MutPointer[UInt32, MutAnyOrigin],
+    out_capacity: Int,
+) abi("C") -> Int:
+    """The open syncmer positions of `seq` for any of `offset_count` s-mer offsets into `positions_out`;
+    returns how many there are, or `INVALID_ARGUMENT`."""
+    if length < 0 or out_capacity < 0 or offset_count < 1:
+        return INVALID_ARGUMENT
+    try:
+        var opened = List[Int](capacity=offset_count)
+        for i in range(offset_count):
+            opened.append(Int(offsets[unsafe_offset=i]))
+        var positions = syncmer_positions(
+            bytes_of(seq, length), Int(k), Int(s), canonical != 0, None, thread_count(threads), open_offsets=opened
+        )
+        return copy_out(positions, positions_out, out_capacity)
+    except:
+        return INVALID_ARGUMENT
+
+
 @export("sporos_index_new")
 def sporos_index_new(
     seqs: ImmPointer[CBytes, ImmutAnyOrigin],

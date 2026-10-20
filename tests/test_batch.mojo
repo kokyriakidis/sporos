@@ -60,6 +60,11 @@ def test_syncmers_batch_matches_single_reads() raises:
             for i in range(len(spans)):
                 _check_same(closed.seeds(i), syncmer_positions(spans[i], cfg[0], cfg[1], canonical), "closed")
                 _check_same(opened.seeds(i), syncmer_positions(spans[i], cfg[0], cfg[1], canonical, t), "open")
+            var offsets: List[Int] = [1, t, cfg[0] - cfg[1]]
+            var several = syncmers_batch(spans, cfg[0], cfg[1], canonical, None, 2, open_offsets=offsets)
+            for i in range(len(spans)):
+                var expected = syncmer_positions(spans[i], cfg[0], cfg[1], canonical, open_offsets=offsets)
+                _check_same(several.seeds(i), expected, "open, several offsets")
 
 
 def main() raises:

@@ -78,6 +78,8 @@ def test_known() -> None:
     check(list(sporos.minimizers("", 5, 3)) == [], "empty")
     check(list(sporos.syncmers("ACGTACGTAC", 5, 5)) == [0, 1, 2, 3, 4, 5], "s = k")
     check(len(sporos.syncmers("ACGTACGTACGTTGCA", 7, 3, open_offset=2)) >= 0, "open syncmers")
+    seq = "ACGTTGCAGGCATTACGATCGATCCGATAGCTAGCTTAGCAGTCGA" * 5
+    check(sporos.syncmers(seq, 9, 4, open_offset=[0, 5]) == sporos.syncmers(seq, 9, 4), "offsets {0, k - s} are closed")
     for call, error in [
         (lambda: sporos.minimizers("ACGT", 0, 3), ValueError),
         (lambda: sporos.minimizers("ACGT", 65, 3), ValueError),
@@ -88,6 +90,9 @@ def test_known() -> None:
         (lambda: sporos.syncmers("ACGT", 3, 5), ValueError),
         (lambda: sporos.syncmers("ACGTACGT", 5, 3, open_offset=3), ValueError),
         (lambda: sporos.syncmers("ACGTACGT", 5, 3, open_offset=-1), ValueError),
+        (lambda: sporos.syncmers("ACGTACGT", 5, 3, open_offset=[0, 3]), ValueError),
+        (lambda: sporos.syncmers("ACGTACGT", 5, 3, open_offset=[]), ValueError),
+        (lambda: sporos.syncmers("ACGTACGT", 5, 3, open_offset=[1.0]), TypeError),
         (lambda: sporos.Index([], 10), ValueError),
         (lambda: sporos.Index(["ACGT"], 0), ValueError),
         (lambda: sporos.Index(["ACGTACGTACGT"], 5).matches("ACGT", mode="mems"), ValueError),
@@ -142,7 +147,8 @@ def test_against_mojo(path: str) -> None:
                 seqs[name] = fields[2]
                 continue
             records += 1
-            numbers = [int(field) for field in fields[2:]]
+            # Syncmers' open offsets (field 4) are a comma-separated list.
+            numbers = [int(field) for field in (fields[2:4] + fields[5:] if kind == "syncmers" else fields[2:])]
             seq = seqs[name]
             if kind == "minimizers":
                 k, w, canonical, threads, count = numbers[:5]
@@ -150,11 +156,11 @@ def test_against_mojo(path: str) -> None:
                 check(list(got) == numbers[5:] and len(got) == count, line[:60])
                 check(got == sporos.minimizers(seq.encode(), k, w, bool(canonical), threads), "bytes " + line[:60])
             elif kind == "syncmers":
-                k, s, offset, canonical, threads, count = numbers[:6]
-                got = sporos.syncmers(
-                    seq, k, s, open_offset=None if offset < 0 else offset, canonical=bool(canonical), threads=threads
-                )
-                check(list(got) == numbers[6:] and len(got) == count, line[:60])
+                offsets = [int(t) for t in fields[4].split(",")]
+                k, s, canonical, threads, count = numbers[:5]
+                opened = None if offsets == [-1] else offsets[0] if len(offsets) == 1 else offsets
+                got = sporos.syncmers(seq, k, s, open_offset=opened, canonical=bool(canonical), threads=threads)
+                check(list(got) == numbers[5:] and len(got) == count, line[:60])
             else:
                 min_len, mode, reverse, threads, count = numbers[:5]
                 if min_len not in indexes:

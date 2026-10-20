@@ -11,6 +11,13 @@ version = "0.1.0"
 mojo = ">=1.2.0.dev2026102005,<2"
 libdeflate = ">=1.26,<2"
 
+# scripts/bundle.sh points the bundled Linux libraries at each other.
+[target.linux-64.dependencies]
+patchelf = ">=0.17"
+
+[target.linux-aarch64.dependencies]
+patchelf = ">=0.17"
+
 [tasks]
 # `mojo build -o` writes into a directory but will not create one.
 prepare = "mkdir -p build"

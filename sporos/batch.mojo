@@ -11,13 +11,11 @@ from std.math import ceildiv
 from std.memory import unsafe_memcpy
 
 from sporos.minimizers import minimizer_positions
-from sporos.syncmers import syncmer_positions
+from sporos.syncmers import open_offset_mask, syncmer_mode, syncmer_params, syncmer_positions
 from sporos.parallel import ParallelTask, parallel_for
 from sporos.window import (
-    CLOSED_SYNCMERS,
     LANES,
     MINIMIZERS,
-    OPEN_SYNCMERS,
     PADDING,
     ScanParams,
     scan_reads,
@@ -113,10 +111,11 @@ struct _BatchTask[mut: Bool, //, origin: Origin[mut=mut]](ParallelTask):
         try:
             if self.cfg.mode == MINIMIZERS:
                 return minimizer_positions(read, params.k, params.w, self.cfg.canonical)
-            var opened: Optional[Int] = None
-            if self.cfg.mode == OPEN_SYNCMERS:
-                opened = params.offset
-            return syncmer_positions(read, params.span, params.k, self.cfg.canonical, opened)
+            var opened = List[Int]()
+            for t in range(64):
+                if (params.offsets >> UInt64(t)) & 1 != 0:
+                    opened.append(t)
+            return syncmer_positions(read, params.span, params.k, self.cfg.canonical, open_offsets=opened)
         except:
             return List[UInt32]()
 
@@ -154,7 +153,16 @@ struct _BatchTask[mut: Bool, //, origin: Origin[mut=mut]](ParallelTask):
                 dst[unsafe_offset=i] = UInt8(ord("N"))
             lane_outs[l].clear()
         if chunk > 0:
-            scan_reads(self.cfg.mode, self.cfg.canonical, scratch.unsafe_ptr(), stride, windows, chunk, self.cfg.params, lane_outs)
+            scan_reads(
+                self.cfg.mode,
+                self.cfg.canonical,
+                scratch.unsafe_ptr(),
+                stride,
+                windows,
+                chunk,
+                self.cfg.params,
+                lane_outs,
+            )
         for l in range(n):
             var r = group[l]
             if _windows(self.cfg, len(self.reads[unsafe_offset=r])) < 0:
@@ -195,7 +203,7 @@ def minimizers_batch[
     """The (w, k)-minimizer positions of every read (as `minimizer_positions`)."""
     if k < 1 or k > 64 or w < 1:
         raise Error(t"need 1 <= k <= 64 and w >= 1, got k={k} w={w}")
-    return _batch(reads, _Config(MINIMIZERS, canonical, ScanParams(k=k, w=w, span=k, offset=0)), threads)
+    return _batch(reads, _Config(MINIMIZERS, canonical, ScanParams(k=k, w=w, span=k, offsets=0)), threads)
 
 
 def syncmers_batch[
@@ -207,13 +215,11 @@ def syncmers_batch[
     canonical: Bool = True,
     open_offset: Optional[Int] = None,
     threads: Int = 1,
+    *,
+    open_offsets: List[Int] = List[Int](),
 ) raises -> SeedBatch:
     """The syncmer positions of every read (as `syncmer_positions`)."""
     if s < 1 or s > k:
         raise Error(t"need 1 <= s <= k, got k={k} s={s}")
-    var w = k - s + 1
-    if case .Some(t) = open_offset:
-        if t < 0 or t > k - s:
-            raise Error(t"open syncmer offset must be in [0, {k - s}], got {t}")
-        return _batch(reads, _Config(OPEN_SYNCMERS, canonical, ScanParams(k=s, w=w, span=k, offset=t)), threads)
-    return _batch(reads, _Config(CLOSED_SYNCMERS, canonical, ScanParams(k=s, w=w, span=k, offset=0)), threads)
+    var mask = open_offset_mask(k, s, open_offset, open_offsets)
+    return _batch(reads, _Config(syncmer_mode(mask), canonical, syncmer_params(k, s, mask)), threads)

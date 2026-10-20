@@ -5,7 +5,12 @@ from reference import canonical_kmer_of, encode_all, naive_minimizers, naive_syn
 
 
 def _expected_hits(
-    reference: List[UInt8], ref_positions: List[UInt32], query: List[UInt8], query_positions: List[UInt32], k: Int, max_occ: Int
+    reference: List[UInt8],
+    ref_positions: List[UInt32],
+    query: List[UInt8],
+    query_positions: List[UInt32],
+    k: Int,
+    max_occ: Int,
 ) -> List[SeedHit]:
     var rcodes = encode_all(reference)
     var qcodes = encode_all(query)
@@ -30,7 +35,16 @@ def _sorted(var hits: List[SeedHit]) -> List[SeedHit]:
 
 
 def _check(
-    scheme: Int, k: Int, w: Int, n: Int, case_id: Int, all_kmers: Bool, max_occ: Int, open_offset: Int = -1
+    scheme: Int,
+    k: Int,
+    w: Int,
+    n: Int,
+    case_id: Int,
+    all_kmers: Bool,
+    max_occ: Int,
+    open_offset: Int = -1,
+    *,
+    open_offsets: List[Int] = [],
 ) raises:
     var reference = random_dna(n, case_id, 0.003)
     # Plant repeats, reverse-complement copies and the reference itself in the query.
@@ -42,12 +56,12 @@ def _check(
     var opened: Optional[Int] = None
     if open_offset >= 0:
         opened = open_offset
-    var index = SeedIndex(seqs, k, w, scheme, threads=2, open_offset=opened)
+    var index = SeedIndex(seqs, k, w, scheme, threads=2, open_offset=opened, open_offsets=open_offsets)
     var ref_positions: List[UInt32]
     if scheme == MINIMIZER_SEEDS:
         ref_positions = naive_minimizers(reference, k, w, True)
     elif scheme == SYNCMER_SEEDS:
-        ref_positions = naive_syncmers(reference, k, w, True, open_offset)
+        ref_positions = naive_syncmers(reference, k, w, True, open_offset, open_offsets=open_offsets)
     else:
         ref_positions = List[UInt32]()
         var codes = encode_all(reference)
@@ -93,6 +107,7 @@ def test_seed_index_matches_reference() raises:
             if cfg[1] < cfg[0]:
                 _check(SYNCMER_SEEDS, cfg[0], cfg[1], n, case_id, False, 0)
                 _check(SYNCMER_SEEDS, cfg[0], cfg[1], n, case_id, False, 0, (cfg[0] - cfg[1]) // 2)
+                _check(SYNCMER_SEEDS, cfg[0], cfg[1], n, case_id, False, 0, open_offsets=[0, cfg[0] - cfg[1] - 1])
             _check(ALL_KMERS, cfg[0], cfg[1], n, case_id, False, 3)
 
 

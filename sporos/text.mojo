@@ -134,9 +134,7 @@ def _pack(
                 for j in range(take):
                     raw[j] = src[unsafe_offset=i + j]
         var lower = raw | 0x20
-        var valid = (
-            lower.eq(0x61) | lower.eq(0x63) | lower.eq(0x67) | lower.eq(0x74) | lower.eq(0x75)
-        )
+        var valid = lower.eq(0x61) | lower.eq(0x63) | lower.eq(0x67) | lower.eq(0x74) | lower.eq(0x75)
         var code = ((raw >> 1) ^ (raw >> 2)) & 3
         if reverse_complement:
             code = 3 - code

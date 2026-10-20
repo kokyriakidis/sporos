@@ -46,7 +46,7 @@ def minimizer_positions_from_codes(
         return List[UInt32]()
     if kmers < w:
         return _short_minimizer(codes, kmers, k, w, canonical)
-    var params = ScanParams(k=k, w=w, span=k, offset=0)
+    var params = ScanParams(k=k, w=w, span=k, offsets=0)
     if canonical:
         return scan[MINIMIZERS, True](codes, kmers - w + 1, params, threads)
     return scan[MINIMIZERS, False](codes, kmers - w + 1, params, threads)
@@ -67,15 +67,13 @@ def minimizer_positions(
     if kmers < w:
         var codes = CodeBuffer.encode(seq, PADDING)
         return _short_minimizer(codes.unsafe_ptr(), kmers, k, w, canonical)
-    var params = ScanParams(k=k, w=w, span=k, offset=0)
+    var params = ScanParams(k=k, w=w, span=k, offsets=0)
     if canonical:
         return scan_ascii[MINIMIZERS, True](seq, kmers - w + 1, params, threads)
     return scan_ascii[MINIMIZERS, False](seq, kmers - w + 1, params, threads)
 
 
-def _short_minimizer(
-    codes: ImmPointer[UInt8, _], kmers: Int, k: Int, w: Int, canonical: Bool
-) -> List[UInt32]:
+def _short_minimizer(codes: ImmPointer[UInt8, _], kmers: Int, k: Int, w: Int, canonical: Bool) -> List[UInt32]:
     var best = UInt64.MAX
     var run = 0
     for i in range(kmers + k - 1):

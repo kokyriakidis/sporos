@@ -69,3 +69,13 @@ def main() raises:
             best = min(best, thread_cpu_ns() - start)
             count = len(m)
         _report("open-can" if canonical else "open-fwd", 16, 5, n, count, best)
+    # Open syncmers at a set of offsets: k=20, s=16, offsets {1, 3}.
+    for canonical in [False, True]:
+        var best = Int.MAX
+        var count = 0
+        for _ in range(REPS):
+            var start = thread_cpu_ns()
+            var m = syncmer_positions_from_codes(codes.unsafe_ptr(), n, 20, 16, canonical, None, 1, open_offsets=[1, 3])
+            best = min(best, thread_cpu_ns() - start)
+            count = len(m)
+        _report("open-set-can" if canonical else "open-set-fwd", 16, 5, n, count, best)

@@ -56,7 +56,7 @@ pixi run build-cli
 build/sporos mem -mum -l 50 -t 8 reference.fa query.fa     # mummer's flags and output format
 build/sporos mem -maxmatch -b -l 100 reference.fa query.fa
 build/sporos minimizers -k 21 -w 11 -t 8 seqs.fa           # name<TAB>position
-build/sporos syncmers -k 21 -s 11 [--open 5] seqs.fa         # closed, or open with --open
+build/sporos syncmers -k 21 -s 11 [--open 5[,8...]] seqs.fa   # closed, or open at one or more offsets
 build/sporos seeds -k 19 -w 12 ref.fa reads.fq.gz           # minimizer seed index + lookups
 build/sporos seeds -k 20 --syncmers -s 16 [--open 2] ref.fa reads.fq
 ```
@@ -71,11 +71,14 @@ var seq = "ACGTTGCA...".as_bytes()
 var mins = minimizer_positions(seq, k=21, w=11)                  # canonical by default
 var syncs = syncmer_positions(seq, k=21, s=11)                   # closed syncmers
 var opens = syncmer_positions(seq, k=21, s=11, open_offset=5)    # open syncmers
+var multi = syncmer_positions(seq, k=21, s=11, open_offsets=[2, 5, 8])  # open at any of several offsets
 ```
 
 Syncmers come in both kinds everywhere (library, batches, seed index, CLI, C, Python): a k-mer is a
 **closed** syncmer when its smallest s-mer starts at offset 0 or k - s, and an **open** syncmer when it
-starts at offset `open_offset` (0-based; strobealign's k=20, s=16 is `open_offset=2`).
+starts at offset `open_offset` (0-based; strobealign's k=20, s=16 is `open_offset=2`), or at any of a set of
+offsets (`open_offsets`; `{0, k - s}` gives the closed syncmers). One offset is a single vector compare; a set
+is a bitmask test.
 
 ## Develop
 
@@ -109,7 +112,7 @@ From Python (`PYTHONPATH=build/python`):
 ```python
 import sporos
 sporos.minimizers("ACGT...", k=21, w=11)               # array('I') of positions
-sporos.syncmers("ACGT...", k=21, s=11, open_offset=5)
+sporos.syncmers("ACGT...", k=21, s=11, open_offset=5)          # or open_offset=[2, 5, 8]
 index = sporos.Index(["ACGT...", "GGCA..."], min_len=50, threads=8)
 index.matches(query, mode="mum", reverse=False)        # [(ref_index, ref_pos, query_pos, length), ...]
 ```

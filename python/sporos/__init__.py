@@ -89,19 +89,24 @@ def syncmers(
     seq: Text,
     k: int,
     s: int,
-    open_offset: Optional[int] = None,
+    open_offset: Union[int, Iterable[int], None] = None,
     canonical: bool = True,
     threads: int = 1,
 ) -> array:
     """The start positions of the syncmers of `seq`, in increasing order: k-mers whose smallest s-mer
-    starts at offset 0 or `k - s` (closed), or with `open_offset` at that offset (open). `1 <= s <= k`
-    and `0 <= open_offset <= k - s`."""
+    starts at offset 0 or `k - s` (closed), or with `open_offset` at that offset, or any of a set of
+    offsets (open). `1 <= s <= k` and every offset lies in `[0, k - s]`."""
     seq = _text(seq)
-    offset = -1 if open_offset is None else _int(open_offset, "open_offset")
-    if offset < 0 and open_offset is not None:
-        raise ValueError(f"open_offset lies in [0, k - s], not {open_offset}")
+    if open_offset is None:
+        offsets = []
+    elif isinstance(open_offset, int) and not isinstance(open_offset, bool):
+        offsets = [open_offset]
+    else:
+        offsets = [_int(t, "open_offset") for t in open_offset]
+        if not offsets:
+            raise ValueError("open_offset needs at least one offset")
     found = _call(
-        _sporos.syncmers, seq, _int(k, "k"), _int(s, "s"), offset, bool(canonical), _int(threads, "threads")
+        _sporos.syncmers, seq, _int(k, "k"), _int(s, "s"), offsets, bool(canonical), _int(threads, "threads")
     )
     return _positions(found)
 

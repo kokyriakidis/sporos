@@ -50,6 +50,17 @@ static std::vector<uint32_t> syncmers(const std::string &seq, int k, int s, int 
     return out;
 }
 
+// Open syncmers at any of several offsets.
+static std::vector<uint32_t> syncmers_open(const std::string &seq, int k, int s, const std::vector<int32_t> &offsets,
+                                           int canonical, int threads) {
+    std::vector<uint32_t> out(seq.size());
+    int64_t count = sporos_syncmers_open(bytes(seq), seq.size(), k, s, offsets.data(), offsets.size(), canonical,
+                                         threads, out.data(), out.size());
+    CHECK(count >= 0 && count <= int64_t(seq.size()));
+    out.resize(std::max<int64_t>(count, 0));
+    return out;
+}
+
 static sporos_index *index_of(const std::vector<std::string> &refs, int min_len, int threads) {
     std::vector<const uint8_t *> seqs;
     std::vector<int64_t> lens;
@@ -162,6 +173,9 @@ static void known() {
     CHECK(sporos_syncmers(seq, 16, 5, 0, -1, 1, 1, slot, 16) == SPOROS_INVALID_ARGUMENT);
     CHECK(sporos_syncmers(seq, 16, 5, 3, 3, 1, 1, slot, 16) == SPOROS_INVALID_ARGUMENT);
     CHECK(sporos_syncmers(seq, -1, 5, 3, -1, 1, 1, slot, 16) == SPOROS_INVALID_ARGUMENT);
+    const int32_t offsets[] = {0, 3};
+    CHECK(sporos_syncmers_open(seq, 16, 5, 3, offsets, 2, 1, 1, slot, 16) == SPOROS_INVALID_ARGUMENT);
+    CHECK(sporos_syncmers_open(seq, 16, 5, 3, offsets, 0, 1, 1, slot, 16) == SPOROS_INVALID_ARGUMENT);
 
     // Too little room: the full count, and nothing written past the room given.
     std::vector<uint32_t> room(8, UINT32_MAX);
@@ -237,16 +251,23 @@ static void against_mojo(const char *path) {
         ++records;
         const std::string &seq = seqs[name];
         if (kind == "minimizers" || kind == "syncmers") {
-            int k, second, open = -1, canonical, threads;
+            int k, second, canonical, threads;
+            std::vector<int32_t> open;
             fields >> k >> second;
-            if (kind == "syncmers") fields >> open;
+            if (kind == "syncmers") {
+                std::string list, offset;
+                fields >> list;
+                std::istringstream offsets(list);
+                while (std::getline(offsets, offset, ',')) open.push_back(std::stoi(offset));
+            }
             fields >> canonical >> threads;
             size_t count;
             fields >> count;
             std::vector<uint32_t> expected(count);
             for (uint32_t &position : expected) fields >> position;
             std::vector<uint32_t> got = kind == "minimizers" ? minimizers(seq, k, second, canonical, threads)
-                                                             : syncmers(seq, k, second, open, canonical, threads);
+                                     : open.size() > 1 ? syncmers_open(seq, k, second, open, canonical, threads)
+                                                       : syncmers(seq, k, second, open[0], canonical, threads);
             CHECK(got == expected);
             if (got != expected) std::fprintf(stderr, "  %s\n", line.substr(0, 60).c_str());
             continue;

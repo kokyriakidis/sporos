@@ -33,10 +33,7 @@ def main() raises:
         var start = thread_cpu_ns()
         var wall = perf_counter_ns()
         var index = SeedIndex(seqs, k, w, MINIMIZER_SEEDS, threads)
-        print(
-            t"build threads={threads}: {Float64(perf_counter_ns() - wall) / 1e9} s wall,"
-            t" {len(index.table)} seeds"
-        )
+        print(t"build threads={threads}: {Float64(perf_counter_ns() - wall) / 1e9} s wall, {len(index.table)} seeds")
         _ = start
     var index = SeedIndex(seqs, k, w, MINIMIZER_SEEDS, 1)
     var bases = reads.total_length()

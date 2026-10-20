@@ -8,7 +8,7 @@ One record per line, fields separated by spaces:
 
     seq <name> <bases>
     minimizers <seq> <k> <w> <canonical> <threads> <count> <positions...>
-    syncmers <seq> <k> <s> <open offset, -1 for closed> <canonical> <threads> <count> <positions...>
+    syncmers <seq> <k> <s> <open offsets, comma-separated; -1 for closed> <canonical> <threads> <count> <positions...>
     matches <query> <min_len> <mode> <reverse> <threads> <count> (<ref_seq> <ref_pos> <query_pos> <length>)...
 
 `matches` index every `ref*` sequence, in their order; mode 0 is maxmatch, 1 mum, 2 mumreference.
@@ -59,11 +59,22 @@ def write_minimizers(
 
 
 def write_syncmers(
-    mut out: String, name: String, seq: List[UInt8], k: Int, s: Int, open_offset: Int, canonical: Bool, threads: Int
+    mut out: String,
+    name: String,
+    seq: List[UInt8],
+    k: Int,
+    s: Int,
+    open_offsets: List[Int],
+    canonical: Bool,
+    threads: Int,
 ) raises:
-    out.write("syncmers ", name, " ", k, " ", s, " ", open_offset, " ", Int(canonical), " ", threads, " ")
-    var offset = Optional[Int](open_offset) if open_offset >= 0 else None
-    write_positions(out, syncmer_positions(Span(seq), k, s, canonical, offset, threads))
+    out.write("syncmers ", name, " ", k, " ", s, " ")
+    if len(open_offsets) == 0:
+        out.write("-1")
+    for i in range(len(open_offsets)):
+        out.write("," if i > 0 else "", open_offsets[i])
+    out.write(" ", Int(canonical), " ", threads, " ")
+    write_positions(out, syncmer_positions(Span(seq), k, s, canonical, None, threads, open_offsets=open_offsets))
 
 
 def write_matches(
@@ -118,12 +129,14 @@ def main() raises:
     write_minimizers(out, "short", short, 5, 40, True, 1)
     write_minimizers(out, "long", long, 31, 19, True, 4)
     write_minimizers(out, "long", long, 19, 10, False, 3)
-    write_syncmers(out, "mixed", mixed, 21, 11, -1, True, 1)
-    write_syncmers(out, "mixed", mixed, 21, 11, 5, True, 1)
-    write_syncmers(out, "mixed", mixed, 15, 7, -1, False, 1)
-    write_syncmers(out, "short", short, 9, 4, 2, False, 1)
-    write_syncmers(out, "long", long, 31, 15, -1, True, 4)
-    write_syncmers(out, "long", long, 25, 12, 6, True, 2)
+    write_syncmers(out, "mixed", mixed, 21, 11, [], True, 1)
+    write_syncmers(out, "mixed", mixed, 21, 11, [5], True, 1)
+    write_syncmers(out, "mixed", mixed, 21, 11, [1, 5, 9], True, 1)
+    write_syncmers(out, "mixed", mixed, 15, 7, [], False, 1)
+    write_syncmers(out, "short", short, 9, 4, [2], False, 1)
+    write_syncmers(out, "long", long, 31, 15, [], True, 4)
+    write_syncmers(out, "long", long, 25, 12, [6], True, 2)
+    write_syncmers(out, "long", long, 25, 12, [0, 6, 13], False, 2)
 
     # Two references and a query of their pieces: forward, reverse-complemented, repeated, with noise.
     var ref0 = random_dna(20_000, 21)

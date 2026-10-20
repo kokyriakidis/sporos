@@ -12,20 +12,12 @@ comptime _ENCODE_WIDTH = 32
 def encode_base(c: UInt8) -> UInt8:
     """Returns the 2-bit code of an ASCII nucleotide, or `N_CODE`."""
     var lower = c | 0x20
-    var valid = (
-        lower == 0x61
-        or lower == 0x63
-        or lower == 0x67
-        or lower == 0x74
-        or lower == 0x75
-    )
+    var valid = lower == 0x61 or lower == 0x63 or lower == 0x67 or lower == 0x74 or lower == 0x75
     # (c >> 1) ^ (c >> 2) maps a/A->0, c/C->1, g/G->2, t/T/u/U->3.
     return ((c >> 1) ^ (c >> 2)) & 3 if valid else N_CODE
 
 
-def encode_into(
-    seq: Span[UInt8, _], dst: MutPointer[UInt8, _], n_code: UInt8 = N_CODE
-):
+def encode_into(seq: Span[UInt8, _], dst: MutPointer[UInt8, _], n_code: UInt8 = N_CODE):
     """Encodes `seq` into `dst`, which must hold `len(seq)` bytes; non-ACGT
     bytes become `n_code`."""
     comptime V = SIMD[DType.uint8, _ENCODE_WIDTH]
@@ -35,13 +27,7 @@ def encode_into(
     while i + _ENCODE_WIDTH <= n:
         var c = src.unsafe_load[width=_ENCODE_WIDTH](i)
         var lower = c | 0x20
-        var valid = (
-            lower.eq(0x61)
-            | lower.eq(0x63)
-            | lower.eq(0x67)
-            | lower.eq(0x74)
-            | lower.eq(0x75)
-        )
+        var valid = lower.eq(0x61) | lower.eq(0x63) | lower.eq(0x67) | lower.eq(0x74) | lower.eq(0x75)
         var code = ((c >> 1) ^ (c >> 2)) & 3
         dst.unsafe_store(i, valid.select(code, V(n_code)))
         i += _ENCODE_WIDTH

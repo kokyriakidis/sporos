@@ -76,20 +76,24 @@ def py_syncmers(
     seq: PythonObject,
     k: PythonObject,
     s: PythonObject,
-    open_offset: PythonObject,
+    open_offsets: PythonObject,
     canonical: PythonObject,
     threads: PythonObject,
 ) raises -> PythonObject:
-    """The syncmer positions of `seq`, closed for a negative `open_offset`, as `uint32` bytes."""
-    var offset = Int(py=open_offset)
+    """The syncmer positions of `seq`, as `uint32` bytes: closed for an empty list of `open_offsets`,
+    else open at any of them."""
+    var opened = List[Int]()
+    for t in open_offsets:
+        opened.append(Int(py=t))
     return bytes_of(
         syncmer_positions(
             bases(seq),
             Int(py=k),
             Int(py=s),
             Bool(py=canonical),
-            Optional[Int](offset) if offset >= 0 else None,
+            None,
             threads_of(threads),
+            open_offsets=opened,
         )
     )
 

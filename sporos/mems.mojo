@@ -40,11 +40,7 @@ struct Mem(Comparable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
         return self.length < other.length
 
     def __eq__(self, other: Self) -> Bool:
-        return (
-            self.ref_pos == other.ref_pos
-            and self.query_pos == other.query_pos
-            and self.length == other.length
-        )
+        return self.ref_pos == other.ref_pos and self.query_pos == other.query_pos and self.length == other.length
 
 
 @fieldwise_init
@@ -72,9 +68,7 @@ struct MemParams(ImplicitlyCopyable, TrivialRegisterPassable, Writable):
             for k2 in range(1, span // k1 + 1):
                 if gcd(k1, k2) != 1:
                     continue
-                var cost = Float64(ref_len) / Float64(k1) + 3.0 * Float64(
-                    query_len
-                ) / Float64(k2)
+                var cost = Float64(ref_len) / Float64(k1) + 3.0 * Float64(query_len) / Float64(k2)
                 if cost < best_cost:
                     best_cost = cost
                     best = Self(min_len, k, k1, k2)
@@ -208,9 +202,7 @@ struct MemIndex(Movable):
     var params: MemParams
     var table: HashTable
 
-    def __init__(
-        out self, reference: SeqText, params: MemParams, threads: Int = 1
-    ) raises:
+    def __init__(out self, reference: SeqText, params: MemParams, threads: Int = 1) raises:
         params.validate()
         if len(reference) >= Int(UInt32.MAX):
             raise Error("reference text must be shorter than 2^32")
@@ -338,9 +330,7 @@ struct _FindTask(ParallelTask):
         sort(Span(results))
 
 
-def find_mems(
-    index: MemIndex, reference: SeqText, query: SeqText, threads: Int = 1
-) -> List[Mem]:
+def find_mems(index: MemIndex, reference: SeqText, query: SeqText, threads: Int = 1) -> List[Mem]:
     """All MEMs of length >= `index.params.min_len`, sorted by query offset."""
     comptime chunk_target = 1 << 18
     var n = len(query)
@@ -370,9 +360,7 @@ def find_mems(
     return out^
 
 
-def filter_mums(
-    mems: List[Mem], query: SeqText, unique_in_query: Bool = True
-) -> List[Mem]:
+def filter_mums(mems: List[Mem], query: SeqText, unique_in_query: Bool = True) -> List[Mem]:
     """MEMs unique in the reference and (by default) in their query sequence.
 
     These are MUMmer's `-mum` matches; with `unique_in_query=False` they are

@@ -40,6 +40,14 @@ int64_t sporos_minimizers(const uint8_t *seq, int64_t len, int32_t k, int32_t w,
 int64_t sporos_syncmers(const uint8_t *seq, int64_t len, int32_t k, int32_t s, int32_t open_offset,
                         int32_t canonical, int32_t threads, uint32_t *out, int64_t out_capacity);
 
+/*
+ * Open syncmers with several allowed offsets: k-mers whose smallest s-mer starts at any of the
+ * `offset_count` (>= 1) offsets in [0, k - s]. Otherwise as sporos_syncmers.
+ */
+int64_t sporos_syncmers_open(const uint8_t *seq, int64_t len, int32_t k, int32_t s, const int32_t *offsets,
+                             int64_t offset_count, int32_t canonical, int32_t threads, uint32_t *out,
+                             int64_t out_capacity);
+
 /* A reference index for matches of at least a minimum length. */
 typedef struct sporos_index sporos_index;
 

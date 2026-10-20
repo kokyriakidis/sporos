@@ -35,9 +35,7 @@ def encode_all(seq: List[UInt8]) -> List[UInt8]:
     return codes^
 
 
-def _kmer_keys(
-    codes: List[UInt8], k: Int, w: Int, canonical: Bool
-) -> List[UInt64]:
+def _kmer_keys(codes: List[UInt8], k: Int, w: Int, canonical: Bool) -> List[UInt64]:
     var keys = List[UInt64]()
     for i in range(len(codes) - k + 1):
         var ok = True
@@ -53,9 +51,7 @@ def _kmer_keys(
     return keys^
 
 
-def naive_minimizers(
-    seq: List[UInt8], k: Int, w: Int, canonical: Bool
-) -> List[UInt32]:
+def naive_minimizers(seq: List[UInt8], k: Int, w: Int, canonical: Bool) -> List[UInt32]:
     var codes = encode_all(seq)
     var out = List[UInt32]()
     if len(codes) < k:
@@ -75,8 +71,11 @@ def naive_minimizers(
 
 
 def naive_syncmers(
-    seq: List[UInt8], k: Int, s: Int, canonical: Bool, open_offset: Int = -1
+    seq: List[UInt8], k: Int, s: Int, canonical: Bool, open_offset: Int = -1, *, open_offsets: List[Int] = []
 ) -> List[UInt32]:
+    var opened = open_offsets.copy()
+    if open_offset >= 0:
+        opened.append(open_offset)
     var codes = encode_all(seq)
     var out = List[UInt32]()
     if len(codes) < k:
@@ -94,15 +93,13 @@ def naive_syncmers(
         for i in range(j, j + w):
             best = min(best, keys[i])
         var p = Int(best & 0xFFFFFFFF) - j
-        var hit = (p == 0 or p == w - 1) if open_offset < 0 else p == open_offset
+        var hit = (p == 0 or p == w - 1) if len(opened) == 0 else p in opened
         if hit:
             out.append(UInt32(j))
     return out^
 
 
-def naive_mems(
-    reference: List[UInt8], query: List[UInt8], min_len: Int
-) -> List[Tuple[Int, Int, Int]]:
+def naive_mems(reference: List[UInt8], query: List[UInt8], min_len: Int) -> List[Tuple[Int, Int, Int]]:
     """All (ref_pos, query_pos, length) maximal matches of ACGT bases, sorted
     by query then reference position. Non-ACGT bases never match."""
     var r = encode_all(reference)

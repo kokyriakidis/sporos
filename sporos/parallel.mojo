@@ -20,9 +20,7 @@ struct _Job[T: ParallelTask]:
     var next: Atomic[Int64]
     var count: Int
 
-    def __init__(
-        out self, task: Pointer[Self.T, MutUntrackedOrigin], count: Int
-    ):
+    def __init__(out self, task: Pointer[Self.T, MutUntrackedOrigin], count: Int):
         self.task = task
         self.next = Atomic[Int64](0)
         self.count = count
@@ -30,9 +28,7 @@ struct _Job[T: ParallelTask]:
 
 def _worker[
     T: ParallelTask
-](arg: MutOpaquePointer[MutUntrackedOrigin]) abi("C") -> MutOpaquePointer[
-    MutUntrackedOrigin
-]:
+](arg: MutOpaquePointer[MutUntrackedOrigin]) abi("C") -> MutOpaquePointer[MutUntrackedOrigin]:
     var job = arg.unsafe_bitcast[_Job[T]]()
     while True:
         var i = Int(job[].next.fetch_add(1))
@@ -47,27 +43,18 @@ def default_threads() -> Int:
 
 
 def parallel_for[T: ParallelTask](mut task: T, count: Int, num_threads: Int):
-    """Runs `task.run(i)` for `i` in `[0, count)` across `num_threads` threads.
-    """
+    """Runs `task.run(i)` for `i` in `[0, count)` across `num_threads` threads."""
     var threads = min(num_threads, count)
     if threads <= 1:
         for i in range(count):
             task.run(i)
         return
-    var job = _Job[T](
-        Pointer(to=task).unsafe_origin_cast[MutUntrackedOrigin](), count
-    )
-    var arg = (
-        Pointer(to=job)
-        .unsafe_origin_cast[MutUntrackedOrigin]()
-        .unsafe_bitcast[NoneType]()
-    )
+    var job = _Job[T](Pointer(to=task).unsafe_origin_cast[MutUntrackedOrigin](), count)
+    var arg = Pointer(to=job).unsafe_origin_cast[MutUntrackedOrigin]().unsafe_bitcast[NoneType]()
     # pthread_t is an 8-byte handle on every supported platform.
     var handles = List[UInt64](length=threads, fill=0)
     for t in range(threads):
-        _ = external_call["pthread_create", Int32](
-            Pointer(to=handles[t]), Int(0), _worker[T], arg
-        )
+        _ = external_call["pthread_create", Int32](Pointer(to=handles[t]), Int(0), _worker[T], arg)
     for t in range(threads):
         _ = external_call["pthread_join", Int32](handles[t], Int(0))
     # A real read keeps `job` alive until every worker has joined; the workers

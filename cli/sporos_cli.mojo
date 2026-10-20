@@ -3,7 +3,7 @@
     sporos mem [-mum | -mumreference | -maxmatch] [-l L] [-b | -r] [-F] [-n]
                [-t threads] [-v] <reference.fa> <query.fa>
     sporos minimizers -k K -w W [--forward] [-t threads] <seqs.fa>
-    sporos syncmers -k K -s S [--open T] [--forward] [-t threads] <seqs.fa>
+    sporos syncmers -k K -s S [--open T[,T...]] [--forward] [-t threads] <seqs.fa>
 
 `sporos mem` takes MUMmer's `mummer` flags and prints its output format;
 `-mumreference` is the default, as in MUMmer. Non-ACGT bases never match
@@ -26,12 +26,12 @@ from sporos.text import SeqText
 from sporos.window import LANES
 
 comptime USAGE = """usage:
-  sporos seeds -k K [-w W | --syncmers -s S [--open T] | --all-kmers] [--query-kmers]
+  sporos seeds -k K [-w W | --syncmers -s S [--open T[,T...]] | --all-kmers] [--query-kmers]
                [--max-occ N | --keep F] [-t threads] <reference.fa> <reads.fa>
   sporos mem [-mum | -mumreference | -maxmatch] [-l L] [-b | -r] [-F] [-n] [-t threads] [-v]
              [-K anchor_k] [-k1 ref_step] [-k2 query_step] <reference.fa> <query.fa>
   sporos minimizers -k K -w W [--forward] [--count] [-t threads] <seqs.fa>
-  sporos syncmers -k K -s S [--open T] [--forward] [--count] [-t threads] <seqs.fa>"""
+  sporos syncmers -k K -s S [--open T[,T...]] [--forward] [--count] [-t threads] <seqs.fa>"""
 
 
 def _log(verbose: Bool, message: String):
@@ -162,14 +162,32 @@ def run_mem(args: List[String]) raises:
         var qtext = SeqText(qseqs)
         if forward:
             total += _report(
-                out, index, rtext, qtext, query.names[q], False, mode,
-                four_column, reference, name_width, threads,
+                out,
+                index,
+                rtext,
+                qtext,
+                query.names[q],
+                False,
+                mode,
+                four_column,
+                reference,
+                name_width,
+                threads,
             )
         if reverse:
             var rc = SeqText(qseqs, reverse_complement=True)
             total += _report(
-                out, index, rtext, rc, query.names[q], True, mode,
-                four_column, reference, name_width, threads,
+                out,
+                index,
+                rtext,
+                rc,
+                query.names[q],
+                True,
+                mode,
+                four_column,
+                reference,
+                name_width,
+                threads,
             )
     out.flush()
     _log(verbose, String(t"matches: {_seconds(query_start)} s ({total} reported)"))
@@ -239,14 +257,32 @@ struct _RecordsTask[
             if self.forward:
                 var qtext = SeqText(qseqs)
                 total += _report(
-                    out, self.index[], self.rtext[], qtext, query.names[q], False, self.mode,
-                    self.four_column, self.reference[], self.name_width, 1,
+                    out,
+                    self.index[],
+                    self.rtext[],
+                    qtext,
+                    query.names[q],
+                    False,
+                    self.mode,
+                    self.four_column,
+                    self.reference[],
+                    self.name_width,
+                    1,
                 )
             if self.reverse:
                 var rc = SeqText(qseqs, reverse_complement=True)
                 total += _report(
-                    out, self.index[], self.rtext[], rc, query.names[q], True, self.mode,
-                    self.four_column, self.reference[], self.name_width, 1,
+                    out,
+                    self.index[],
+                    self.rtext[],
+                    rc,
+                    query.names[q],
+                    True,
+                    self.mode,
+                    self.four_column,
+                    self.reference[],
+                    self.name_width,
+                    1,
                 )
         self.texts[unsafe_offset=index] = out.buf.copy()
         self.totals[unsafe_offset=index] = total
@@ -271,6 +307,7 @@ def _report(
         hits = mems^
     elif mode == "mum":
         hits = filter_mums(mems, qtext)
+
         # MUMmer prints -mum matches in reference order.
         def by_ref(a: Mem, b: Mem) -> Bool:
             return a.ref_pos < b.ref_pos
@@ -301,9 +338,9 @@ def _report(
     return len(hits)
 
 
-struct _FormatTask[
-    hit_origin: ImmOrigin, text_origin: ImmOrigin, fasta_origin: ImmOrigin, out_origin: MutOrigin
-](ParallelTask):
+struct _FormatTask[hit_origin: ImmOrigin, text_origin: ImmOrigin, fasta_origin: ImmOrigin, out_origin: MutOrigin](
+    ParallelTask
+):
     """Formats one slice of matches as MUMmer lines.
 
     Tracked origins keep the inputs alive while the task runs."""
@@ -375,9 +412,7 @@ struct _FormatTask[
         text.resize(unsafe_uninit_length=at)
 
 
-struct _SeedFormatTask[
-    seeds: ImmOrigin, names: ImmOrigin, out_origin: MutOrigin
-](ParallelTask):
+struct _SeedFormatTask[seeds: ImmOrigin, names: ImmOrigin, out_origin: MutOrigin](ParallelTask):
     """Formats one slice of seed positions as `name<TAB>position` lines.
 
     Tracked origins keep the positions alive while the task runs."""
@@ -421,11 +456,19 @@ struct _SeedFormatTask[
         text.resize(unsafe_uninit_length=at)
 
 
+def _int_list(arg: String) raises -> List[Int]:
+    """The integers of a comma-separated list."""
+    var out = List[Int]()
+    for field in arg.split(","):
+        out.append(Int(field))
+    return out^
+
+
 def run_seeds(command: String, args: List[String]) raises:
     var k = 15
     var w = 10
     var s = 0
-    var open_offset: Optional[Int] = None
+    var open_offsets = List[Int]()
     var canonical = True
     var count_only = False
     var threads = default_threads()
@@ -446,7 +489,7 @@ def run_seeds(command: String, args: List[String]) raises:
             s = Int(args[i])
         elif a == "--open":
             i += 1
-            open_offset = Int(args[i])
+            open_offsets = _int_list(args[i])
         elif a == "--forward":
             canonical = False
         elif a == "-t" or a == "-threads":
@@ -475,7 +518,7 @@ def run_seeds(command: String, args: List[String]) raises:
         if command == "minimizers":
             batch = minimizers_batch(spans, k, w, canonical, threads)
         else:
-            batch = syncmers_batch(spans, k, s, canonical, open_offset, threads)
+            batch = syncmers_batch(spans, k, s, canonical, None, threads, open_offsets=open_offsets)
     var seeds = 0
     var out = OutputBuffer()
     for r in range(len(records)):
@@ -486,7 +529,7 @@ def run_seeds(command: String, args: List[String]) raises:
         elif command == "minimizers":
             positions = minimizer_positions(seq, k, w, canonical, threads)
         else:
-            positions = syncmer_positions(seq, k, s, canonical, open_offset, threads)
+            positions = syncmer_positions(seq, k, s, canonical, None, threads, open_offsets=open_offsets)
         seeds += len(positions)
         if count_only:
             continue
@@ -510,9 +553,9 @@ def run_seeds(command: String, args: List[String]) raises:
     out.flush()
 
 
-struct _SeedLookupTask[
-    index_origin: ImmOrigin, read_origin: ImmOrigin, name_origin: ImmOrigin, out_origin: MutOrigin
-](ParallelTask):
+struct _SeedLookupTask[index_origin: ImmOrigin, read_origin: ImmOrigin, name_origin: ImmOrigin, out_origin: MutOrigin](
+    ParallelTask
+):
     """Looks up one slice of reads and formats their hits as TSV lines."""
 
     var index: ImmPointer[SeedIndex, Self.index_origin]
@@ -584,7 +627,7 @@ def run_seed_index(args: List[String]) raises:
     var k = 19
     var w = 12
     var s = 0
-    var open_offset: Optional[Int] = None
+    var open_offsets = List[Int]()
     var scheme = MINIMIZER_SEEDS
     var all_kmers = False
     var max_occ = 0
@@ -608,7 +651,7 @@ def run_seed_index(args: List[String]) raises:
             s = Int(args[i])
         elif a == "--open":
             i += 1
-            open_offset = Int(args[i])
+            open_offsets = _int_list(args[i])
         elif a == "--syncmers":
             scheme = SYNCMER_SEEDS
         elif a == "--all-kmers":
@@ -637,9 +680,9 @@ def run_seed_index(args: List[String]) raises:
         if s == 0:
             raise Error("--syncmers needs -s (the s-mer length)")
         w = s  # SeedIndex takes the syncmers' s-mer length as `w`
-    elif open_offset:
+    elif len(open_offsets) > 0:
         raise Error("--open applies to --syncmers")
-    var index = SeedIndex(seqs, k, w, scheme, threads, open_offset)
+    var index = SeedIndex(seqs, k, w, scheme, threads, open_offsets=open_offsets)
     if keep > 0.0:
         max_occ = index.occurrence_cutoff(keep)
     var slices = max(1, min(threads * 8, len(reads)))

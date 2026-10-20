@@ -76,9 +76,13 @@ def parse_fastq(bytes: Span[UInt8, _]) raises -> FastaRecords:
         if c != _AT:
             raise Error("FASTQ record must start with '@'")
         var j = i + 1
-        while j < n and src[unsafe_offset=j] != _SPACE and src[unsafe_offset=j] != _TAB and src[
-            unsafe_offset=j
-        ] != _NEWLINE and src[unsafe_offset=j] != _RETURN:
+        while (
+            j < n
+            and src[unsafe_offset=j] != _SPACE
+            and src[unsafe_offset=j] != _TAB
+            and src[unsafe_offset=j] != _NEWLINE
+            and src[unsafe_offset=j] != _RETURN
+        ):
             j += 1
         records.names.append(String(StringSlice(unsafe_from_utf8=bytes[i + 1 : j])))
         var seq_start = _line_end(src, j, n) + 1
@@ -117,15 +121,15 @@ def parse_fasta(bytes: Span[UInt8, _]) raises -> FastaRecords:
         if c == _HEADER:
             var name_start = i + 1
             var j = name_start
-            while j < n and src[unsafe_offset=j] != _SPACE and src[
-                unsafe_offset=j
-            ] != _TAB and src[unsafe_offset=j] != _NEWLINE and src[
-                unsafe_offset=j
-            ] != _RETURN:
+            while (
+                j < n
+                and src[unsafe_offset=j] != _SPACE
+                and src[unsafe_offset=j] != _TAB
+                and src[unsafe_offset=j] != _NEWLINE
+                and src[unsafe_offset=j] != _RETURN
+            ):
                 j += 1
-            records.names.append(
-                String(StringSlice(unsafe_from_utf8=bytes[name_start:j]))
-            )
+            records.names.append(String(StringSlice(unsafe_from_utf8=bytes[name_start:j])))
             records.starts.append(len(records.data))
             records.lengths.append(0)
             i = _line_end(src, j, n) + 1
@@ -180,9 +184,13 @@ def parse_fasta_in_place(var bytes: List[UInt8]) raises -> FastaRecords:
         if c == _HEADER:
             var name_start = i + 1
             var j = name_start
-            while j < n and src[unsafe_offset=j] != _SPACE and src[unsafe_offset=j] != _TAB and src[
-                unsafe_offset=j
-            ] != _NEWLINE and src[unsafe_offset=j] != _RETURN:
+            while (
+                j < n
+                and src[unsafe_offset=j] != _SPACE
+                and src[unsafe_offset=j] != _TAB
+                and src[unsafe_offset=j] != _NEWLINE
+                and src[unsafe_offset=j] != _RETURN
+            ):
                 j += 1
             records.names.append(String(StringSlice(unsafe_from_utf8=Span(bytes)[name_start:j])))
             records.starts.append(at)
@@ -340,8 +348,8 @@ def _inflate_bgzf(data: Span[UInt8, _], lib: OwnedDLHandle, threads: Int) raises
         if bsize < 0 or at + bsize + 1 > n:
             raise Error("corrupt BGZF block")
         var end = at + bsize + 1
-        var isize = Int(data[end - 4]) | (Int(data[end - 3]) << 8) | (Int(data[end - 2]) << 16) | (
-            Int(data[end - 1]) << 24
+        var isize = (
+            Int(data[end - 4]) | (Int(data[end - 3]) << 8) | (Int(data[end - 2]) << 16) | (Int(data[end - 1]) << 24)
         )
         blocks.append(at + 12 + xlen)
         blocks.append(end - 8 - (at + 12 + xlen))
@@ -416,9 +424,7 @@ def _gunzip(path: String) raises -> List[UInt8]:
     while True:
         var old = len(out)
         out.resize(unsafe_uninit_length=old + CHUNK)
-        var got = Int(
-            zlib.get_function[Int32]("gzread")(gz, out.unsafe_ptr().unsafe_offset(old), UInt32(CHUNK))
-        )
+        var got = Int(zlib.get_function[Int32]("gzread")(gz, out.unsafe_ptr().unsafe_offset(old), UInt32(CHUNK)))
         if got < 0:
             _ = zlib.get_function[Int32]("gzclose")(gz)
             raise Error(t"error inflating {path}")

@@ -47,9 +47,7 @@ from sporos.nthash import (
 )
 from sporos.parallel import ParallelTask, parallel_for
 
-comptime LANES = get_defined_int[
-    "SPOROS_LANES", 16 if CompilationTarget.has_avx512f() else 8
-]()
+comptime LANES = get_defined_int["SPOROS_LANES", 16 if CompilationTarget.has_avx512f() else 8]()
 """Sequence chunks scanned side by side, one u32 SIMD lane each."""
 comptime _Mask = SIMD[DType.bool, LANES]
 comptime _U32V = SIMD[DType.uint32, LANES]
@@ -80,9 +78,13 @@ def scan_ascii[
         padded.append(UInt8(ord("N")))
     return scan[mode, canonical, ascii=True](padded.unsafe_ptr(), windows, params, threads, len(padded))
 
+
 comptime MINIMIZERS = 0
 comptime CLOSED_SYNCMERS = 1
 comptime OPEN_SYNCMERS = 2
+"""Open syncmers at one offset (the lowest bit of `ScanParams.offsets`)."""
+comptime OPEN_SYNCMER_SET = 3
+"""Open syncmers at any of several offsets."""
 
 
 comptime _U8x16 = SIMD[DType.uint8, 16]
@@ -169,13 +171,14 @@ struct ScanParams(ImplicitlyCopyable, TrivialRegisterPassable):
     `k` is the length of the hashed k-mer (the s-mer for syncmers), `w` the
     number of consecutive k-mers per window, `span` the number of bases one
     output must cover with valid bases (`k` for minimizers, the syncmer
-    length for syncmers), and `offset` the open-syncmer position.
+    length for syncmers), and `offsets` the open-syncmer offsets: bit t set
+    when the smallest s-mer may start at offset t (t < 64).
     """
 
     var k: Int
     var w: Int
     var span: Int
-    var offset: Int
+    var offsets: UInt64
 
 
 comptime HASH_NONE: UInt32 = 0xFFFFFFFF
@@ -212,6 +215,8 @@ struct _Consts(ImplicitlyCopyable, TrivialRegisterPassable):
     var w: _U32V
     var back: _U32V
     var offset: _U32V
+    var offsets_lo: _U32V
+    var offsets_hi: _U32V
     var kmer_mask: _U32V
     var rc_shift: _U32V
 
@@ -235,9 +240,7 @@ comptime _BYTE_IN_WORD = iota[DType.uint8, 4 * _TRANSPOSE * LANES]() & 3
 
 
 @inline(.always)
-def _store_indices[
-    ascii: Bool
-](dst: MutPointer[UInt8, _], bases: SIMD[DType.uint8, _TRANSPOSE * LANES]):
+def _store_indices[ascii: Bool](dst: MutPointer[UInt8, _], bases: SIMD[DType.uint8, _TRANSPOSE * LANES]):
     """Stores, for each code c, the byte indices `4c .. 4c+3` that `_lookup`
     needs (N maps to 0x80.., which looks up zero and sets the lane's sign)."""
     var codes: SIMD[DType.uint8, _TRANSPOSE * LANES]
@@ -249,9 +252,7 @@ def _store_indices[
     var scaled = _TIMES4._dynamic_shuffle(codes)
     var twice = scaled.interleave(scaled)
     comptime n = _TRANSPOSE * LANES
-    var four = bitcast[DType.uint8, 4 * n](
-        bitcast[DType.uint16, n](twice).interleave(bitcast[DType.uint16, n](twice))
-    )
+    var four = bitcast[DType.uint8, 4 * n](bitcast[DType.uint16, n](twice).interleave(bitcast[DType.uint16, n](twice)))
     dst.unsafe_store(0, four + _BYTE_IN_WORD)
 
 
@@ -291,18 +292,10 @@ def _step[
         else:
             h = lanes.fh * MUL_SEED
     else:
-        lanes.fh = (
-            rotate_bits_left[ROTATION](lanes.fh)
-            ^ fring[unsafe_offset=ri]
-            ^ _lookup(consts.fin, index)
-        )
+        lanes.fh = rotate_bits_left[ROTATION](lanes.fh) ^ fring[unsafe_offset=ri] ^ _lookup(consts.fin, index)
         fring.unsafe_offset(ri).unsafe_write(_lookup(consts.fout, index))
         comptime if canonical:
-            lanes.rh = (
-                rotate_bits_right[ROTATION](lanes.rh)
-                ^ rring[unsafe_offset=ri]
-                ^ _lookup(consts.rin, index)
-            )
+            lanes.rh = rotate_bits_right[ROTATION](lanes.rh) ^ rring[unsafe_offset=ri] ^ _lookup(consts.rin, index)
             rring.unsafe_offset(ri).unsafe_write(_lookup(consts.rout, index))
             h = lanes.fh + lanes.rh
         else:
@@ -311,23 +304,17 @@ def _step[
     # Hash bits 30..b above the b-bit block offset: `min` inside a
     # block is leftmost on ties; across blocks only hash bits are compared,
     # so the older (left) k-mer wins ties there too.
-    var key = lanes.run.ge(consts.k).select(
-        (h & consts.hash_mask) | UInt32(wi), _U32V(HASH_NONE)
-    )
+    var key = lanes.run.ge(consts.k).select((h & consts.hash_mask) | UInt32(wi), _U32V(HASH_NONE))
     lanes.prefix = min(lanes.prefix, key)
     var suffix = ring[unsafe_offset=wi + 1]
-    var from_prefix = (lanes.prefix | consts.pos_mask).lt(
-        suffix & ~consts.pos_mask
-    )
+    var from_prefix = (lanes.prefix | consts.pos_mask).lt(suffix & ~consts.pos_mask)
     var win = from_prefix.select(lanes.prefix, suffix)
     ring.unsafe_offset(wi).unsafe_write(key)
 
     var bits: UInt32 = 0
     comptime if emit:
         # `lanes.block` is the position of the current block's first k-mer.
-        var minpos = (win & consts.pos_mask) + from_prefix.select(
-            lanes.block, lanes.block - consts.w
-        )
+        var minpos = (win & consts.pos_mask) + from_prefix.select(lanes.block, lanes.block - consts.w)
         var value: _U32V
         var keep: _Mask
         comptime if mode == MINIMIZERS:
@@ -340,8 +327,13 @@ def _step[
             var hit: _Mask
             comptime if mode == CLOSED_SYNCMERS:
                 hit = minpos.eq(value) | minpos.eq(lanes.pos)
-            else:
+            elif mode == OPEN_SYNCMERS:
                 hit = minpos.eq(value + consts.offset)
+            else:
+                # Is the minimum's offset in the k-mer one of the allowed?
+                var rel = minpos - value
+                var word = rel.lt(32).select(consts.offsets_lo, consts.offsets_hi)
+                hit = ((word >> (rel & 31)) & 1).ne(0)
             keep = hit & lanes.run.ge(consts.span)
         obuf.unsafe_store(0, value)
         bits = UInt32(pack_bits[_Bits](keep))
@@ -392,13 +384,7 @@ def scan_segment[
 
 def _scan_lanes[
     mode: Int, canonical: Bool, ascii: Bool, small: Bool
-](
-    codes: ImmPointer[UInt8, _],
-    seg_start: Int,
-    chunk: Int,
-    params: ScanParams,
-    mut out: List[UInt32],
-):
+](codes: ImmPointer[UInt8, _], seg_start: Int, chunk: Int, params: ScanParams, mut out: List[UInt32],):
     """Windows `[seg_start, seg_start + LANES * chunk)`, `chunk` per lane,
     appended to `out` in order."""
     var lane_ids = iota[DType.int64, LANES]()
@@ -464,7 +450,9 @@ def _scan_lanes_core[
         pos_mask=pos_mask,
         w=_U32V(UInt32(w)),
         back=_U32V(UInt32(w - 1)),
-        offset=_U32V(UInt32(params.offset)),
+        offset=_U32V(UInt32(count_trailing_zeros(params.offsets) & 63)),
+        offsets_lo=_U32V(UInt32(params.offsets & 0xFFFFFFFF)),
+        offsets_hi=_U32V(UInt32(params.offsets >> 32)),
         kmer_mask=_U32V(UInt32.MAX if k >= 16 else (UInt32(1) << UInt32(2 * k)) - 1),
         rc_shift=_U32V(UInt32(2 * (k - 1))),
     )
@@ -557,9 +545,7 @@ def _scan_lanes_core[
             if wi == w:
                 # Close the block: its keys become suffix minima in place.
                 for j in reversed(range(w - 1)):
-                    ring_p.unsafe_offset(j).unsafe_write(
-                        min(ring_p[unsafe_offset=j], ring_p[unsafe_offset=j + 1])
-                    )
+                    ring_p.unsafe_offset(j).unsafe_write(min(ring_p[unsafe_offset=j], ring_p[unsafe_offset=j + 1]))
                 lanes.prefix = _U32V(HASH_NONE)
                 lanes.block += UInt32(w)
                 wi = 0
@@ -595,14 +581,7 @@ def _scan_lanes_core[
 
 def _scan_scalar[
     mode: Int, canonical: Bool
-](
-    codes: ImmPointer[UInt8, _],
-    first: Int,
-    windows: Int,
-    params: ScanParams,
-    mut out: List[UInt32],
-    base: Int = 0,
-):
+](codes: ImmPointer[UInt8, _], first: Int, windows: Int, params: ScanParams, mut out: List[UInt32], base: Int = 0,):
     """Windows `[first, first + windows)` one by one (the lanes' remainder);
     `codes[i]` is the base at position `base + i`. Each k-mer is hashed once,
     then every window takes the minimum of its w keys."""
@@ -655,7 +634,8 @@ def _scan_scalar[
             comptime if mode == CLOSED_SYNCMERS:
                 hit = minpos == j or minpos == j + w - 1
             else:
-                hit = minpos == j + params.offset
+                var rel = minpos - j
+                hit = rel >= 0 and rel < 64 and (params.offsets >> UInt64(rel)) & 1 != 0
             if span_run >= params.span and hit:
                 tail.append(UInt32(base + j))
     var deduped = List[UInt32]()
@@ -692,9 +672,7 @@ def append_dedup(mut out: List[UInt32], src: Span[UInt32, _]):
     var begin = 0
     if len(out) > 0 and len(src) > 0 and src[0] == out[len(out) - 1]:
         begin = 1
-    out.extend(
-        Span(unsafe_ptr=src.unsafe_ptr().unsafe_offset(begin), length=len(src) - begin)
-    )
+    out.extend(Span(unsafe_ptr=src.unsafe_ptr().unsafe_offset(begin), length=len(src) - begin))
 
 
 struct _ScanTask[mode: Int, canonical: Bool, ascii: Bool, small: Bool](ParallelTask):
@@ -737,7 +715,9 @@ def scan[
     params: ScanParams,
     threads: Int,
     readable: Int = Int.MAX,
-) -> List[UInt32]:
+) -> List[
+    UInt32
+]:
     """Scans windows `[0, windows)` with the seed hash for `params.k`."""
     if params.k <= SMALL_K:
         return _scan[mode, canonical, ascii, True](codes, windows, params, threads, readable)
@@ -746,13 +726,7 @@ def scan[
 
 def _scan[
     mode: Int, canonical: Bool, ascii: Bool, small: Bool
-](
-    codes: ImmPointer[UInt8, _],
-    windows: Int,
-    params: ScanParams,
-    threads: Int,
-    readable: Int,
-) -> List[UInt32]:
+](codes: ImmPointer[UInt8, _], windows: Int, params: ScanParams, threads: Int, readable: Int,) -> List[UInt32]:
     """Scans windows `[0, windows)`, split into segments across `threads`.
 
     With `ascii`, `codes` holds `readable` ASCII bases (no padding needed);
@@ -810,10 +784,15 @@ def scan_reads(
             _scan_reads[CLOSED_SYNCMERS, True](codes, stride, windows, chunk, params, outs)
         else:
             _scan_reads[CLOSED_SYNCMERS, False](codes, stride, windows, chunk, params, outs)
+    elif mode == OPEN_SYNCMERS:
+        if canonical:
+            _scan_reads[OPEN_SYNCMERS, True](codes, stride, windows, chunk, params, outs)
+        else:
+            _scan_reads[OPEN_SYNCMERS, False](codes, stride, windows, chunk, params, outs)
     elif canonical:
-        _scan_reads[OPEN_SYNCMERS, True](codes, stride, windows, chunk, params, outs)
+        _scan_reads[OPEN_SYNCMER_SET, True](codes, stride, windows, chunk, params, outs)
     else:
-        _scan_reads[OPEN_SYNCMERS, False](codes, stride, windows, chunk, params, outs)
+        _scan_reads[OPEN_SYNCMER_SET, False](codes, stride, windows, chunk, params, outs)
 
 
 def _scan_reads[
