@@ -25,6 +25,8 @@ and each survivor is appended to its lane, then lanes are concatenated.
 from std.bit import count_trailing_zeros, rotate_bits_left, rotate_bits_right
 from std.math import ceildiv
 from std.memory import Layout, alloc, bitcast, dealloc, pack_bits
+from std.math import iota
+from std.sys.defines import get_defined_int
 from std.sys.info import CompilationTarget
 
 from sporos.alphabet import N_CODE
@@ -41,13 +43,17 @@ from sporos.nthash import (
 )
 from sporos.parallel import ParallelTask, parallel_for
 
-comptime LANES = 8
+comptime LANES = get_defined_int[
+    "SPOROS_LANES", 16 if CompilationTarget.has_avx512f() else 8
+]()
+"""Sequence chunks scanned side by side, one u32 SIMD lane each."""
 comptime _Mask = SIMD[DType.bool, LANES]
 comptime _U32V = SIMD[DType.uint32, LANES]
 comptime _U64V = SIMD[DType.uint64, LANES]
 
 comptime SENTINEL: UInt32 = 0xFFFFFFFF
 """Marks a window without output."""
+comptime _Bits = DType.uint8 if LANES == 8 else DType.uint16
 comptime _BATCH = 64 // LANES
 """Steps per output bitmask (one bit per lane and step)."""
 comptime PADDING = 96
@@ -85,27 +91,36 @@ def _transpose(
     """Writes `_TRANSPOSE` steps of `LANES` codes, step-major and scaled by
     `_TIMES4`, into `dst`.
 
-    Lane `l` reads `src[l * chunk : l * chunk + 16]`; three rounds of
-    interleaves turn the 8 lane vectors into 16 vectors of 8 lanes.
+    Lane `l` reads `src[l * chunk : l * chunk + 16]`; rounds of interleaves
+    at doubling element widths turn the lane vectors into step vectors.
     """
-    var v0 = src.unsafe_load[width=16](0)
-    var v1 = src.unsafe_load[width=16](chunk)
-    var v2 = src.unsafe_load[width=16](2 * chunk)
-    var v3 = src.unsafe_load[width=16](3 * chunk)
-    var v4 = src.unsafe_load[width=16](4 * chunk)
-    var v5 = src.unsafe_load[width=16](5 * chunk)
-    var v6 = src.unsafe_load[width=16](6 * chunk)
-    var v7 = src.unsafe_load[width=16](7 * chunk)
-    var a0 = bitcast[DType.uint16, 16](v0.interleave(v1))
-    var a1 = bitcast[DType.uint16, 16](v2.interleave(v3))
-    var a2 = bitcast[DType.uint16, 16](v4.interleave(v5))
-    var a3 = bitcast[DType.uint16, 16](v6.interleave(v7))
+    comptime assert LANES == 8 or LANES == 16, "LANES must be 8 or 16"
+    var v = List[_U8x16](capacity=LANES)
+    comptime for l in range(LANES):
+        v.append(src.unsafe_load[width=16](l * chunk))
+    var a0 = bitcast[DType.uint16, 16](v[0].interleave(v[1]))
+    var a1 = bitcast[DType.uint16, 16](v[2].interleave(v[3]))
+    var a2 = bitcast[DType.uint16, 16](v[4].interleave(v[5]))
+    var a3 = bitcast[DType.uint16, 16](v[6].interleave(v[7]))
     var b0 = bitcast[DType.uint32, 16](a0.interleave(a1))
     var b1 = bitcast[DType.uint32, 16](a2.interleave(a3))
-    # Scale codes to seed-table byte offsets (see `_TIMES4`) 16 at a time.
-    dst.unsafe_store(
-        0, _TIMES4._dynamic_shuffle(bitcast[DType.uint8, 128](b0.interleave(b1)))
-    )
+    comptime if LANES == 8:
+        # Scale codes to seed-table byte offsets (see `_TIMES4`) 16 at a time.
+        dst.unsafe_store(
+            0, _TIMES4._dynamic_shuffle(bitcast[DType.uint8, 128](b0.interleave(b1)))
+        )
+    else:
+        var a4 = bitcast[DType.uint16, 16](v[8].interleave(v[9]))
+        var a5 = bitcast[DType.uint16, 16](v[10].interleave(v[11]))
+        var a6 = bitcast[DType.uint16, 16](v[12].interleave(v[13]))
+        var a7 = bitcast[DType.uint16, 16](v[14].interleave(v[15]))
+        var b2 = bitcast[DType.uint32, 16](a4.interleave(a5))
+        var b3 = bitcast[DType.uint32, 16](a6.interleave(a7))
+        var c0 = bitcast[DType.uint64, 16](b0.interleave(b1))
+        var c1 = bitcast[DType.uint64, 16](b2.interleave(b3))
+        dst.unsafe_store(
+            0, _TIMES4._dynamic_shuffle(bitcast[DType.uint8, 256](c0.interleave(c1)))
+        )
 
 
 @fieldwise_init
@@ -174,19 +189,26 @@ struct _Lanes(ImplicitlyCopyable, TrivialRegisterPassable):
 
 comptime _TIMES4 = _U8x16(0, 4, 8, 12, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80)
 """Maps a code c to 4c, and N to 0x80, which both tbl and pshufb read as zero."""
-comptime _REPLICATE = SIMD[DType.uint8, 4 * LANES](
-    0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7
-)
-comptime _BYTE_IN_WORD = SIMD[DType.uint8, 4 * LANES](
-    0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3
-)
+def _replicate_mask() -> SIMD[DType.uint8, 4 * LANES]:
+    var mask = SIMD[DType.uint8, 4 * LANES](0)
+    for i in range(4 * LANES):
+        mask[i] = UInt8(i // 4)
+    return mask
+
+
+comptime _REPLICATE = _replicate_mask()
+"""Byte i takes lane i // 4's code."""
+comptime _BYTE_IN_WORD = iota[DType.uint8, 4 * LANES]() & 3
 
 
 @inline(.always)
 def _index(c4: SIMD[DType.uint8, LANES]) -> SIMD[DType.uint8, 4 * LANES]:
     """Byte indices `4c .. 4c+3` per lane for `_lookup`, from codes already
     scaled by `_TIMES4`; N's indices stay >= 0x80 and look up zero."""
-    return c4.join(c4)._dynamic_shuffle(_REPLICATE) + _BYTE_IN_WORD
+    comptime if LANES == 8:
+        return c4.join(c4)._dynamic_shuffle(_REPLICATE) + _BYTE_IN_WORD
+    else:
+        return rebind[_U8x16](c4)._dynamic_shuffle(_REPLICATE) + _BYTE_IN_WORD
 
 
 @inline(.always)
@@ -266,7 +288,7 @@ def _step[
                 hit = minpos.eq(value + consts.offset)
             keep = hit & lanes.run.ge(consts.span)
         obuf.unsafe_store(0, value)
-        bits = UInt32(pack_bits[DType.uint8](keep))
+        bits = UInt32(pack_bits[_Bits](keep))
     lanes.pos += 1
     return bits
 
@@ -340,7 +362,7 @@ def _scan_lanes[
         back=_U32V(UInt32(w - 1)),
         offset=_U32V(UInt32(params.offset)),
     )
-    var lane_ids = _U32V(0, 1, 2, 3, 4, 5, 6, 7)
+    var lane_ids = iota[DType.uint32, LANES]()
     var lanes = _Lanes(
         fh=_U32V(0),
         rh=_U32V(0),

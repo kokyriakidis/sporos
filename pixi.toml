@@ -21,6 +21,8 @@ test = { cmd = "./build/test_seeds && ./build/test_mems", depends-on = ["build-t
 build-bench-seeds = { cmd = "mojo build -I . -I tests -I benchmarks benchmarks/bench_seeds.mojo -o build/bench_seeds", depends-on = ["prepare"] }
 # Single-thread minimizer/syncmer throughput on random DNA: `pixi run bench-seeds [length]`.
 bench-seeds = { cmd = "./build/bench_seeds", depends-on = ["build-bench-seeds"] }
-format = "mojo format -l 120 sporos tests"
+# The command-line tool: `pixi run build-cli`, then `build/sporos --help`.
+build-cli = { cmd = "mojo build -I . cli/sporos_cli.mojo -o build/sporos", depends-on = ["prepare"] }
+format = "mojo format -l 120 sporos tests cli benchmarks"
 # Pulls the latest Mojo skills from github.com/modular/skills into .claude/skills for coding agents.
 sync-skills = "bash .claude/sync-skills.sh"

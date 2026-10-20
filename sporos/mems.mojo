@@ -117,16 +117,20 @@ def match_forward(a: ImmPointer[UInt8, _], b: ImmPointer[UInt8, _]) -> Int:
 
 
 @inline(.always)
-def match_backward(a: ImmPointer[UInt8, _], b: ImmPointer[UInt8, _]) -> Int:
-    """Length of the common suffix of the text ending just before `a`, `b`."""
+def match_backward(
+    a: ImmPointer[UInt8, _], b: ImmPointer[UInt8, _], limit: Int
+) -> Int:
+    """Length of the common suffix of the text ending just before `a`, `b`,
+    or some value >= `limit` once it reaches `limit`."""
     var n = 0
-    while True:
+    while n < limit:
         var d = a.unsafe_offset(-n - 8).unsafe_bitcast[UInt64]()[] ^ b.unsafe_offset(
             -n - 8
         ).unsafe_bitcast[UInt64]()[]
         if d != 0:
             return n + Int(count_leading_zeros(d) >> 3)
         n += 8
+    return n
 
 
 struct MemIndex(Movable):
@@ -231,15 +235,18 @@ struct MemIndex(Movable):
                 if (entry ^ fp) >> 32 != 0:
                     continue
                 var r = Int(entry & 0xFFFFFFFF)
+                # Anchors of one MEM sit `period` apart on its diagonal, so
+                # this anchor is the MEM's first iff the match does not reach
+                # `period` bases to the left: stop looking there.
+                var left = match_backward(
+                    rtext.unsafe_offset(r), qtext.unsafe_offset(j), period
+                )
+                if left >= period:
+                    continue
                 var right = match_forward(
                     rtext.unsafe_offset(r), qtext.unsafe_offset(j)
                 )
-                if right < k:
-                    continue
-                var left = match_backward(
-                    rtext.unsafe_offset(r), qtext.unsafe_offset(j)
-                )
-                if left >= period or left + right < min_len:
+                if right < k or left + right < min_len:
                     continue
                 out.append(
                     Mem(UInt32(r - left), UInt32(j - left), UInt32(left + right))
@@ -299,10 +306,14 @@ def find_mems(
     return out^
 
 
-def filter_mums(mems: List[Mem], query: SeqText) -> List[Mem]:
-    """MEMs unique in the reference and in their query sequence.
+def filter_mums(
+    mems: List[Mem], query: SeqText, unique_in_query: Bool = True
+) -> List[Mem]:
+    """MEMs unique in the reference and (by default) in their query sequence.
 
-    `mems` must come from one `find_mems` call (sorted by query offset).
+    These are MUMmer's `-mum` matches; with `unique_in_query=False` they are
+    its `-mumreference` matches (unique in the reference only). `mems` must
+    come from one `find_mems` call (sorted by query offset).
     """
     var out = List[Mem]()
     var lo = 0
@@ -317,7 +328,8 @@ def filter_mums(mems: List[Mem], query: SeqText) -> List[Mem]:
             group.append(mems[i])
         var keep = List[Bool](length=len(group), fill=True)
         _mark_contained[by_ref=False](group, keep)
-        _mark_contained[by_ref=True](group, keep)
+        if unique_in_query:
+            _mark_contained[by_ref=True](group, keep)
         for i in range(len(group)):
             if keep[i]:
                 out.append(group[i])
