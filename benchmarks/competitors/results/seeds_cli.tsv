@@ -1,0 +1,3 @@
+pair	L	tool	mode	threads	reps	wall_s	user_s	sys_s	max_rss_mb	busy_cpus	load1
+chm13_chr1	-	sporos minimizers -k 21 -w 11	canonical	1	3	2.57	1.52	1.05	1145	1.05	1.87
+chm13_chr1	-	sporos minimizers -k 21 -w 11	canonical	10	3	1.20	1.61	0.86	1086	0.06	1.73

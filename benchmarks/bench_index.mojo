@@ -37,11 +37,16 @@ def main() raises:
         _ = start
     var index = SeedIndex(seqs, k, w, MINIMIZER_SEEDS, 1)
     var bases = reads.total_length()
+    var spans = List[Span[UInt8, origin_of(reads.data)]](capacity=len(reads))
+    for r in range(len(reads)):
+        spans.append(reads.seq(r))
     for all_kmers in [True, False]:
+        var mode = "all k-mers" if all_kmers else "minimizers"
         var best = Int.MAX
         var count = 0
         for _ in range(3):
             var hits = List[SeedHit]()
+            count = 0
             var start = thread_cpu_ns()
             for r in range(len(reads)):
                 hits.clear()
@@ -49,7 +54,21 @@ def main() raises:
                 count += len(hits)
             best = min(best, thread_cpu_ns() - start)
         var mbps = Float64(bases) / (Float64(best) / 1e9) / 1e6
-        print(
-            t"lookup {'all k-mers' if all_kmers else 'minimizers'}: {mbps} Mbp/s,"
-            t" {Float64(count) / 3.0 / Float64(len(reads))} hits/read"
-        )
+        print(t"lookup {mode}, per read: {mbps} Mbp/s, {Float64(count) / Float64(len(reads))} hits/read")
+        best = Int.MAX
+        var batch_count = 0
+        for _ in range(3):
+            var start = thread_cpu_ns()
+            var batch = index.lookup_batch(spans, all_kmers, max_occ)
+            best = min(best, thread_cpu_ns() - start)
+            batch_count = len(batch.hits)
+        mbps = Float64(bases) / (Float64(best) / 1e9) / 1e6
+        print(t"lookup {mode}, batch: {mbps} Mbp/s, {Float64(batch_count) / Float64(len(reads))} hits/read")
+        if batch_count != count:
+            raise Error("batch and per-read lookups disagree")
+        for threads in [8]:
+            var wall = perf_counter_ns()
+            var batch = index.lookup_batch(spans, all_kmers, max_occ, threads)
+            var seconds = Float64(perf_counter_ns() - wall) / 1e9
+            print(t"lookup {mode}, batch, {threads} threads: {Float64(bases) / seconds / 1e6} Mbp/s wall")
+            _ = len(batch)

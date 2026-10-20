@@ -72,7 +72,22 @@ def _check(
                     ok = False
             if ok:
                 ref_positions.append(UInt32(i))
-    var query_positions = index.query_positions(Span(query), all_kmers)
+    # The query's seeds, from the oracles (or every valid k-mer).
+    var query_positions: List[UInt32]
+    if scheme == MINIMIZER_SEEDS and not all_kmers:
+        query_positions = naive_minimizers(query, k, w, True)
+    elif scheme == SYNCMER_SEEDS and not all_kmers:
+        query_positions = naive_syncmers(query, k, w, True, open_offset, open_offsets=open_offsets)
+    else:
+        query_positions = List[UInt32]()
+        var codes = encode_all(query)
+        for i in range(len(codes) - k + 1):
+            var ok = True
+            for j in range(k):
+                if codes[i + j] > 3:
+                    ok = False
+            if ok:
+                query_positions.append(UInt32(i))
     var expected = _sorted(_expected_hits(reference, ref_positions, query, query_positions, k, max_occ))
     var got = List[SeedHit]()
     index.lookup(Span(query), got, all_kmers, max_occ)
@@ -109,6 +124,48 @@ def test_seed_index_matches_reference() raises:
                 _check(SYNCMER_SEEDS, cfg[0], cfg[1], n, case_id, False, 0, (cfg[0] - cfg[1]) // 2)
                 _check(SYNCMER_SEEDS, cfg[0], cfg[1], n, case_id, False, 0, open_offsets=[0, cfg[0] - cfg[1] - 1])
             _check(ALL_KMERS, cfg[0], cfg[1], n, case_id, False, 3)
+
+
+def test_lookup_batch_matches_lookup() raises:
+    var reference = random_dna(60_000, 77, 0.002)
+    # Repeats, so some k-mers pass and some fail an occurrence cap.
+    for copy in range(6):
+        for i in range(500):
+            reference[20_000 + copy * 2000 + i] = reference[1000 + i]
+    var seqs = List[Span[UInt8, origin_of(reference)]]()
+    seqs.append(Span(reference))
+    # Reads of varied lengths (some shorter than k, some long), from the
+    # reference and its noisy copy, enough to span several lookup tasks.
+    var noisy = random_dna(60_000, 78, 0.01)
+    for i in range(0, 60_000, 3):
+        noisy[i] = reference[i]
+    var reads = List[Span[UInt8, origin_of(noisy)]]()
+    var at = 0
+    for r in range(5000):
+        var length = [5, 40, 150, 151, 999][r % 5] if r % 97 != 0 else 0
+        if r % 500 == 1:
+            length = 20_000
+        if at + length > len(noisy):
+            at = (r * 7919) % 1000
+        reads.append(Span(noisy)[at : at + length])
+        at += 37 + length // 3
+    for scheme in [MINIMIZER_SEEDS, SYNCMER_SEEDS, ALL_KMERS]:
+        var index = SeedIndex(seqs, 19, 12 if scheme != SYNCMER_SEEDS else 15, scheme, threads=2)
+        for all_kmers in [False, True]:
+            for max_occ in [0, 3]:
+                for threads in [1, 3]:
+                    var batch = index.lookup_batch(reads, all_kmers, max_occ, threads)
+                    assert_equal(len(batch), len(reads))
+                    var hits = List[SeedHit]()
+                    for r in range(len(reads)):
+                        hits.clear()
+                        index.lookup(reads[r], hits, all_kmers, max_occ)
+                        var got = batch.of(r)
+                        if len(got) != len(hits):
+                            raise Error(String(t"scheme={scheme} read {r}: {len(got)} hits, expected {len(hits)}"))
+                        for i in range(len(hits)):
+                            if not (got[i] == hits[i]):
+                                raise Error(String(t"scheme={scheme} read {r}: hit {i} differs"))
 
 
 def test_occurrence_cutoff() raises:

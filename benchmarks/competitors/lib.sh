@@ -5,6 +5,7 @@ BENCH=${BENCH:-$HOME/sporos-bench}
 D=$BENCH/data
 OUT=$BENCH/out
 ENVBIN=$BENCH/env/.pixi/envs/default/bin
+SBIN=${SBIN:-$BENCH/bin}  # sporos binaries snapshotted by setup_xaros.sh
 RES=${RES:-$HERE/results}
 REPS=${REPS:-3}
 # A first run slower than this many seconds is not repeated (keeps the large pair affordable).
@@ -21,15 +22,16 @@ busy_cpus() {
   awk -v t="$tot" -v i="$idle" -v n="$(nproc)" 'BEGIN{printf "%.2f", (t>0 ? (t-i)/t*n : 0)}'
 }
 
-# Wait (up to ~10 min) while other jobs keep more than one CPU busy.
+# Wait (up to ~10 min) while other jobs keep more than $BUSY_MAX CPUs busy.
+BUSY_MAX=${BUSY_MAX:-1.5}
 wait_idle() {
   local tries=0 b
   while :; do
     b=$(busy_cpus)
-    awk -v b="$b" 'BEGIN{exit !(b <= 1.0)}' && return 0
+    awk -v b="$b" -v m="$BUSY_MAX" 'BEGIN{exit !(b <= m)}' && return 0
     tries=$((tries + 1))
     [ $tries -gt 60 ] && { echo "warning: machine still busy ($b CPUs), running anyway" >&2; return 0; }
-    echo "machine busy ($b CPUs), waiting" >&2; sleep 10
+    echo "machine busy ($b CPUs), waiting" >&2; sleep 5
   done
 }
 

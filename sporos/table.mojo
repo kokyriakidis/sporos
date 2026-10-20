@@ -9,8 +9,10 @@ by bucket. Entries keep their source order within a bucket unless
 `sort_buckets` asks for them sorted by value.
 """
 
+from std.ffi import external_call
 from std.math import ceildiv
 from std.memory import Layout, alloc, dealloc
+from std.sys.info import CompilationTarget
 
 from sporos.parallel import ParallelTask, parallel_for
 
@@ -35,6 +37,25 @@ trait AnchorSource(Deinitable):
         ...
 
 
+def advise_huge_pages(address: Int, bytes: Int):
+    """Backs an uninitialized buffer with transparent huge pages on Linux
+    (needed where THP is `madvise`-only); a no-op elsewhere. The buffer's
+    whole pages are released first, since the allocator may hand out memory
+    already faulted in as small pages: their contents are lost."""
+    comptime if CompilationTarget.is_linux():
+        comptime MADV_DONTNEED: Int32 = 4
+        comptime MADV_HUGEPAGE: Int32 = 14
+        var start = (address + 4095) & ~4095
+        var end = (address + bytes) & ~4095
+        if end - start >= 1 << 21:
+            _ = external_call["madvise", Int32](start, end - start, MADV_HUGEPAGE)
+            _ = external_call["madvise", Int32](start, end - start, MADV_DONTNEED)
+
+
+comptime ENTRY_PADDING = 8
+"""Readable (garbage) entries past the end, for whole-vector bucket scans."""
+
+
 struct HashTable(Movable, Sized):
     var offsets: List[UInt32]
     var entries: List[UInt64]
@@ -48,7 +69,9 @@ struct HashTable(Movable, Sized):
     def __len__(self) -> Int:
         return len(self.entries)
 
-    def __init__[S: AnchorSource](out self, source: S, threads: Int, sort_buckets: Bool = False):
+    def __init__[S: AnchorSource](out self, source: S, threads: Int, sort_buckets: Bool = False, bucket_load: Int = 1):
+        """Hashes `source`'s anchors into buckets of about `bucket_load`
+        entries. `entries` has `ENTRY_PADDING` readable slots past its end."""
         var chunks = source.chunks()
         var firsts_alloc = alloc(Layout[Int](length=chunks + 1))
         var firsts = firsts_alloc.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
@@ -61,7 +84,7 @@ struct HashTable(Movable, Sized):
         var total = firsts[unsafe_offset=chunks]
 
         var bits = 1
-        while (1 << bits) < max(1, total):
+        while (1 << bits) * bucket_load < max(1, total):
             bits += 1
         self.shift = UInt64(64 - bits)
         var num_buckets = 1 << bits
@@ -102,7 +125,11 @@ struct HashTable(Movable, Sized):
         dealloc(histogram_alloc^)
 
         self.offsets = List[UInt32](unsafe_uninit_length=num_buckets + 1)
-        self.entries = List[UInt64](unsafe_uninit_length=total)
+        self.entries = List[UInt64](capacity=total + ENTRY_PADDING)
+        self.entries.resize(unsafe_uninit_length=total)
+        # Probes hit both arrays at random: huge pages spare them a page walk each.
+        advise_huge_pages(Int(self.offsets.unsafe_ptr()), (num_buckets + 1) * 4)
+        advise_huge_pages(Int(self.entries.unsafe_ptr()), total * 8)
         var sort_task = _PartSortTask(
             part_starts,
             part_hashes,

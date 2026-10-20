@@ -1,0 +1,14 @@
+== run_seeds.sh
+host: XAROS
+cpu: Intel(R) Core(TM) i9-7900X CPU @ 3.30GHz (10 threads)
+mem: 91 GB
+kernel: 7.0.0-38-generic
+date: 2026-10-20T11:10:30-07:00
+uptime:  11:10:30 up 16 days,  2:16,  4 users,  load average: 0.96, 0.64, 0.43
+== run_mems.sh
+host: XAROS
+cpu: Intel(R) Core(TM) i9-7900X CPU @ 3.30GHz (10 threads)
+mem: 91 GB
+kernel: 7.0.0-38-generic
+date: 2026-10-20T11:13:46-07:00
+uptime:  11:13:46 up 16 days,  2:19,  7 users,  load average: 1.73, 1.02, 0.62

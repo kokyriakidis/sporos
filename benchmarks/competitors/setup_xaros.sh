@@ -86,6 +86,9 @@ cp "$HERE/harness/smbench/src/main.rs" "$BENCH/mybench/smbench/src/main.rs"
   "$PIXI" run -q mojo build -D SPOROS_LANES=$lanes -I . -I benchmarks \
     benchmarks/competitors/bench_seeds_fasta.mojo -o build/bench_seeds_fasta_$lanes
 done)
+# Snapshot the binaries so later rebuilds of the checkout don't change a run midway.
+mkdir -p "$BENCH/bin"
+(cd "$REPO/build" && cp sporos bench_seeds_8 bench_seeds_16 bench_seeds_fasta_8 bench_seeds_fasta_16 "$BENCH/bin/")
 
 # --- data ---------------------------------------------------------------------
 # E. coli K-12/O157 and hg38/panTro chr21 come from the sporos dev box (rsync to

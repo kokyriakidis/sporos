@@ -52,20 +52,20 @@ run() {
 
 # Single thread, 100 Mbp random DNA.
 for lanes in 8 16; do
-  run "sporos (lanes=$lanes)" random100M "$REPO/build/bench_seeds_$lanes" 100000000
+  run "sporos (lanes=$lanes)" random100M "$SBIN/bench_seeds_$lanes" 100000000
 done
 run simd-minimizers random100M "$SMB" random 1
 run "minimap2 mm_sketch" random100M "$MMB" random 1
 
 # Single thread, CHM13 chr1.
 for lanes in 8 16; do
-  run "sporos (lanes=$lanes)" chm13_chr1 "$REPO/build/bench_seeds_fasta_$lanes" "$CHR1" 1
+  run "sporos (lanes=$lanes)" chm13_chr1 "$SBIN/bench_seeds_fasta_$lanes" "$CHR1" 1
 done
 run simd-minimizers chm13_chr1 "$SMB" "$CHR1" 1
 run "minimap2 mm_sketch" chm13_chr1 "$MMB" "$CHR1" 1
 
 # 10 threads, CHM13 chr1 (wall time).
-run "sporos (lanes=16)" chm13_chr1 "$REPO/build/bench_seeds_fasta_16" "$CHR1" 10
+run "sporos (lanes=16)" chm13_chr1 "$SBIN/bench_seeds_fasta_16" "$CHR1" 10
 run simd-minimizers chm13_chr1 "$SMB" "$CHR1" 10
 run "minimap2 mm_sketch" chm13_chr1 "$MMB" "$CHR1" 10
 
@@ -73,6 +73,6 @@ run "minimap2 mm_sketch" chm13_chr1 "$MMB" "$CHR1" 10
 printf "pair\tL\ttool\tmode\tthreads\treps\twall_s\tuser_s\tsys_s\tmax_rss_mb\tbusy_cpus\tload1\n" > "$CLI"
 for T in 1 10; do
   measure "$CLI" chm13_chr1 - "sporos minimizers -k 21 -w 11" canonical "$T" -- - \
-    "$REPO/build/sporos" minimizers -k 21 -w 11 -t "$T" "$CHR1"
+    "$SBIN/sporos" minimizers -k 21 -w 11 -t "$T" "$CHR1"
 done
 echo "run_seeds.sh done"

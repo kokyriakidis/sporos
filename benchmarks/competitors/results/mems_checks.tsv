@@ -1,0 +1,67 @@
+pair	L	check	n_a	n_b	only_a	only_b	result
+ecoli	50	sporos=mummer -maxmatch	23008	23008	0	0	PASS
+ecoli	50	sporos -t10=-t1 -maxmatch	23008	23008	0	0	PASS
+ecoli	50	sporos=mummer -mum	21942	21942	0	0	PASS
+ecoli	50	sporos -t10=-t1 -mum	21942	21942	0	0	PASS
+ecoli	50	sporos=mummer -mumreference	22158	22158	0	0	PASS
+ecoli	50	sporos -t10=-t1 -mumreference	22158	22158	0	0	PASS
+ecoli	50	sporos=copmem2 -t1	23008	23008	0	0	PASS
+ecoli	50	sporos=copmem2 -mf -t1	23008	23008	0	0	PASS
+ecoli	50	sporos=copmem2 -t10	23008	23008	0	0	PASS
+ecoli	50	sporos=copmem2 -mf -t10	23008	23008	0	0	PASS
+ecoli	50	mumemto(+,+) vs mummer -mum	21887	21942	1	56	info
+ecoli	100	sporos=mummer -maxmatch	12048	12048	0	0	PASS
+ecoli	100	sporos -t10=-t1 -maxmatch	12048	12048	0	0	PASS
+ecoli	100	sporos=mummer -mum	11497	11497	0	0	PASS
+ecoli	100	sporos -t10=-t1 -mum	11497	11497	0	0	PASS
+ecoli	100	sporos=mummer -mumreference	11609	11609	0	0	PASS
+ecoli	100	sporos -t10=-t1 -mumreference	11609	11609	0	0	PASS
+ecoli	100	sporos=copmem2 -t1	12048	12048	0	0	PASS
+ecoli	100	sporos=copmem2 -mf -t1	12048	12048	0	0	PASS
+ecoli	100	sporos=copmem2 -t10	12048	12048	0	0	PASS
+ecoli	100	sporos=copmem2 -mf -t10	12048	12048	0	0	PASS
+ecoli	100	mumemto(+,+) vs mummer -mum	11475	11497	1	23	info
+chr21	50	sporos=mummer -maxmatch	508649	508649	0	0	PASS
+chr21	50	sporos -t10=-t1 -maxmatch	508649	508649	0	0	PASS
+chr21	50	sporos=mummer -mum	220360	220360	0	0	PASS
+chr21	50	sporos -t10=-t1 -mum	220360	220360	0	0	PASS
+chr21	50	sporos=mummer -mumreference	230872	230872	0	0	PASS
+chr21	50	sporos -t10=-t1 -mumreference	230872	230872	0	0	PASS
+chr21	50	sporos=copmem2 -t1	508649	508649	0	0	PASS
+chr21	50	sporos=copmem2 -mf -t1	508649	508649	0	0	PASS
+chr21	50	sporos=copmem2 -t10	508649	508649	0	0	PASS
+chr21	50	sporos=copmem2 -mf -t10	508649	508649	0	0	PASS
+chr21	50	mumemto(+,+) vs mummer -mum	214881	220360	2	5481	info
+chr21	100	sporos=mummer -maxmatch	113188	113188	0	0	PASS
+chr21	100	sporos -t10=-t1 -maxmatch	113188	113188	0	0	PASS
+chr21	100	sporos=mummer -mum	103127	103127	0	0	PASS
+chr21	100	sporos -t10=-t1 -mum	103127	103127	0	0	PASS
+chr21	100	sporos=mummer -mumreference	103893	103893	0	0	PASS
+chr21	100	sporos -t10=-t1 -mumreference	103893	103893	0	0	PASS
+chr21	100	sporos=copmem2 -t1	113188	113188	0	0	PASS
+chr21	100	sporos=copmem2 -mf -t1	113188	113188	0	0	PASS
+chr21	100	sporos=copmem2 -t10	113188	113188	0	0	PASS
+chr21	100	sporos=copmem2 -mf -t10	113188	113188	0	0	PASS
+chr21	100	mumemto(+,+) vs mummer -mum	101765	103127	2	1364	info
+chr1	50	sporos=mummer -maxmatch	65640548	65640548	0	0	PASS
+chr1	50	sporos -t10=-t1 -maxmatch	65640548	65640548	0	0	PASS
+chr1	50	sporos=mummer -mum	232880	232880	0	0	PASS
+chr1	50	sporos -t10=-t1 -mum	232880	232880	0	0	PASS
+chr1	50	sporos=mummer -mumreference	431409	431409	0	0	PASS
+chr1	50	sporos -t10=-t1 -mumreference	431409	431409	0	0	PASS
+chr1	50	sporos=copmem2 -t1	65640548	65640548	0	0	PASS
+chr1	50	sporos=copmem2 -mf -t1	65640548	65640548	0	0	PASS
+chr1	50	sporos=copmem2 -t10	65640548	65640548	0	0	PASS
+chr1	50	sporos=copmem2 -mf -t10	65640548	65640548	0	0	PASS
+chr1	50	mumemto(+,+) vs mummer -mum	NA	232880	NA	232880	DNF
+chr1	100	sporos=mummer -maxmatch	7469747	7469747	0	0	PASS
+chr1	100	sporos -t10=-t1 -maxmatch	7469747	7469747	0	0	PASS
+chr1	100	sporos=mummer -mum	202839	202839	0	0	PASS
+chr1	100	sporos -t10=-t1 -mum	202839	202839	0	0	PASS
+chr1	100	sporos=mummer -mumreference	334935	334935	0	0	PASS
+chr1	100	sporos -t10=-t1 -mumreference	334935	334935	0	0	PASS
+chr1	100	sporos=copmem2 -t1	7469747	7469747	0	0	PASS
+chr1	100	sporos=copmem2 -mf -t1	7469747	7469747	0	0	PASS
+chr1	100	sporos=copmem2 -t10	7469747	7469747	0	0	PASS
+chr1	100	sporos=copmem2 -mf -t10	7469747	7469747	0	0	PASS
+chr1	100	mumemto(+,+) vs mummer -mum	NA	202839	NA	202839	DNF

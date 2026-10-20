@@ -6,29 +6,31 @@ maximal exact matches (MEMs) and maximal unique matches (MUMs).
 Every kernel is tested against a brute-force oracle, and `sporos mem` reproduces MUMmer's
 `mummer` output exactly (same match sets; `-mum` and `-mumreference` byte-identical).
 
-## Performance (preliminary)
+## Performance
 
-Single thread unless noted. 100 Mbp random DNA for seeds; ns per base, lower is better.
+On xaros (Intel i9-7900X, AVX-512), against each tool's best settings; the full method, every table and
+the correctness checks (60/60 match sets equal to MUMmer and copMEM2) are in
+[`benchmarks/competitors`](benchmarks/competitors/README.md).
 
-| Seeds, k=21 w=11 | sporos (xaros) | simd-minimizers 3.0 (xaros) | sporos (M2) | simd-minimizers (M2) |
-|---|---|---|---|---|
-| minimizers, forward | **1.14** | 1.79 | **1.13** | 1.49 |
-| minimizers, canonical | **1.21** | 2.12 | **1.26** | 1.97 |
-| closed syncmers, forward | **1.12** | 1.99 | **1.17** | 1.58 |
-| closed syncmers, canonical | **1.20–1.32** | 2.55 | **1.29** | 2.05 |
+| Seeds, CHM13 chr1, 1 thread, ns/bp | sporos | simd-minimizers 3.0 | minimap2 `mm_sketch` |
+|---|---|---|---|
+| minimizers k=21 w=11, forward / canonical | **1.18 / 1.11** | 1.81 / 2.17 | — / 17.1 |
+| closed syncmers k=31 s=21, forward / canonical | **1.09 / 1.25** | 2.00 / 2.58 | |
+| minimizers k=31 w=19, forward / canonical | **1.04 / 0.98** | 1.64 / 1.93 | |
 
-minimap2's `mm_sketch` takes 7.8 ns/bp on the M2. xaros is an Intel i9-7900X (AVX-512); the M2 numbers
-were taken on a loaded machine (thread CPU time, best of 7).
+| MEMs, best wall s (1 thread / 10 threads) | sporos | copMEM2 `-mf` | MUMmer4 |
+|---|---|---|---|
+| hg38 chr21 vs chimp chr21, L=50 | **1.08 / 0.47** | 1.96 / 1.95 | 17.4 |
+| hg38 chr1 vs CHM13 chr1, L=100 | **8.95 / 2.72** | 11.4 / 11.1 | 132 |
+| hg38 chr1 vs CHM13 chr1, L=50 | **36.8 / 7.6** | 46.9 / 46.5 | 159 |
 
-| MEMs, hg38 chr21 vs panTro chr21 (M2) | L=50 | L=100 |
-|---|---|---|
-| **sporos, 8 threads** | **0.18 s** | **0.17 s** |
-| sporos, 1 thread | 0.46 s | 0.35 s |
-| copMEM2 `-mf` | 0.85 s | 0.42 s |
-| MUMmer4 `mummer -maxmatch -n` | 15.7 s | 12.1 s |
+Seed-index lookups (`SeedIndex.lookup_batch`, hg38 chr21 index, k=19 w=12, occurrence cap 20, simulated
+reads): 117 Mbp/s per thread and 560 Mbp/s on 8 threads for read minimizers on 150 bp reads, and 37 Mbp/s per
+thread for every read k-mer (GraphAligner's mode). `sporos seeds` on 1 M 150 bp reads takes 1.2 s end to end
+with 10 threads, including index build and 27 M output lines.
 
-Wall time including reading FASTA and writing output. MUMmer's `-mum` and `-mumreference` take
-11.6–12.1 s on the same pair; sporos's take the same time as `-maxmatch`.
+Known gaps: with 10 threads simd-minimizers' chunked harness is 1.1-1.8x faster on seeds, and `-mum` on
+repeat-dense input (chr1, L=50) spends most of its time filtering MEMs to MUMs.
 
 ## Design
 

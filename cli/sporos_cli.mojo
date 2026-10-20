@@ -11,12 +11,13 @@
 """
 
 from std.math import ceildiv
+from std.memory import unsafe_memcpy
 from std.sys import argv, stderr
 from std.time import perf_counter_ns
 
 from sporos.batch import SeedBatch, minimizers_batch, syncmers_batch
 from sporos.fasta import FastaRecords, read_fasta
-from sporos.index import ALL_KMERS, MINIMIZER_SEEDS, SYNCMER_SEEDS, SeedHit, SeedIndex
+from sporos.index import ALL_KMERS, MINIMIZER_SEEDS, SYNCMER_SEEDS, SeedIndex
 from sporos.mems import Mem, MemIndex, MemParams, filter_mums, find_mems
 from sporos.minimizers import minimizer_positions
 from sporos.output import OutputBuffer, put_padded
@@ -27,7 +28,7 @@ from sporos.window import LANES
 
 comptime USAGE = """usage:
   sporos seeds -k K [-w W | --syncmers -s S [--open T[,T...]] | --all-kmers] [--query-kmers]
-               [--max-occ N | --keep F] [-t threads] <reference.fa> <reads.fa>
+               [--max-occ N | --keep F] [-t threads] [-v] <reference.fa> <reads.fa>
   sporos mem [-mum | -mumreference | -maxmatch] [-l L] [-b | -r] [-F] [-n] [-t threads] [-v]
              [-K anchor_k] [-k1 ref_step] [-k2 query_step] <reference.fa> <query.fa>
   sporos minimizers -k K -w W [--forward] [--count] [-t threads] <seqs.fa>
@@ -556,7 +557,7 @@ def run_seeds(command: String, args: List[String]) raises:
 struct _SeedLookupTask[index_origin: ImmOrigin, read_origin: ImmOrigin, name_origin: ImmOrigin, out_origin: MutOrigin](
     ParallelTask
 ):
-    """Looks up one slice of reads and formats their hits as TSV lines."""
+    """Looks up one slice of reads (one batch) and formats their hits as TSV lines."""
 
     var index: ImmPointer[SeedIndex, Self.index_origin]
     var reads: ImmPointer[FastaRecords, Self.read_origin]
@@ -591,36 +592,47 @@ struct _SeedLookupTask[index_origin: ImmOrigin, read_origin: ImmOrigin, name_ori
         var lo = index * per
         var hi = min(len(reads), lo + per)
         ref text = self.texts[unsafe_offset=index]
-        var hits = List[SeedHit]()
-        var digits = List[UInt8](length=32, fill=0)
+        var spans = List[Span[UInt8, origin_of(reads.data)]](capacity=max(0, hi - lo))
         for r in range(lo, hi):
-            hits.clear()
-            try:
-                seed_index.lookup(reads.seq(r), hits, self.all_kmers, self.max_occ)
-            except:
-                continue
+            spans.append(reads.seq(r))
+        var hits = seed_index.lookup_batch(spans, self.all_kmers, self.max_occ)
+        var ref_name_room = 0
+        for name in self.ref_names[]:
+            ref_name_room = max(ref_name_room, name.byte_length())
+        var at = 0
+        for r in range(lo, hi):
             var read_name = reads.names[r].as_bytes()
-            for h in hits:
+            var read_hits = hits.of(r - lo)
+            # Room for every line: two names, three numbers, six separators.
+            var room = at + len(read_hits) * (len(read_name) + ref_name_room + 3 * 10 + 6)
+            if room > text.capacity():
+                text.reserve(max(room, 2 * text.capacity()))
+            text.resize(unsafe_uninit_length=room)
+            var p = text.unsafe_ptr()
+            for h in read_hits:
                 var ref_pos = Int(h.ref_pos)
                 var seq = seed_index.text.sequence_of(ref_pos)
-                text.extend(read_name)
-                text.append(UInt8(ord("\t")))
-                _append_int(text, Int(h.query_pos), digits)
-                text.append(UInt8(ord("\t")))
-                text.extend(self.ref_names[][seq].as_bytes())
-                text.append(UInt8(ord("\t")))
-                _append_int(text, ref_pos - seed_index.text.starts[seq], digits)
-                text.append(UInt8(ord("\t")))
-                text.append(UInt8(ord("-")) if h.reverse else UInt8(ord("+")))
-                text.append(UInt8(ord("\t")))
-                _append_int(text, Int(h.occurrences), digits)
-                text.append(UInt8(ord("\n")))
-
-
-@inline(.always)
-def _append_int(mut text: List[UInt8], value: Int, mut digits: List[UInt8]):
-    var n = put_padded(digits.unsafe_ptr(), value, 0)
-    text.extend(Span(digits)[:n])
+                var ref_name = self.ref_names[][seq].as_bytes()
+                unsafe_memcpy(dest=p.unsafe_offset(at), src=read_name.unsafe_ptr(), count=len(read_name))
+                at += len(read_name)
+                p[unsafe_offset=at] = UInt8(ord("\t"))
+                at += 1
+                at += put_padded(p.unsafe_offset(at), Int(h.query_pos), 0)
+                p[unsafe_offset=at] = UInt8(ord("\t"))
+                at += 1
+                unsafe_memcpy(dest=p.unsafe_offset(at), src=ref_name.unsafe_ptr(), count=len(ref_name))
+                at += len(ref_name)
+                p[unsafe_offset=at] = UInt8(ord("\t"))
+                at += 1
+                at += put_padded(p.unsafe_offset(at), ref_pos - seed_index.text.starts[seq], 0)
+                p[unsafe_offset=at] = UInt8(ord("\t"))
+                p[unsafe_offset=at + 1] = UInt8(ord("-")) if h.reverse else UInt8(ord("+"))
+                p[unsafe_offset=at + 2] = UInt8(ord("\t"))
+                at += 3
+                at += put_padded(p.unsafe_offset(at), Int(h.occurrences), 0)
+                p[unsafe_offset=at] = UInt8(ord("\n"))
+                at += 1
+        text.resize(unsafe_uninit_length=at)
 
 
 def run_seed_index(args: List[String]) raises:
@@ -633,6 +645,7 @@ def run_seed_index(args: List[String]) raises:
     var max_occ = 0
     var keep = 0.0
     var threads = default_threads()
+    var verbose = False
     var paths = List[String]()
     var i = 0
     while i < len(args):
@@ -664,6 +677,8 @@ def run_seed_index(args: List[String]) raises:
         elif a == "-t" or a == "-threads":
             i += 1
             threads = Int(args[i])
+        elif a == "-v":
+            verbose = True
         elif a.startswith("-"):
             raise Error(t"unknown option {a}\n{USAGE}")
         else:
@@ -671,8 +686,11 @@ def run_seed_index(args: List[String]) raises:
         i += 1
     if len(paths) != 2:
         raise Error(USAGE)
+    var start = perf_counter_ns()
     var reference = read_fasta(paths[0], threads)
     var reads = read_fasta(paths[1], threads)
+    _log(verbose, String(t"read inputs: {_seconds(start)} s"))
+    start = perf_counter_ns()
     var seqs = List[Span[UInt8, origin_of(reference.data)]]()
     for r in range(len(reference)):
         seqs.append(reference.seq(r))
@@ -685,6 +703,8 @@ def run_seed_index(args: List[String]) raises:
     var index = SeedIndex(seqs, k, w, scheme, threads, open_offsets=open_offsets)
     if keep > 0.0:
         max_occ = index.occurrence_cutoff(keep)
+    _log(verbose, String(t"index: {_seconds(start)} s ({len(index.table)} seeds, max occurrences {max_occ})"))
+    start = perf_counter_ns()
     var slices = max(1, min(threads * 8, len(reads)))
     var texts = List[List[UInt8]](length=slices, fill=List[UInt8]())
     var task = _SeedLookupTask(
@@ -697,10 +717,13 @@ def run_seed_index(args: List[String]) raises:
         max_occ,
     )
     parallel_for(task, slices, threads)
+    _log(verbose, String(t"lookups: {_seconds(start)} s"))
+    start = perf_counter_ns()
     var out = OutputBuffer()
     for text in texts:
         out.write_bytes(Span(text))
     out.flush()
+    _log(verbose, String(t"output: {_seconds(start)} s"))
 
 
 def main() raises:

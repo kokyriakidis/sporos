@@ -14,13 +14,18 @@ contiguous. When bucket and fingerprint bits cannot tell all k-mers apart
 (`2k > bucket bits + 31`), candidates are checked against the text.
 """
 
-from std.bit import bit_reverse
-from std.math import ceildiv
+from std.bit import bit_reverse, count_trailing_zeros, pop_count
+from std.math import ceildiv, iota
+from std.memory import pack_bits
+
+from std.os import abort
 
 from sporos.alphabet import CodeBuffer, N_CODE, encode_into
+from sporos.batch import SeedBatch, minimizers_batch, syncmers_batch
 from sporos.mems import mix64
-from sporos.minimizers import minimizer_positions_from_codes
-from sporos.syncmers import syncmer_positions_from_codes
+from sporos.parallel import ParallelTask, parallel_for
+from sporos.minimizers import minimizer_positions, minimizer_positions_from_codes
+from sporos.syncmers import syncmer_positions, syncmer_positions_from_codes
 from sporos.table import AnchorSource, HashTable
 from sporos.text import SeqText
 from sporos.window import PADDING
@@ -30,8 +35,16 @@ comptime _AHEAD = PrefetchOptions().for_read().high_locality()
 comptime _CHUNK = 1 << 16
 """Selected positions per index-build chunk."""
 comptime _LAG = 16
+comptime _SCAN = 8
+"""Entries one vector compare covers (`table.ENTRY_PADDING`)."""
+comptime _BUCKET_LOAD = 4
+"""Entries per bucket: a quarter of the offsets keeps more of them cached,
+and a vector compare scans a bucket (measured best on hg38 chr21)."""
 comptime _RING = 64
 comptime _PAIRS: UInt64 = 0x5555555555555555
+comptime _TASK_BASES = 1 << 20
+comptime _TASK_READS = 1 << 12
+"""A lookup task's reads: up to this many bases or reads."""
 
 
 @fieldwise_init
@@ -222,7 +235,7 @@ struct SeedIndex(Movable):
             len(positions),
             k,
         )
-        self.table = HashTable(source, threads, sort_buckets=True)
+        self.table = HashTable(source, threads, sort_buckets=True, bucket_load=_BUCKET_LOAD)
         var bucket_bits = 64 - Int(self.table.shift)
         self.verify = 2 * k > bucket_bits + 31
 
@@ -261,11 +274,13 @@ struct SeedIndex(Movable):
     def query_positions(self, query: Span[UInt8, _], all_kmers: Bool, threads: Int = 1) raises -> List[UInt32]:
         """The query k-mers to look up: its seeds under the index's scheme,
         or every k-mer."""
+        if self.scheme == MINIMIZER_SEEDS and not all_kmers:
+            return minimizer_positions(query, self.k, self.w, True, threads)
+        if self.scheme == SYNCMER_SEEDS and not all_kmers:
+            return syncmer_positions(query, self.k, self.w, True, None, threads, open_offsets=self.open_offsets)
         var seqs = List[Span[UInt8, query.origin]]()
         seqs.append(query)
-        return select_positions(
-            seqs, self.k, self.w, ALL_KMERS if all_kmers else self.scheme, threads, open_offsets=self.open_offsets
-        )
+        return select_positions(seqs, self.k, self.w, ALL_KMERS, threads)
 
     def lookup(
         self,
@@ -276,102 +291,244 @@ struct SeedIndex(Movable):
     ) raises:
         """Appends the hits of `query`'s seeds (or of all its k-mers), skipping
         k-mers with more than `max_occurrences` reference occurrences
-        (0 = no limit). Hits come in query order."""
-        var seqs = List[Span[UInt8, query.origin]]()
-        seqs.append(query)
-        var qtext = SeqText(seqs)
-        var positions = self.query_positions(query, all_kmers)
-        var mask = kmer_mask(self.k)
-        var off = self.table.offsets.unsafe_ptr()
-        var qpos = Array[UInt32, _RING](fill=0)
-        var hashes = Array[UInt64, _RING](fill=0)
-        var strands = Array[Bool, _RING](fill=False)
-        var lows = Array[UInt32, _RING](fill=0)
-        var highs = Array[UInt32, _RING](fill=0)
-        var n = 0
-        for p in positions:
-            var form = canonical(qtext.window(Int(p)) & mask, self.k)
-            var h = mix64(form[0])
-            var slot = n & (_RING - 1)
-            qpos[slot] = p
-            hashes[slot] = h
-            strands[slot] = form[1]
-            prefetch[_AHEAD](off.unsafe_offset(self.table.bucket(h)))
-            if n >= _LAG:
-                self._bounds(n - _LAG, hashes, lows, highs)
-            if n >= 2 * _LAG:
-                self._report(
-                    (n - 2 * _LAG) & (_RING - 1), qpos, hashes, strands, lows, highs, qtext, max_occurrences, hits
-                )
-            n += 1
-        for m in range(max(0, n - _LAG), n):
-            self._bounds(m, hashes, lows, highs)
-        for m in range(max(0, n - 2 * _LAG), n):
-            self._report(m & (_RING - 1), qpos, hashes, strands, lows, highs, qtext, max_occurrences, hits)
+        (0 = no limit). Hits come in query order. For many reads,
+        `lookup_batch` is much faster."""
+        var reads = List[Span[UInt8, query.origin]]()
+        reads.append(query)
+        var count = 0
+        self._lookup_reads(reads.unsafe_ptr(), 1, all_kmers, max_occurrences, hits, Pointer(to=count))
 
-    @inline(.always)
-    def _bounds(
-        self,
-        n: Int,
-        hashes: Array[UInt64, _RING],
-        mut lows: Array[UInt32, _RING],
-        mut highs: Array[UInt32, _RING],
-    ):
-        var slot = n & (_RING - 1)
-        var b = self.table.bucket(hashes[slot])
-        var off = self.table.offsets.unsafe_ptr()
-        lows[slot] = off[unsafe_offset=b]
-        highs[slot] = off[unsafe_offset=b + 1]
-        prefetch[_AHEAD](self.table.entries.unsafe_ptr().unsafe_offset(Int(lows[slot])))
+    def lookup_batch[
+        mut: Bool, //, origin: Origin[mut=mut]
+    ](
+        self, reads: List[Span[UInt8, origin]], all_kmers: Bool = False, max_occurrences: Int = 0, threads: Int = 1
+    ) -> SeedHits:
+        """The hits of every read, as `lookup` gives them. Reads stream through
+        one probe pipeline, so its prefetches cover read boundaries."""
+        var bounds: List[Int] = [0]
+        var bases = 0
+        for i in range(len(reads)):
+            bases += len(reads[i])
+            if bases >= _TASK_BASES or i + 1 - bounds[len(bounds) - 1] >= _TASK_READS:
+                bounds.append(i + 1)
+                bases = 0
+        if bounds[len(bounds) - 1] != len(reads):
+            bounds.append(len(reads))
+        var tasks = len(bounds) - 1
+        var results = List[List[SeedHit]](length=tasks, fill=List[SeedHit]())
+        var counts = List[Int](length=len(reads), fill=0)
+        if tasks > 0:
+            var task = _LookupTask[origin](
+                Pointer(to=self).unsafe_origin_cast[ImmUntrackedOrigin](),
+                reads.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin](),
+                bounds^,
+                all_kmers,
+                max_occurrences,
+                results.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+                counts.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+            )
+            parallel_for(task, tasks, threads)
+        var offsets = List[Int](capacity=len(reads) + 1)
+        offsets.append(0)
+        for c in counts:
+            offsets.append(offsets[len(offsets) - 1] + c)
+        var hits = List[SeedHit](capacity=offsets[len(offsets) - 1])
+        for r in results:
+            hits.extend(Span(r))
+        return SeedHits(hits^, offsets^)
 
-    @inline(.always)
-    def _report(
+    def _lookup_reads[
+        mut: Bool, //, origin: Origin[mut=mut]
+    ](
         self,
-        slot: Int,
-        qpos: Array[UInt32, _RING],
-        hashes: Array[UInt64, _RING],
-        strands: Array[Bool, _RING],
-        lows: Array[UInt32, _RING],
-        highs: Array[UInt32, _RING],
-        qtext: SeqText,
+        reads: ImmPointer[Span[UInt8, origin], _],
+        count: Int,
+        all_kmers: Bool,
         max_occurrences: Int,
         mut hits: List[SeedHit],
-    ):
-        var ent = self.table.entries.unsafe_ptr()
-        var fp = hashes[slot] & 0x7FFFFFFF
-        # Entries are sorted, so this k-mer's occurrences are one run.
-        var first = Int(lows[slot])
-        var end = Int(highs[slot])
-        while first < end and (ent[unsafe_offset=first] >> 33) < fp:
-            first += 1
-        var last = first
-        while last < end and (ent[unsafe_offset=last] >> 33) == fp:
-            last += 1
-        if first == last:
-            return
-        var query_kmer = UInt64(0)
+        counts: MutPointer[Int, _],
+    ) raises:
+        """Appends the hits of `count` reads, counting each read's hits."""
+        var spans = List[Span[UInt8, origin]](capacity=count)
+        for r in range(count):
+            spans.append(reads[unsafe_offset=r])
+        var every = all_kmers or self.scheme == ALL_KMERS
+        var seeds = SeedBatch(List[UInt32](), [0])
+        if not every:
+            if self.scheme == MINIMIZER_SEEDS:
+                seeds = minimizers_batch(spans, self.k, self.w, True)
+            else:
+                seeds = syncmers_batch(spans, self.k, self.w, True, None, open_offsets=self.open_offsets)
+        var selected = seeds.positions.unsafe_ptr()
+        var text = SeqText(spans)
+        var ring = Array[_Probe, _RING](fill=_Probe(0, 0, 0, 0, False, 0, 0))
+        var off = self.table.offsets.unsafe_ptr()
         var mask = kmer_mask(self.k)
-        if self.verify:
-            query_kmer = canonical(qtext.window(Int(qpos[slot])) & mask, self.k)[0]
-            var kept = first
-            for e in range(first, last):
-                var pos = Int(ent[unsafe_offset=e] & 0xFFFFFFFF)
-                if canonical(self.text.window(pos) & mask, self.k)[0] == query_kmer:
-                    kept += 1
-            if kept == first:
+        var n = 0
+        for r in range(count):
+            counts[unsafe_offset=r] = 0
+            var base = text.starts[r]
+            var probes = len(spans[r]) - self.k + 1 if every else seeds.offsets[r + 1] - seeds.offsets[r]
+            for i in range(probes):
+                var start: Int
+                if every:
+                    start = i
+                    if text.mask(base + start) & mask != 0:
+                        continue  # covers a non-ACGT base
+                else:
+                    start = Int(selected[unsafe_offset=seeds.offsets[r] + i])
+                var form = canonical(text.window(base + start) & mask, self.k)
+                var h = mix64(form[0])
+                ring[n & (_RING - 1)] = _Probe(r, UInt32(start), form[0], h, form[1], 0, 0)
+                prefetch[_AHEAD](off.unsafe_offset(self.table.bucket(h)))
+                if n >= _LAG:
+                    self._bounds(ring[(n - _LAG) & (_RING - 1)])
+                if n >= 2 * _LAG:
+                    self._report(ring[(n - 2 * _LAG) & (_RING - 1)], max_occurrences, hits, counts)
+                n += 1
+        for m in range(max(0, n - _LAG), n):
+            self._bounds(ring[m & (_RING - 1)])
+        for m in range(max(0, n - 2 * _LAG), n):
+            self._report(ring[m & (_RING - 1)], max_occurrences, hits, counts)
+
+    @inline(.always)
+    def _bounds(self, mut probe: _Probe):
+        var b = self.table.bucket(probe.hash)
+        var off = self.table.offsets.unsafe_ptr()
+        probe.low = off[unsafe_offset=b]
+        probe.high = off[unsafe_offset=b + 1]
+        var first = self.table.entries.unsafe_ptr().unsafe_offset(Int(probe.low))
+        prefetch[_AHEAD](first)
+        # The bucket scan's vector load usually spans two lines.
+        prefetch[_AHEAD](first.unsafe_offset(_SCAN - 1))
+
+    @inline(.always)
+    def _report(self, probe: _Probe, max_occurrences: Int, mut hits: List[SeedHit], counts: MutPointer[Int, _]):
+        var ent = self.table.entries.unsafe_ptr()
+        var fp = probe.hash & 0x7FFFFFFF
+        # Entries are sorted, so this k-mer's occurrences are one run.
+        var first = Int(probe.low)
+        var end = Int(probe.high)
+        var last: Int
+        if end - first <= _SCAN:
+            # Small bucket: one vector compare finds the run.
+            var lanes = ent.unsafe_offset(first).unsafe_load[width=_SCAN]() >> 33
+            var hit = lanes.eq(fp) & iota[DType.uint64, _SCAN]().lt(UInt64(end - first))
+            var bits = pack_bits[DType.uint8](hit)
+            if bits == 0:
                 return
+            first += Int(count_trailing_zeros(bits))
+            last = first + Int(pop_count(bits))
+        else:
+            while first < end and (ent[unsafe_offset=first] >> 33) < fp:
+                first += 1
+            if (
+                not self.verify
+                and max_occurrences > 0
+                and first + max_occurrences < end
+                and (ent[unsafe_offset=first + max_occurrences] >> 33) == fp
+            ):
+                return  # more than `max_occurrences`, without counting them all
+            last = first
+            while last < end and (ent[unsafe_offset=last] >> 33) == fp:
+                last += 1
+            if first == last:
+                return
+        var mask = kmer_mask(self.k)
         var occurrences = last - first
         if self.verify:
             occurrences = 0
             for e in range(first, last):
                 var pos = Int(ent[unsafe_offset=e] & 0xFFFFFFFF)
-                occurrences += Int(canonical(self.text.window(pos) & mask, self.k)[0] == query_kmer)
+                occurrences += Int(canonical(self.text.window(pos) & mask, self.k)[0] == probe.kmer)
+            if occurrences == 0:
+                return
         if max_occurrences > 0 and occurrences > max_occurrences:
             return
+        var before = len(hits)
         for e in range(first, last):
             var entry = ent[unsafe_offset=e]
             var pos = Int(entry & 0xFFFFFFFF)
-            if self.verify and canonical(self.text.window(pos) & mask, self.k)[0] != query_kmer:
+            if self.verify and canonical(self.text.window(pos) & mask, self.k)[0] != probe.kmer:
                 continue
             var ref_reverse = Bool((entry >> 32) & 1)
-            hits.append(SeedHit(qpos[slot], UInt32(pos), UInt32(occurrences), ref_reverse != strands[slot]))
+            hits.append(SeedHit(probe.qpos, UInt32(pos), UInt32(occurrences), ref_reverse != probe.reverse))
+        counts[unsafe_offset=probe.read] += len(hits) - before
+
+
+@fieldwise_init
+struct _Probe(ImplicitlyCopyable, TrivialRegisterPassable):
+    """A query k-mer in the probe pipeline."""
+
+    var read: Int
+    var qpos: UInt32
+    var kmer: UInt64
+    """The canonical query k-mer."""
+    var hash: UInt64
+    var reverse: Bool
+    var low: UInt32
+    var high: UInt32
+
+
+struct SeedHits(Movable, Sized):
+    """The hits of a batch of reads: read `i`'s are
+    `hits[offsets[i] : offsets[i + 1]]`, in query order."""
+
+    var hits: List[SeedHit]
+    var offsets: List[Int]
+
+    def __init__(out self, var hits: List[SeedHit], var offsets: List[Int]):
+        self.hits = hits^
+        self.offsets = offsets^
+
+    def __len__(self) -> Int:
+        return len(self.offsets) - 1
+
+    def of(ref self, i: Int) -> Span[SeedHit, origin_of(self.hits)]:
+        return Span(self.hits)[self.offsets[i] : self.offsets[i + 1]]
+
+
+struct _LookupTask[mut: Bool, //, origin: Origin[mut=mut]](ParallelTask):
+    """Looks up one run of reads (`bounds[t] .. bounds[t + 1]`)."""
+
+    var index: ImmPointer[SeedIndex, ImmUntrackedOrigin]
+    var reads: ImmPointer[Span[UInt8, Self.origin], ImmUntrackedOrigin]
+    var bounds: List[Int]
+    var all_kmers: Bool
+    var max_occurrences: Int
+    var results: MutPointer[List[SeedHit], MutUntrackedOrigin]
+    var counts: MutPointer[Int, MutUntrackedOrigin]
+
+    def __init__(
+        out self,
+        index: ImmPointer[SeedIndex, ImmUntrackedOrigin],
+        reads: ImmPointer[Span[UInt8, Self.origin], ImmUntrackedOrigin],
+        var bounds: List[Int],
+        all_kmers: Bool,
+        max_occurrences: Int,
+        results: MutPointer[List[SeedHit], MutUntrackedOrigin],
+        counts: MutPointer[Int, MutUntrackedOrigin],
+    ):
+        self.index = index
+        self.reads = reads
+        self.bounds = bounds^
+        self.all_kmers = all_kmers
+        self.max_occurrences = max_occurrences
+        self.results = results
+        self.counts = counts
+
+    def run(self, t: Int):
+        var lo = self.bounds[t]
+        var hi = self.bounds[t + 1]
+        ref out = self.results[unsafe_offset=t]
+        try:
+            self.index[]._lookup_reads(
+                self.reads.unsafe_offset(lo),
+                hi - lo,
+                self.all_kmers,
+                self.max_occurrences,
+                out,
+                self.counts.unsafe_offset(lo),
+            )
+        except e:
+            abort(String(t"seed lookup failed: {e}"))
