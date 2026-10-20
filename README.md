@@ -32,7 +32,9 @@ with 10 threads, including index build and 27 M output lines.
 MUMs on repeat-dense input (hg38 chr1 vs CHM13 chr1, L=50, 65.6 M MEMs filtered to 233 K): `-mum` takes
 37.1 s on one thread and 7.6 s on ten, against MUMmer's 87.5 s; `-mumreference` 29.1 s and 6.1 s.
 
-Known gap: with 10 threads simd-minimizers' chunked harness is 1.1-1.8x faster on seeds.
+Known gap: with 10 threads on CHM13 chr1, sporos returns merged minimizers at 0.26 ns/bp (k=21) and
+0.18 ns/bp (k=31), while simd-minimizers' chunked harness, which only counts each thread's positions, takes
+0.19-0.20 and 0.16-0.19.
 
 ## Design
 

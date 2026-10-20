@@ -24,7 +24,7 @@ and each survivor is appended to its lane, then lanes are concatenated.
 
 from std.bit import count_trailing_zeros, rotate_bits_left, rotate_bits_right
 from std.math import ceildiv
-from std.memory import Layout, alloc, bitcast, dealloc, pack_bits
+from std.memory import Layout, alloc, bitcast, dealloc, pack_bits, unsafe_memcpy
 from std.math import iota
 from std.sys.defines import get_defined_int
 from std.sys.info import CompilationTarget
@@ -752,13 +752,56 @@ def _scan[
         readable,
     )
     parallel_for(task, num_segments, threads)
-    var total = 0
-    for r in results:
-        total += len(r)
-    out.reserve(total)
-    for r in results:
-        append_dedup(out, Span(r))
+    # Each segment's place in the output, dropping a first position equal to
+    # the last one before it (a minimizer spanning the boundary); then the
+    # copies, and the page faults of the output, run in parallel.
+    var firsts = List[Int](length=num_segments, fill=0)
+    var offsets = List[Int](length=num_segments + 1, fill=0)
+    var last = -1
+    for i in range(num_segments):
+        ref r = results[i]
+        if len(r) > 0 and Int(r[0]) == last:
+            firsts[i] = 1
+        offsets[i + 1] = offsets[i] + len(r) - firsts[i]
+        if len(r) > 0:
+            last = Int(r[len(r) - 1])
+    out.resize(unsafe_uninit_length=offsets[num_segments])
+    var copy = _CopyTask(
+        results.unsafe_ptr().as_imm(), firsts.unsafe_ptr().as_imm(), offsets.unsafe_ptr().as_imm(), out.unsafe_ptr()
+    )
+    parallel_for(copy, num_segments, threads)
     return out^
+
+
+struct _CopyTask[results_origin: ImmOrigin, firsts_origin: ImmOrigin, offsets_origin: ImmOrigin, out_origin: MutOrigin](
+    ParallelTask
+):
+    """Copies segment results into their places in the merged output."""
+
+    var results: ImmPointer[List[UInt32], Self.results_origin]
+    var firsts: ImmPointer[Int, Self.firsts_origin]
+    var offsets: ImmPointer[Int, Self.offsets_origin]
+    var out: MutPointer[UInt32, Self.out_origin]
+
+    def __init__(
+        out self,
+        results: ImmPointer[List[UInt32], Self.results_origin],
+        firsts: ImmPointer[Int, Self.firsts_origin],
+        offsets: ImmPointer[Int, Self.offsets_origin],
+        out_ptr: MutPointer[UInt32, Self.out_origin],
+    ):
+        self.results = results
+        self.firsts = firsts
+        self.offsets = offsets
+        self.out = out_ptr
+
+    def run(self, index: Int):
+        ref r = self.results[unsafe_offset=index]
+        var first = self.firsts[unsafe_offset=index]
+        var at = self.offsets[unsafe_offset=index]
+        var count = self.offsets[unsafe_offset=index + 1] - at
+        if count > 0:
+            unsafe_memcpy(dest=self.out.unsafe_offset(at), src=r.unsafe_ptr().unsafe_offset(first), count=count)
 
 
 def scan_reads(

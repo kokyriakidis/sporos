@@ -9,11 +9,10 @@ by bucket. Entries keep their source order within a bucket unless
 `sort_buckets` asks for them sorted by value.
 """
 
-from std.ffi import external_call
 from std.math import ceildiv
 from std.memory import Layout, alloc, dealloc
-from std.sys.info import CompilationTarget
 
+from sporos.pages import advise_huge_pages
 from sporos.parallel import ParallelTask, parallel_for
 
 
@@ -35,21 +34,6 @@ trait AnchorSource(Deinitable):
     ):
         """Writes the chunk's `count(chunk)` anchors."""
         ...
-
-
-def advise_huge_pages(address: Int, bytes: Int):
-    """Backs an uninitialized buffer with transparent huge pages on Linux
-    (needed where THP is `madvise`-only); a no-op elsewhere. The buffer's
-    whole pages are released first, since the allocator may hand out memory
-    already faulted in as small pages: their contents are lost."""
-    comptime if CompilationTarget.is_linux():
-        comptime MADV_DONTNEED: Int32 = 4
-        comptime MADV_HUGEPAGE: Int32 = 14
-        var start = (address + 4095) & ~4095
-        var end = (address + bytes) & ~4095
-        if end - start >= 1 << 21:
-            _ = external_call["madvise", Int32](start, end - start, MADV_HUGEPAGE)
-            _ = external_call["madvise", Int32](start, end - start, MADV_DONTNEED)
 
 
 comptime ENTRY_PADDING = 8
