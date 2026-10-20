@@ -560,9 +560,9 @@ struct _FindTask(ParallelTask):
     def run(self, index: Int):
         var begin = index * self.chunk
         var end = min(len(self.query[]), begin + self.chunk)
-        self.index[].find(
-            self.reference[], self.query[], begin, end, self.results[unsafe_offset=index]
-        )
+        ref results = self.results[unsafe_offset=index]
+        self.index[].find(self.reference[], self.query[], begin, end, results)
+        sort(Span(results))
 
 
 def find_mems(
@@ -585,7 +585,15 @@ def find_mems(
     var out = List[Mem]()
     for r in results:
         out.extend(Span(r))
-    sort(Span(out))
+    # Chunks are sorted and cover consecutive query ranges; only MEMs that
+    # start left of their anchor's chunk can be out of place, by little.
+    for i in range(1, len(out)):
+        var m = out[i]
+        var j = i
+        while j > 0 and m < out[j - 1]:
+            out[j] = out[j - 1]
+            j -= 1
+        out[j] = m
     return out^
 
 

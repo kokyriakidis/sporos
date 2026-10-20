@@ -54,11 +54,7 @@ struct SeqText(Movable, Sized):
         for s in seqs:
             self.starts.append(off)
             self.lengths.append(len(s))
-            encode_into(s, p.unsafe_offset(off))
-            if is_query:
-                for j in range(off, off + len(s)):
-                    if p[unsafe_offset=j] == N_CODE:
-                        p.unsafe_offset(j).unsafe_write(n_code)
+            encode_into(s, p.unsafe_offset(off), n_code)
             off += len(s)
             p.unsafe_offset(off).unsafe_write(sep)
             off += 1

@@ -10,6 +10,7 @@
 (MUMmer's `-n`, accepted and implied).
 """
 
+from std.math import ceildiv
 from std.sys import argv, stderr
 from std.time import perf_counter_ns
 
@@ -17,8 +18,8 @@ from sporos.alphabet import CodeBuffer
 from sporos.fasta import FastaRecords, read_fasta
 from sporos.mems import Mem, MemIndex, MemParams, filter_mums, find_mems
 from sporos.minimizers import minimizer_positions_from_codes
-from sporos.output import OutputBuffer
-from sporos.parallel import default_threads
+from sporos.output import OutputBuffer, put_padded
+from sporos.parallel import ParallelTask, default_threads, parallel_for
 from sporos.syncmers import syncmer_positions_from_codes
 from sporos.text import SeqText
 from sporos.window import PADDING
@@ -155,23 +156,92 @@ def _report(
     if reverse:
         out.write(" Reverse")
     out.write_byte(ord("\n"))
-    for m in hits:
-        var ref_pos = Int(m.ref_pos)
-        if four_column:
-            var seq = rtext.sequence_of(ref_pos)
-            ref_pos -= rtext.starts[seq]
-            out.write("  ")
-            out.write(reference.names[seq])
-            for _ in range(name_width + 1 - reference.names[seq].byte_length()):
-                out.write_byte(ord(" "))
-            out.write_byte(ord(" "))
-        out.write_int(ref_pos + 1, 8)
-        out.write("  ")
-        out.write_int(Int(m.query_pos) + 1, 8)
-        out.write("  ")
-        out.write_int(Int(m.length), 8)
-        out.write_byte(ord("\n"))
+    # Format slices of the matches in parallel, then write them in order.
+    var slices = max(1, min(threads * 4, len(hits) // 50_000))
+    var texts = List[List[UInt8]](length=slices, fill=List[UInt8]())
+    var task = _FormatTask(
+        Pointer(to=hits).unsafe_origin_cast[MutUntrackedOrigin](),
+        Pointer(to=rtext).unsafe_origin_cast[ImmUntrackedOrigin](),
+        Pointer(to=reference).unsafe_origin_cast[ImmUntrackedOrigin](),
+        texts.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+        slices,
+        four_column,
+        name_width,
+    )
+    parallel_for(task, slices, threads)
+    for text in texts:
+        out.write_bytes(Span(text))
     return len(hits)
+
+
+struct _FormatTask(ParallelTask):
+    """Formats one slice of matches as MUMmer lines."""
+
+    var hits: ImmPointer[List[Mem], ImmUntrackedOrigin]
+    var rtext: ImmPointer[SeqText, ImmUntrackedOrigin]
+    var reference: ImmPointer[FastaRecords, ImmUntrackedOrigin]
+    var texts: MutPointer[List[UInt8], MutUntrackedOrigin]
+    var slices: Int
+    var four_column: Bool
+    var name_width: Int
+
+    def __init__(
+        out self,
+        hits: ImmPointer[List[Mem], ImmUntrackedOrigin],
+        rtext: ImmPointer[SeqText, ImmUntrackedOrigin],
+        reference: ImmPointer[FastaRecords, ImmUntrackedOrigin],
+        texts: MutPointer[List[UInt8], MutUntrackedOrigin],
+        slices: Int,
+        four_column: Bool,
+        name_width: Int,
+    ):
+        self.hits = hits
+        self.rtext = rtext
+        self.reference = reference
+        self.texts = texts
+        self.slices = slices
+        self.four_column = four_column
+        self.name_width = name_width
+
+    def run(self, index: Int):
+        ref hits = self.hits[]
+        var per = ceildiv(len(hits), self.slices)
+        var lo = index * per
+        var hi = min(len(hits), lo + per)
+        ref text = self.texts[unsafe_offset=index]
+        var line_max = 3 * 22 + 8 + (self.name_width + 4 if self.four_column else 0)
+        text.resize(unsafe_uninit_length=max(0, hi - lo) * line_max)
+        var p = text.unsafe_ptr()
+        var at = 0
+        for i in range(lo, hi):
+            var m = hits[i]
+            var ref_pos = Int(m.ref_pos)
+            if self.four_column:
+                var seq = self.rtext[].sequence_of(ref_pos)
+                ref_pos -= self.rtext[].starts[seq]
+                ref name = self.reference[].names[seq]
+                p[unsafe_offset=at] = UInt8(ord(" "))
+                p[unsafe_offset=at + 1] = UInt8(ord(" "))
+                at += 2
+                var bytes = name.as_bytes()
+                for b in range(len(bytes)):
+                    p[unsafe_offset=at + b] = bytes[b]
+                at += len(bytes)
+                for _ in range(self.name_width + 2 - len(bytes)):
+                    p[unsafe_offset=at] = UInt8(ord(" "))
+                    at += 1
+            at += put_padded(p.unsafe_offset(at), ref_pos + 1, 8)
+            p[unsafe_offset=at] = UInt8(ord(" "))
+            p[unsafe_offset=at + 1] = UInt8(ord(" "))
+            at += 2
+            at += put_padded(p.unsafe_offset(at), Int(m.query_pos) + 1, 8)
+            p[unsafe_offset=at] = UInt8(ord(" "))
+            p[unsafe_offset=at + 1] = UInt8(ord(" "))
+            at += 2
+            at += put_padded(p.unsafe_offset(at), Int(m.length), 8)
+            p[unsafe_offset=at] = UInt8(ord("\n"))
+            at += 1
+        text.resize(unsafe_uninit_length=at)
 
 
 def run_seeds(command: String, args: List[String]) raises:

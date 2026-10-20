@@ -77,3 +77,22 @@ struct InlineDigits(TrivialRegisterPassable):
         if negative:
             self.bytes[self.count] = UInt8(ord("-"))
             self.count += 1
+
+
+@inline(.always)
+def put_padded(dst: MutPointer[UInt8, _], value: Int, width: Int) -> Int:
+    """Writes non-negative `value` right-aligned in `width` columns (wider
+    when it needs more digits); returns the bytes written."""
+    var digits = 1
+    var v = value
+    while v >= 10:
+        v //= 10
+        digits += 1
+    var n = max(width, digits)
+    for i in range(n - digits):
+        dst[unsafe_offset=i] = UInt8(ord(" "))
+    v = value
+    for i in reversed(range(n - digits, n)):
+        dst[unsafe_offset=i] = UInt8(ord("0") + v % 10)
+        v //= 10
+    return n

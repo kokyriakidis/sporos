@@ -1,0 +1,11 @@
+[package]
+name = "smbench"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+simd-minimizers = { path = "../../competitors/simd-minimizers" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

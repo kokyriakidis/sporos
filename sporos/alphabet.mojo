@@ -23,8 +23,11 @@ def encode_base(c: UInt8) -> UInt8:
     return ((c >> 1) ^ (c >> 2)) & 3 if valid else N_CODE
 
 
-def encode_into(seq: Span[UInt8, _], dst: MutPointer[UInt8, _]):
-    """Encodes `seq` into `dst`, which must hold `len(seq)` bytes."""
+def encode_into(
+    seq: Span[UInt8, _], dst: MutPointer[UInt8, _], n_code: UInt8 = N_CODE
+):
+    """Encodes `seq` into `dst`, which must hold `len(seq)` bytes; non-ACGT
+    bytes become `n_code`."""
     comptime V = SIMD[DType.uint8, _ENCODE_WIDTH]
     var src = seq.unsafe_ptr()
     var n = len(seq)
@@ -40,10 +43,11 @@ def encode_into(seq: Span[UInt8, _], dst: MutPointer[UInt8, _]):
             | lower.eq(0x75)
         )
         var code = ((c >> 1) ^ (c >> 2)) & 3
-        dst.unsafe_store(i, valid.select(code, V(N_CODE)))
+        dst.unsafe_store(i, valid.select(code, V(n_code)))
         i += _ENCODE_WIDTH
     while i < n:
-        dst.unsafe_offset(i).unsafe_write(encode_base(src[unsafe_offset=i]))
+        var c = encode_base(src[unsafe_offset=i])
+        dst.unsafe_offset(i).unsafe_write(n_code if c == N_CODE else c)
         i += 1
 
 

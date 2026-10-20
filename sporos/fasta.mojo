@@ -1,6 +1,7 @@
 """Minimal, fast FASTA reading: whole file in, records out."""
 
-from std.memory import unsafe_memcpy
+from std.bit import count_trailing_zeros
+from std.memory import pack_bits, unsafe_memcpy
 
 comptime _HEADER = UInt8(ord(">"))
 comptime _NEWLINE = UInt8(ord("\n"))
@@ -33,6 +34,21 @@ struct FastaRecords(Movable, Sized):
         return len(self.data)
 
 
+@inline(.always)
+def _line_end(src: ImmPointer[UInt8, _], start: Int, n: Int) -> Int:
+    """Index of the first newline at or after `start`, or `n`."""
+    comptime W = 32
+    var i = start
+    while i + W <= n:
+        var hits = src.unsafe_load[width=W](i).eq(_NEWLINE)
+        if hits.reduce_or():
+            return i + Int(count_trailing_zeros(pack_bits[DType.uint32](hits)))
+        i += W
+    while i < n and src[unsafe_offset=i] != _NEWLINE:
+        i += 1
+    return i
+
+
 def parse_fasta(bytes: Span[UInt8, _]) raises -> FastaRecords:
     """Parses FASTA text; line breaks (LF or CRLF) inside sequences are dropped."""
     var records = FastaRecords()
@@ -56,9 +72,7 @@ def parse_fasta(bytes: Span[UInt8, _]) raises -> FastaRecords:
             )
             records.starts.append(len(records.data))
             records.lengths.append(0)
-            while j < n and src[unsafe_offset=j] != _NEWLINE:
-                j += 1
-            i = j + 1
+            i = _line_end(src, j, n) + 1
             continue
         if len(records.names) == 0:
             if c == _NEWLINE or c == _RETURN or c == _SPACE:
@@ -66,9 +80,7 @@ def parse_fasta(bytes: Span[UInt8, _]) raises -> FastaRecords:
                 continue
             raise Error("FASTA input must start with a '>' header line")
         # A sequence line: copy up to the line break in one block.
-        var j = i
-        while j < n and src[unsafe_offset=j] != _NEWLINE:
-            j += 1
+        var j = _line_end(src, i, n)
         var end = j
         if end > i and src[unsafe_offset=end - 1] == _RETURN:
             end -= 1
