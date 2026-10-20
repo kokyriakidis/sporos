@@ -1,0 +1,23 @@
+[workspace]
+authors = ["Konstantinos Kyriakidis <kkyriaki@ucsc.edu>"]
+channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
+description = "Fast DNA seeding in Mojo: minimizers, syncmers, MEMs and MUMs"
+name = "sporos"
+platforms = ["linux-64", "linux-aarch64", "osx-arm64"]
+version = "0.1.0"
+
+# Latest Mojo (nightly channel): the vendored Modular skills track the latest compiler.
+[dependencies]
+mojo = ">=1.2.0.dev2026102005,<2"
+
+[tasks]
+# `mojo build -o` writes into a directory but will not create one.
+prepare = "mkdir -p build"
+build = { cmd = "mojo precompile sporos -o build/sporos.mojoc", depends-on = ["prepare"] }
+build-test-seeds = { cmd = "mojo build -I . -I tests tests/test_seeds.mojo -o build/test_seeds", depends-on = ["prepare"] }
+build-test-mems = { cmd = "mojo build -I . -I tests tests/test_mems.mojo -o build/test_mems", depends-on = ["prepare"] }
+# Every kernel held to a brute-force oracle (tests/reference.mojo).
+test = { cmd = "./build/test_seeds && ./build/test_mems", depends-on = ["build-test-seeds", "build-test-mems"] }
+format = "mojo format -l 120 sporos tests"
+# Pulls the latest Mojo skills from github.com/modular/skills into .claude/skills for coding agents.
+sync-skills = "bash .claude/sync-skills.sh"

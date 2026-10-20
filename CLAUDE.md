@@ -1,0 +1,30 @@
+# sporos
+
+Fast DNA seeding in Mojo: (w, k)-minimizers, open/closed syncmers, MEMs and MUMs. The goal is to be the
+fastest library for each, by a wide margin; rivals are simd-minimizers, minimap2, MUMmer4, copMEM2, mumemto,
+BWA (SMEMs) and GraphAligner's seeders.
+
+## Mojo skills
+
+Modular's Mojo skills live in `.claude/skills` and correct pretrained Mojo, which is out of date. Hooks in
+`.claude/settings.json` inject them: the full `mojo-syntax` skill and `references/idiomatic-mojo.md` at session
+start (also after `/clear` and compaction) and into every subagent, and a reminder on every prompt
+(`SPOROS_SKILLS_EVERY_PROMPT=full` injects the full text on every prompt instead). Follow them over pretrained
+habits:
+
+- `mojo-syntax` before writing, editing or reviewing any Mojo, with `references/idiomatic-mojo.md`.
+- `mojo-gpu-fundamentals` before touching GPU code; `mojo-python-interop` before Mojo-Python interop.
+- Include the skills rule in every subagent prompt.
+
+`pixi run sync-skills` refreshes them from upstream; `.claude/skills/UPSTREAM` records the commit.
+
+## Working here
+
+- Build and test: `pixi run test` (every kernel against the brute-force oracles in `tests/reference.mojo`);
+  format: `pixi run format` (120 columns).
+- Toolchain: latest Mojo from the nightly channel.
+- Pointers handed out by owning types must carry the owner's origin (see `CodeBuffer.unsafe_ptr`); an
+  untracked pointer lets the owner be destroyed early.
+- `unsafe_strided_load` on `UInt8` returns wrong lanes on the current nightly; gather explicitly.
+- Benchmark with min-of-N timings; other jobs share the machine.
+- Finished work merges straight into `main` and is pushed; no pull requests.

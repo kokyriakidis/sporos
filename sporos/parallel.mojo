@@ -1,0 +1,72 @@
+"""Dependency-free thread pool primitive built on pthreads.
+
+`parallel_for` runs `task.run(i)` for every `i` in `[0, count)` on up to
+`num_threads` OS threads that pull indices from a shared atomic counter.
+"""
+
+from std.atomic import Atomic
+from std.ffi import external_call
+from std.sys import num_physical_cores
+
+
+trait ParallelTask(Deinitable):
+    def run(self, index: Int):
+        ...
+
+
+struct _Job[T: ParallelTask]:
+    var task: Pointer[Self.T, MutUntrackedOrigin]
+    var next: Atomic[Int64]
+    var count: Int
+
+    def __init__(
+        out self, task: Pointer[Self.T, MutUntrackedOrigin], count: Int
+    ):
+        self.task = task
+        self.next = Atomic[Int64](0)
+        self.count = count
+
+
+def _worker[
+    T: ParallelTask
+](arg: MutOpaquePointer[MutUntrackedOrigin]) abi("C") -> MutOpaquePointer[
+    MutUntrackedOrigin
+]:
+    var job = arg.unsafe_bitcast[_Job[T]]()
+    while True:
+        var i = Int(job[].next.fetch_add(1))
+        if i >= job[].count:
+            break
+        job[].task[].run(i)
+    return arg
+
+
+def default_threads() -> Int:
+    return num_physical_cores()
+
+
+def parallel_for[T: ParallelTask](mut task: T, count: Int, num_threads: Int):
+    """Runs `task.run(i)` for `i` in `[0, count)` across `num_threads` threads.
+    """
+    var threads = min(num_threads, count)
+    if threads <= 1:
+        for i in range(count):
+            task.run(i)
+        return
+    var job = _Job[T](
+        Pointer(to=task).unsafe_origin_cast[MutUntrackedOrigin](), count
+    )
+    var arg = (
+        Pointer(to=job)
+        .unsafe_origin_cast[MutUntrackedOrigin]()
+        .unsafe_bitcast[NoneType]()
+    )
+    # pthread_t is an 8-byte handle on every supported platform.
+    var handles = List[UInt64](length=threads, fill=0)
+    for t in range(threads):
+        _ = external_call["pthread_create", Int32](
+            Pointer(to=handles[t]), Int(0), _worker[T], arg
+        )
+    for t in range(threads):
+        _ = external_call["pthread_join", Int32](handles[t], Int(0))
+    _ = job^
