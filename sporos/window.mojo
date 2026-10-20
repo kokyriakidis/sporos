@@ -29,7 +29,7 @@ from std.math import iota
 from std.sys.defines import get_defined_int
 from std.sys.info import CompilationTarget
 
-from sporos.alphabet import N_CODE
+from sporos.alphabet import N_CODE, encode_base
 from sporos.nthash import (
     ROTATION,
     SEED_A,
@@ -85,11 +85,19 @@ def _lookup(table: _U8x16, index: SIMD[DType.uint8, 4 * LANES]) -> _U32V:
 
 
 @inline(.always)
-def _transpose(
-    src: ImmPointer[UInt8, _], chunk: Int, dst: MutPointer[UInt8, _]
-):
-    """Writes the seed-table indices of `_TRANSPOSE` steps of `LANES` codes,
-    step-major, into `dst` (see `_store_indices`).
+def _encode16(raw: _U8x16) -> _U8x16:
+    """ASCII to 2-bit codes, `N_CODE` for anything but A/C/G/T/U."""
+    var lower = raw | 0x20
+    var valid = lower.eq(0x61) | lower.eq(0x63) | lower.eq(0x67) | lower.eq(0x74) | lower.eq(0x75)
+    return valid.select(((raw >> 1) ^ (raw >> 2)) & 3, _U8x16(N_CODE))
+
+
+@inline(.always)
+def _transpose[
+    ascii: Bool
+](src: ImmPointer[UInt8, _], chunk: Int, dst: MutPointer[UInt8, _]):
+    """Writes the seed-table indices of `_TRANSPOSE` steps of `LANES` codes
+    (ASCII bases when `ascii`), step-major, into `dst` (see `_store_indices`).
 
     Lane `l` reads `src[l * chunk : l * chunk + 16]`; rounds of interleaves
     at doubling element widths turn the lane vectors into step vectors.
@@ -97,7 +105,10 @@ def _transpose(
     comptime assert LANES == 8 or LANES == 16, "LANES must be 8 or 16"
     var v = List[_U8x16](capacity=LANES)
     comptime for l in range(LANES):
-        v.append(src.unsafe_load[width=16](l * chunk))
+        comptime if ascii:
+            v.append(_encode16(src.unsafe_load[width=16](l * chunk)))
+        else:
+            v.append(src.unsafe_load[width=16](l * chunk))
     var a0 = bitcast[DType.uint16, 16](v[0].interleave(v[1]))
     var a1 = bitcast[DType.uint16, 16](v[2].interleave(v[3]))
     var a2 = bitcast[DType.uint16, 16](v[4].interleave(v[5]))
@@ -288,13 +299,14 @@ def _step[
 
 
 def scan_segment[
-    mode: Int, canonical: Bool
+    mode: Int, canonical: Bool, ascii: Bool = False
 ](
     codes: ImmPointer[UInt8, _],
     seg_start: Int,
     seg_windows: Int,
     params: ScanParams,
     mut out: List[UInt32],
+    readable: Int = Int.MAX,
 ):
     """Appends the outputs of windows `[seg_start, seg_start + seg_windows)`.
 
@@ -302,17 +314,32 @@ def scan_segment[
     the minimizer position (deduplicated across consecutive windows); for
     syncmers it is `j` itself when the k-mer at `j` is a syncmer. Lanes get
     `seg_windows // LANES` windows each; the few left over run scalar.
+
+    With `ascii`, `codes` holds ASCII bases and only `readable` bytes may be
+    read: lanes then stop where their 16-byte loads would pass that point.
     """
     var chunk = seg_windows // LANES
+    comptime if ascii:
+        # Lanes read up to seg_start + LANES * chunk + k + w + 12.
+        chunk = min(chunk, max(0, (readable - seg_start - params.k - params.w - 13) // LANES))
     if chunk > 0:
-        _scan_lanes[mode, canonical](codes, seg_start, chunk, params, out)
-    _scan_scalar[mode, canonical](
-        codes, seg_start + chunk * LANES, seg_windows - chunk * LANES, params, out
-    )
+        _scan_lanes[mode, canonical, ascii](codes, seg_start, chunk, params, out)
+    var first = seg_start + chunk * LANES
+    var rest = seg_windows - chunk * LANES
+    comptime if ascii:
+        if rest > 0:
+            # Encode the remainder's bases and scan them scalar.
+            var span = rest + params.k + params.w - 2
+            var tail = List[UInt8](capacity=span)
+            for i in range(span):
+                tail.append(encode_base(codes[unsafe_offset=first + i]))
+            _scan_scalar[mode, canonical](tail.unsafe_ptr(), 0, rest, params, out, first)
+    else:
+        _scan_scalar[mode, canonical](codes, first, rest, params, out)
 
 
 def _scan_lanes[
-    mode: Int, canonical: Bool
+    mode: Int, canonical: Bool, ascii: Bool
 ](
     codes: ImmPointer[UInt8, _],
     seg_start: Int,
@@ -395,7 +422,7 @@ def _scan_lanes[
     while t < steps:
         var round_len = min(_ROUND, steps - t)
         for r in range(0, round_len, _TRANSPOSE):
-            _transpose(src.unsafe_offset(t + r), chunk, tbuf.unsafe_offset(r * 4 * LANES))
+            _transpose[ascii](src.unsafe_offset(t + r), chunk, tbuf.unsafe_offset(r * 4 * LANES))
         var i = 0
         while i < round_len:
             var n = min(w - wi, round_len - i)
@@ -466,8 +493,10 @@ def _scan_scalar[
     windows: Int,
     params: ScanParams,
     mut out: List[UInt32],
+    base: Int = 0,
 ):
-    """Windows `[first, first + windows)` one by one (the lanes' remainder)."""
+    """Windows `[first, first + windows)` one by one (the lanes' remainder);
+    `codes[i]` is the base at position `base + i`."""
     var k = params.k
     var w = params.w
     var tail = List[UInt32]()
@@ -486,7 +515,7 @@ def _scan_scalar[
         var minpos = Int(best & 0xFFFFFFFF)
         comptime if mode == MINIMIZERS:
             if best != UInt64.MAX:
-                tail.append(UInt32(minpos))
+                tail.append(UInt32(base + minpos))
         else:
             var span_ok = True
             for b in range(j, j + params.span):
@@ -498,7 +527,7 @@ def _scan_scalar[
             else:
                 hit = minpos == j + params.offset
             if span_ok and hit:
-                tail.append(UInt32(j))
+                tail.append(UInt32(base + j))
     var deduped = List[UInt32]()
     for v in tail:
         if len(deduped) == 0 or deduped[len(deduped) - 1] != v:
@@ -538,12 +567,13 @@ def append_dedup(mut out: List[UInt32], src: Span[UInt32, _]):
     )
 
 
-struct _ScanTask[mode: Int, canonical: Bool](ParallelTask):
+struct _ScanTask[mode: Int, canonical: Bool, ascii: Bool](ParallelTask):
     var codes: ImmPointer[UInt8, ImmUntrackedOrigin]
     var results: MutPointer[List[UInt32], MutUntrackedOrigin]
     var segment: Int
     var windows: Int
     var params: ScanParams
+    var readable: Int
 
     def __init__(
         out self,
@@ -552,30 +582,36 @@ struct _ScanTask[mode: Int, canonical: Bool](ParallelTask):
         segment: Int,
         windows: Int,
         params: ScanParams,
+        readable: Int,
     ):
         self.codes = codes
         self.results = results
         self.segment = segment
         self.windows = windows
         self.params = params
+        self.readable = readable
 
     def run(self, index: Int):
         var start = index * self.segment
         var count = min(self.segment, self.windows - start)
-        scan_segment[Self.mode, Self.canonical](
-            self.codes, start, count, self.params, self.results[unsafe_offset=index]
+        scan_segment[Self.mode, Self.canonical, Self.ascii](
+            self.codes, start, count, self.params, self.results[unsafe_offset=index], self.readable
         )
 
 
 def scan[
-    mode: Int, canonical: Bool
+    mode: Int, canonical: Bool, ascii: Bool = False
 ](
     codes: ImmPointer[UInt8, _],
     windows: Int,
     params: ScanParams,
     threads: Int,
+    readable: Int = Int.MAX,
 ) -> List[UInt32]:
-    """Scans windows `[0, windows)`, split into segments across `threads`."""
+    """Scans windows `[0, windows)`, split into segments across `threads`.
+
+    With `ascii`, `codes` holds `readable` ASCII bases (no padding needed);
+    otherwise 2-bit codes followed by `PADDING` bytes of `N_CODE`."""
     var out = List[UInt32]()
     if windows <= 0:
         return out^
@@ -585,15 +621,16 @@ def scan[
     var segment = ceildiv(windows, num_segments)
     num_segments = ceildiv(windows, segment)
     if num_segments == 1:
-        scan_segment[mode, canonical](codes, 0, windows, params, out)
+        scan_segment[mode, canonical, ascii](codes, 0, windows, params, out, readable)
         return out^
     var results = List[List[UInt32]](length=num_segments, fill=List[UInt32]())
-    var task = _ScanTask[mode, canonical](
+    var task = _ScanTask[mode, canonical, ascii](
         codes.unsafe_origin_cast[ImmUntrackedOrigin](),
         results.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
         segment,
         windows,
         params,
+        readable,
     )
     parallel_for(task, num_segments, threads)
     var total = 0

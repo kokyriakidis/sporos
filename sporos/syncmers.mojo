@@ -7,7 +7,6 @@ or `k - s`, and an open syncmer when it starts at offset `t`. K-mers containing
 a non-ACGT base are never syncmers. Positions are reported in increasing order.
 """
 
-from sporos.alphabet import CodeBuffer
 from sporos.window import (
     CLOSED_SYNCMERS,
     OPEN_SYNCMERS,
@@ -65,7 +64,21 @@ def syncmer_positions(
     threads: Int = 1,
 ) raises -> List[UInt32]:
     """Start positions of the syncmers of an ASCII DNA sequence."""
-    var codes = CodeBuffer.encode(seq, PADDING)
-    return syncmer_positions_from_codes(
-        codes.unsafe_ptr(), len(seq), k, s, canonical, open_offset, threads
-    )
+    _check(k, s, len(seq))
+    var kmers = len(seq) - k + 1
+    if kmers <= 0:
+        return List[UInt32]()
+    var w = k - s + 1
+    var p = seq.unsafe_ptr()
+    var n = len(seq)
+    if case .Some(t) = open_offset:
+        if t < 0 or t > k - s:
+            raise Error(t"open syncmer offset must be in [0, {k - s}], got {t}")
+        var params = ScanParams(k=s, w=w, span=k, offset=t)
+        if canonical:
+            return scan[OPEN_SYNCMERS, True, ascii=True](p, kmers, params, threads, n)
+        return scan[OPEN_SYNCMERS, False, ascii=True](p, kmers, params, threads, n)
+    var params = ScanParams(k=s, w=w, span=k, offset=0)
+    if canonical:
+        return scan[CLOSED_SYNCMERS, True, ascii=True](p, kmers, params, threads, n)
+    return scan[CLOSED_SYNCMERS, False, ascii=True](p, kmers, params, threads, n)

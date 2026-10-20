@@ -6,7 +6,8 @@ zlib, loaded at run time, so sporos has no build-time dependency on it.
 
 from std.bit import count_trailing_zeros
 from std.ffi import OwnedDLHandle
-from std.memory import pack_bits, unsafe_memcpy
+from std.os import stat
+from std.memory import pack_bits, unsafe_memcpy, unsafe_memmove
 from std.sys.info import CompilationTarget
 
 comptime _HEADER = UInt8(ord(">"))
@@ -151,7 +152,57 @@ def parse_fasta(bytes: Span[UInt8, _]) raises -> FastaRecords:
 def read_fasta(path: String) raises -> FastaRecords:
     """Reads a FASTA or FASTQ file, gzipped or not."""
     var bytes = read_file(path)
-    return parse_sequences(Span(bytes))
+    for i in range(len(bytes)):
+        var c = bytes[i]
+        if c == _AT:
+            return parse_fastq(Span(bytes))
+        if c != _NEWLINE and c != _RETURN and c != _SPACE:
+            break
+    return parse_fasta_in_place(bytes^)
+
+
+def parse_fasta_in_place(var bytes: List[UInt8]) raises -> FastaRecords:
+    """Parses FASTA, compacting the sequence bytes to the front of `bytes`
+    (which becomes the records' data) instead of copying them."""
+    var records = FastaRecords()
+    var n = len(bytes)
+    var src = bytes.unsafe_ptr()
+    var at = 0
+    var i = 0
+    while i < n:
+        var c = src[unsafe_offset=i]
+        if c == _HEADER:
+            var name_start = i + 1
+            var j = name_start
+            while j < n and src[unsafe_offset=j] != _SPACE and src[unsafe_offset=j] != _TAB and src[
+                unsafe_offset=j
+            ] != _NEWLINE and src[unsafe_offset=j] != _RETURN:
+                j += 1
+            records.names.append(String(StringSlice(unsafe_from_utf8=Span(bytes)[name_start:j])))
+            records.starts.append(at)
+            records.lengths.append(0)
+            i = _line_end(src, j, n) + 1
+            continue
+        if len(records.names) == 0:
+            if c == _NEWLINE or c == _RETURN or c == _SPACE:
+                i += 1
+                continue
+            raise Error("FASTA input must start with a '>' header line")
+        var j = _line_end(src, i, n)
+        var end = j
+        if end > i and src[unsafe_offset=end - 1] == _RETURN:
+            end -= 1
+        var length = end - i
+        if length > 0:
+            if at != i:
+                var raw = src.unsafe_origin_cast[MutUntrackedOrigin]()
+                unsafe_memmove(dest=raw.unsafe_offset(at), src=raw.unsafe_offset(i), count=length)
+            at += length
+            records.lengths[len(records.lengths) - 1] += length
+        i = j + 1
+    bytes.resize(unsafe_uninit_length=at)
+    records.data = bytes^
+    return records^
 
 
 def read_file(path: String) raises -> List[UInt8]:
@@ -161,8 +212,19 @@ def read_file(path: String) raises -> List[UInt8]:
         magic = f.read_bytes(2)
     if len(magic) == 2 and magic[0] == 0x1F and magic[1] == 0x8B:
         return _gunzip(path)
+    # Read straight into one buffer of the file's size; a single read() call
+    # cannot return 2 GiB or more on macOS, so read in blocks.
+    var size = Int(stat(path).st_size)
+    var out = List[UInt8](unsafe_uninit_length=size)
+    var done = 0
     with open(path, "r") as f:
-        return f.read_bytes()
+        while done < size:
+            var room = min(1 << 30, size - done)
+            var got = f.read(Span(out)[done : done + room])
+            if got <= 0:
+                raise Error(t"cannot read {path}")
+            done += got
+    return out^
 
 
 def _gunzip(path: String) raises -> List[UInt8]:

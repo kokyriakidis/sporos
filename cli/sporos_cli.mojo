@@ -14,23 +14,21 @@ from std.math import ceildiv
 from std.sys import argv, stderr
 from std.time import perf_counter_ns
 
-from sporos.alphabet import CodeBuffer
 from sporos.fasta import FastaRecords, read_fasta
 from sporos.index import ALL_KMERS, MINIMIZER_SEEDS, SYNCMER_SEEDS, SeedHit, SeedIndex
 from sporos.mems import Mem, MemIndex, MemParams, filter_mums, find_mems
-from sporos.minimizers import minimizer_positions_from_codes
+from sporos.minimizers import minimizer_positions
 from sporos.output import OutputBuffer, put_padded
 from sporos.parallel import ParallelTask, default_threads, parallel_for
-from sporos.syncmers import syncmer_positions_from_codes
+from sporos.syncmers import syncmer_positions
 from sporos.text import SeqText
-from sporos.window import PADDING
 
 comptime USAGE = """usage:
   sporos seeds -k K -w W [--syncmers | --all-kmers] [--query-kmers] [--max-occ N] [-t threads] <reference.fa> <reads.fa>
   sporos mem [-mum | -mumreference | -maxmatch] [-l L] [-b | -r] [-F] [-n] [-t threads] [-v]
              [-K anchor_k] [-k1 ref_step] [-k2 query_step] <reference.fa> <query.fa>
-  sporos minimizers -k K -w W [--forward] [-t threads] <seqs.fa>
-  sporos syncmers -k K -s S [--open T] [--forward] [-t threads] <seqs.fa>"""
+  sporos minimizers -k K -w W [--forward] [--count] [-t threads] <seqs.fa>
+  sporos syncmers -k K -s S [--open T] [--forward] [--count] [-t threads] <seqs.fa>"""
 
 
 def _log(verbose: Bool, message: String):
@@ -426,12 +424,15 @@ def run_seeds(command: String, args: List[String]) raises:
     var s = 0
     var open_offset: Optional[Int] = None
     var canonical = True
+    var count_only = False
     var threads = default_threads()
     var paths = List[String]()
     var i = 0
     while i < len(args):
         var a = args[i]
-        if a == "-k":
+        if a == "--count":
+            count_only = True
+        elif a == "-k":
             i += 1
             k = Int(args[i])
         elif a == "-w":
@@ -455,22 +456,24 @@ def run_seeds(command: String, args: List[String]) raises:
         i += 1
     if len(paths) != 1:
         raise Error(USAGE)
+    var start = perf_counter_ns()
     var records = read_fasta(paths[0])
+    var read_seconds = _seconds(start)
+    start = perf_counter_ns()
+    var seeds = 0
     var out = OutputBuffer()
     for r in range(len(records)):
         var seq = records.seq(r)
-        var codes = CodeBuffer.encode(seq, PADDING)
         var positions: List[UInt32]
         if command == "minimizers":
-            positions = minimizer_positions_from_codes(
-                codes.unsafe_ptr(), len(seq), k, w, canonical, threads
-            )
+            positions = minimizer_positions(seq, k, w, canonical, threads)
         else:
             if s == 0:
                 raise Error("syncmers need -s")
-            positions = syncmer_positions_from_codes(
-                codes.unsafe_ptr(), len(seq), k, s, canonical, open_offset, threads
-            )
+            positions = syncmer_positions(seq, k, s, canonical, open_offset, threads)
+        seeds += len(positions)
+        if count_only:
+            continue
         var slices = max(1, min(threads * 4, len(positions) // 100_000))
         var texts = List[List[UInt8]](length=slices, fill=List[UInt8]())
         var task = _SeedFormatTask(
@@ -482,6 +485,12 @@ def run_seeds(command: String, args: List[String]) raises:
         parallel_for(task, slices, threads)
         for text in texts:
             out.write_bytes(Span(text))
+    if count_only:
+        out.write(String(t"{records.total_length()} bases\t{seeds} {command}\n"))
+        print(
+            t"read {read_seconds} s, seeds {_seconds(start)} s ({len(records)} sequences)",
+            file=stderr,
+        )
     out.flush()
 
 

@@ -59,10 +59,17 @@ def minimizer_positions(
     threads: Int = 1,
 ) raises -> List[UInt32]:
     """Start positions of the (w, k)-minimizers of an ASCII DNA sequence."""
-    var codes = CodeBuffer.encode(seq, PADDING)
-    return minimizer_positions_from_codes(
-        codes.unsafe_ptr(), len(seq), k, w, canonical, threads
-    )
+    _check(k, w, len(seq))
+    var kmers = len(seq) - k + 1
+    if kmers <= 0:
+        return List[UInt32]()
+    if kmers < w:
+        var codes = CodeBuffer.encode(seq, PADDING)
+        return _short_minimizer(codes.unsafe_ptr(), kmers, k, w, canonical)
+    var params = ScanParams(k=k, w=w, span=k, offset=0)
+    if canonical:
+        return scan[MINIMIZERS, True, ascii=True](seq.unsafe_ptr(), kmers - w + 1, params, threads, len(seq))
+    return scan[MINIMIZERS, False, ascii=True](seq.unsafe_ptr(), kmers - w + 1, params, threads, len(seq))
 
 
 def _short_minimizer(
