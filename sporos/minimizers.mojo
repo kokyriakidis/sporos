@@ -18,7 +18,9 @@ from sporos.window import (
 )
 
 
-def _check(k: Int, w: Int) raises:
+def _check(k: Int, w: Int, length: Int) raises:
+    if length >= Int(UInt32.MAX):
+        raise Error("sequences must be shorter than 2^32 bases")
     if k < 1 or k > 64:
         raise Error(t"k must be in [1, 64], got {k}")
     if w < 1:
@@ -37,7 +39,7 @@ def minimizer_positions_from_codes(
 
     `codes` must be followed by at least `window.PADDING` bytes of `N_CODE`.
     """
-    _check(k, w)
+    _check(k, w, length)
     var kmers = length - k + 1
     if kmers <= 0:
         return List[UInt32]()

@@ -17,7 +17,9 @@ from sporos.window import (
 )
 
 
-def _check(k: Int, s: Int) raises:
+def _check(k: Int, s: Int, length: Int) raises:
+    if length >= Int(UInt32.MAX):
+        raise Error("sequences must be shorter than 2^32 bases")
     if s < 1 or s > k:
         raise Error(t"need 1 <= s <= k, got k={k} s={s}")
 
@@ -36,7 +38,7 @@ def syncmer_positions_from_codes(
     `codes` must be followed by at least `window.PADDING` bytes of `N_CODE`.
     Closed syncmers unless `open_offset` is given.
     """
-    _check(k, s)
+    _check(k, s, length)
     var kmers = length - k + 1
     if kmers <= 0:
         return List[UInt32]()
