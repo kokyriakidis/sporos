@@ -28,6 +28,7 @@ from std.memory import Layout, alloc, bitcast, dealloc, pack_bits
 from std.math import iota
 from std.sys.defines import get_defined_int
 from std.sys.info import CompilationTarget
+from std.sys.intrinsics import llvm_intrinsic
 
 from sporos.alphabet import N_CODE, encode_base
 from sporos.nthash import (
@@ -79,9 +80,25 @@ def _seed_table(s0: UInt32, s1: UInt32, s2: UInt32, s3: UInt32) -> _U8x16:
 
 @inline(.always)
 def _lookup(table: _U8x16, index: SIMD[DType.uint8, 4 * LANES]) -> _U32V:
-    """Per-lane 32-bit table lookup with one byte shuffle (NEON tbl / pshufb).
-    """
-    return bitcast[DType.uint32, LANES](table._dynamic_shuffle(index))
+    """Per-lane 32-bit table lookup with one byte shuffle: NEON tbl per 16
+    bytes, or one AVX2 / AVX-512BW pshufb over the whole vector with the table
+    in every 128-bit lane (pshufb looks up within each lane)."""
+    comptime n = 4 * LANES
+    comptime if n == 64 and CompilationTarget._has_feature["avx512bw"]():
+        var wide = table.join(table).join(table.join(table))
+        return bitcast[DType.uint32, LANES](
+            llvm_intrinsic["llvm.x86.avx512.pshuf.b.512", SIMD[DType.uint8, 64], has_side_effect=False](
+                wide, rebind[SIMD[DType.uint8, 64]](index)
+            )
+        )
+    elif n == 32 and CompilationTarget.has_avx2():
+        return bitcast[DType.uint32, LANES](
+            llvm_intrinsic["llvm.x86.avx2.pshuf.b", SIMD[DType.uint8, 32], has_side_effect=False](
+                table.join(table), rebind[SIMD[DType.uint8, 32]](index)
+            )
+        )
+    else:
+        return bitcast[DType.uint32, LANES](table._dynamic_shuffle(index))
 
 
 @inline(.always)
@@ -338,6 +355,7 @@ def scan_segment[
         _scan_scalar[mode, canonical](codes, first, rest, params, out)
 
 
+@inline(.never)
 def _scan_lanes[
     mode: Int, canonical: Bool, ascii: Bool
 ](
@@ -471,6 +489,10 @@ def _scan_lanes[
         t += round_len
 
     _emit(batch_bits, obuf, lane_fill, lanes_out)
+    var produced = 0
+    for l in range(LANES):
+        produced += lane_fill[unsafe_offset=l] - l * chunk
+    out.reserve(len(out) + produced)
     for l in range(LANES):
         append_dedup(
             out,

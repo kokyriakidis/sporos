@@ -8,7 +8,7 @@ from std.sys import argv
 
 from timing import thread_cpu_ns
 from sporos.alphabet import CodeBuffer
-from sporos.minimizers import minimizer_positions_from_codes
+from sporos.minimizers import minimizer_positions, minimizer_positions_from_codes
 from sporos.syncmers import syncmer_positions_from_codes
 from sporos.window import PADDING
 from reference import random_dna
@@ -41,6 +41,13 @@ def main() raises:
                 best = min(best, thread_cpu_ns() - start)
                 count = len(m)
             _report("can" if canonical else "fwd", k, w, n, count, best)
+            best = Int.MAX
+            for _ in range(REPS):
+                var start = thread_cpu_ns()
+                var m = minimizer_positions(Span(seq), k, w, canonical, 1)
+                best = min(best, thread_cpu_ns() - start)
+                count = len(m)
+            _report("can-ascii" if canonical else "fwd-ascii", k, w, n, count, best)
         for canonical in [False, True]:
             # simd-minimizers' closed syncmers take (k=s, w=k-s+1).
             var best = Int.MAX
