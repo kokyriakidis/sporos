@@ -143,6 +143,12 @@ comptime _PROBE_BATCH = 32
 
 
 @inline(.always)
+def _phase(position: Int, step: Int) -> Int:
+    """`position mod step` in `[0, step)`, for negative positions too."""
+    return ((position % step) + step) % step
+
+
+@inline(.always)
 def _kmer_mask(k: Int) -> UInt64:
     return UInt64.MAX if k == 32 else (UInt64(1) << UInt64(2 * k)) - 1
 
@@ -175,11 +181,14 @@ struct _AnchorCounts(ParallelTask):
         var last = min(self.n - self.k + 1, first + _BUILD_CHUNK)
         var count = 0
         var run = 0
-        for i in range(max(0, first - self.k + 1), last + self.k - 1):
+        var i0 = max(0, first - self.k + 1)
+        var phase = _phase(i0 - self.k + 1, self.step)
+        for i in range(i0, last + self.k - 1):
             run = run + 1 if self.text[unsafe_offset=i] < 4 else 0
             var start = i - self.k + 1
-            if start >= first and run >= self.k and start % self.step == 0:
+            if phase == 0 and start >= first and run >= self.k:
                 count += 1
+            phase = 0 if phase + 1 == self.step else phase + 1
         self.counts[unsafe_offset=index] = count
 
 
@@ -235,12 +244,16 @@ struct _AnchorFill(ParallelTask):
             histogram[unsafe_offset=p] = 0
         var kmer: UInt64 = 0
         var run = 0
-        for i in range(max(0, first - self.k + 1), last + self.k - 1):
+        var i0 = max(0, first - self.k + 1)
+        var phase = _phase(i0 - self.k + 1, self.step)
+        for i in range(i0, last + self.k - 1):
             var c = self.text[unsafe_offset=i]
             kmer = ((kmer << 2) | UInt64(c & 3)) & mask
             run = run + 1 if c < 4 else 0
             var start = i - self.k + 1
-            if start >= first and run >= self.k and start % self.step == 0:
+            var sampled = phase == 0
+            phase = 0 if phase + 1 == self.step else phase + 1
+            if sampled and start >= first and run >= self.k:
                 var h = mix64(kmer)
                 var bucket = UInt32(h >> self.shift)
                 self.buckets[unsafe_offset=slot] = bucket
@@ -467,13 +480,17 @@ struct MemIndex(Movable):
         var run = 0
         # Warm up the rolling K-mer so the first anchor ends at first + k - 1.
         var i = max(0, first - k + 1) if first < end else end
-        while i < end + k - 1 and i < len(query):
+        var phase = _phase(i - k + 1, qstep)
+        var stop = min(end + k - 1, len(query))
+        while i < stop:
             var c = qtext[unsafe_offset=i]
             kmer = ((kmer << 2) | UInt64(c & 3)) & mask
             run = run + 1 if c < 4 else 0
             var j = i - k + 1
             i += 1
-            if j < first or run < k or j % qstep != 0:
+            var sampled = phase == 0
+            phase = 0 if phase + 1 == qstep else phase + 1
+            if not sampled or j < first or run < k:
                 continue
             var h = mix64(kmer)
             prefetch[_AHEAD](self.offsets.unsafe_ptr().unsafe_offset(Int(h >> self.shift)))
