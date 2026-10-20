@@ -386,7 +386,7 @@ def _scan_lanes[
     var fill_alloc = alloc(Layout[Int](length=LANES))
     var lane_fill = fill_alloc.unsafe_ptr()
     for l in range(LANES):
-        lane_fill.unsafe_offset(l).unsafe_write(0)
+        lane_fill.unsafe_offset(l).unsafe_write(l * chunk)
     var batch_bits: UInt64 = 0
     var batch = 0
 
@@ -418,7 +418,7 @@ def _scan_lanes[
                     batch_bits |= UInt64(bits) << UInt64(batch * LANES)
                     batch += 1
                     if batch == _BATCH:
-                        _emit(batch_bits, obuf, chunk, lane_fill, lanes_out)
+                        _emit(batch_bits, obuf, lane_fill, lanes_out)
                         batch_bits = 0
                         batch = 0
                     ri = 0 if ri + 1 == k else ri + 1
@@ -445,13 +445,13 @@ def _scan_lanes[
                 wi = 0
         t += round_len
 
-    _emit(batch_bits, obuf, chunk, lane_fill, lanes_out)
+    _emit(batch_bits, obuf, lane_fill, lanes_out)
     for l in range(LANES):
         append_dedup(
             out,
             Span(
                 unsafe_ptr=lanes_out.unsafe_offset(l * chunk),
-                length=lane_fill[unsafe_offset=l],
+                length=lane_fill[unsafe_offset=l] - l * chunk,
             ),
         )
     dealloc(tbuf_alloc^)
@@ -512,11 +512,11 @@ def _scan_scalar[
 def _emit(
     bits: UInt64,
     values: ImmPointer[UInt32, _],
-    chunk: Int,
     lane_fill: MutPointer[Int, _],
     lanes_out: MutPointer[UInt32, _],
 ):
-    """Appends the values whose bit is set to their lanes' regions.
+    """Appends the values whose bit is set to their lanes' regions
+    (`lane_fill[l]` is lane l's next slot in `lanes_out`).
 
     Bit `s * LANES + l` stands for step `s` of lane `l`; walking bits in
     increasing order keeps each lane's values in step order."""
@@ -524,11 +524,9 @@ def _emit(
     while remaining != 0:
         var i = Int(count_trailing_zeros(remaining))
         var lane = i % LANES
-        var n = lane_fill[unsafe_offset=lane]
-        lanes_out.unsafe_offset(lane * chunk + n).unsafe_write(
-            values[unsafe_offset=i]
-        )
-        lane_fill.unsafe_offset(lane).unsafe_write(n + 1)
+        var at = lane_fill[unsafe_offset=lane]
+        lanes_out.unsafe_offset(at).unsafe_write(values[unsafe_offset=i])
+        lane_fill.unsafe_offset(lane).unsafe_write(at + 1)
         remaining &= remaining - 1
 
 
