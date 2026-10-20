@@ -39,6 +39,8 @@ from sporos.nthash import (
     SEED_T,
     MUL_SEED,
     SMALL_K,
+    complement,
+    seed,
     seed_hash,
     rotl32,
     rotr32,
@@ -61,6 +63,22 @@ comptime _BATCH = 64 // LANES
 comptime PADDING = 96
 """Bytes of `N_CODE` padding kernels need after the last base."""
 comptime _MIN_SEGMENT = 1 << 20
+comptime PAD_BELOW = 1 << 16
+"""ASCII inputs shorter than this are copied into an `N`-padded buffer so the
+lanes, not the scalar tail, cover (almost) all of their windows."""
+
+
+def scan_ascii[
+    mode: Int, canonical: Bool
+](seq: Span[UInt8, _], windows: Int, params: ScanParams, threads: Int) -> List[UInt32]:
+    """`scan` over ASCII bases; short inputs are first padded with `N`."""
+    if len(seq) >= PAD_BELOW:
+        return scan[mode, canonical, ascii=True](seq.unsafe_ptr(), windows, params, threads, len(seq))
+    var padded = List[UInt8](capacity=len(seq) + PADDING)
+    padded.extend(seq)
+    for _ in range(PADDING):
+        padded.append(UInt8(ord("N")))
+    return scan[mode, canonical, ascii=True](padded.unsafe_ptr(), windows, params, threads, len(padded))
 
 comptime MINIMIZERS = 0
 comptime CLOSED_SYNCMERS = 1
@@ -113,17 +131,17 @@ def _encode[n: Int](raw: SIMD[DType.uint8, n]) -> SIMD[DType.uint8, n]:
 @inline(.always)
 def _transpose[
     ascii: Bool
-](src: ImmPointer[UInt8, _], chunk: Int, dst: MutPointer[UInt8, _]):
+](src: ImmPointer[UInt8, _], lane_starts: SIMD[DType.int64, LANES], dst: MutPointer[UInt8, _]):
     """Writes the seed-table indices of `_TRANSPOSE` steps of `LANES` codes
     (ASCII bases when `ascii`), step-major, into `dst` (see `_store_indices`).
 
-    Lane `l` reads `src[l * chunk : l * chunk + 16]`; rounds of interleaves
+    Lane `l` reads `src[lane_starts[l] :][:16]`; rounds of interleaves
     at doubling element widths turn the lane vectors into step vectors.
     """
     comptime assert LANES == 8 or LANES == 16, "LANES must be 8 or 16"
     var v = List[_U8x16](capacity=LANES)
     comptime for l in range(LANES):
-        v.append(src.unsafe_load[width=16](l * chunk))
+        v.append(src.unsafe_load[width=16](Int(lane_starts[l])))
     var a0 = bitcast[DType.uint16, 16](v[0].interleave(v[1]))
     var a1 = bitcast[DType.uint16, 16](v[2].interleave(v[3]))
     var a2 = bitcast[DType.uint16, 16](v[4].interleave(v[5]))
@@ -372,7 +390,6 @@ def scan_segment[
         _scan_scalar[mode, canonical](codes, first, rest, params, out)
 
 
-@inline(.never)
 def _scan_lanes[
     mode: Int, canonical: Bool, ascii: Bool, small: Bool
 ](
@@ -382,6 +399,39 @@ def _scan_lanes[
     params: ScanParams,
     mut out: List[UInt32],
 ):
+    """Windows `[seg_start, seg_start + LANES * chunk)`, `chunk` per lane,
+    appended to `out` in order."""
+    var lane_ids = iota[DType.int64, LANES]()
+    var outs = List[List[UInt32]]()
+    _scan_lanes_core[mode, canonical, ascii, small, per_read=False](
+        codes,
+        lane_ids * Int64(chunk) + Int64(seg_start),
+        _U32V(UInt32(chunk)),
+        chunk,
+        params,
+        out,
+        outs,
+    )
+
+
+@inline(.never)
+def _scan_lanes_core[
+    mode: Int, canonical: Bool, ascii: Bool, small: Bool, per_read: Bool
+](
+    codes: ImmPointer[UInt8, _],
+    lane_starts: SIMD[DType.int64, LANES],
+    lane_windows: _U32V,
+    chunk: Int,
+    params: ScanParams,
+    mut out: List[UInt32],
+    mut outs: List[List[UInt32]],
+):
+    """The lanes' scan: lane `l` covers windows from base `lane_starts[l]`.
+
+    Without `per_read`, lanes are consecutive chunks of one sequence with
+    `chunk` windows each and their outputs go, in order, to `out`. With
+    `per_read`, lane `l` scans its own sequence (positions relative to it) with
+    `lane_windows[l] <= chunk` windows, and its outputs go to `outs[l]`."""
     var k = params.k
     var w = params.w
     var steps = chunk + k + w - 2
@@ -418,8 +468,12 @@ def _scan_lanes[
         kmer_mask=_U32V(UInt32.MAX if k >= 16 else (UInt32(1) << UInt32(2 * k)) - 1),
         rc_shift=_U32V(UInt32(2 * (k - 1))),
     )
-    var lane_ids = iota[DType.uint32, LANES]()
-    var first_kmer = _U32V(UInt32(seg_start)) + lane_ids * UInt32(chunk) - UInt32(k - 1)
+    # Position of each lane's first k-mer (relative to its read in a batch).
+    var first_kmer: _U32V
+    comptime if per_read:
+        first_kmer = _U32V(0) - UInt32(k - 1)
+    else:
+        first_kmer = lane_starts.cast[DType.uint32]() - UInt32(k - 1)
     var lanes = _Lanes(
         fh=_U32V(0),
         rh=_U32V(0),
@@ -452,14 +506,14 @@ def _scan_lanes[
     var batch_bits: UInt64 = 0
     var batch = 0
 
-    var src = codes.unsafe_offset(seg_start)
+    var src = codes
     var ri = 0
     var wi = 0
     var t = 0
     while t < steps:
         var round_len = min(_ROUND, steps - t)
         for r in range(0, round_len, _TRANSPOSE):
-            _transpose[ascii](src.unsafe_offset(t + r), chunk, tbuf.unsafe_offset(r * 4 * LANES))
+            _transpose[ascii](src.unsafe_offset(t + r), lane_starts, tbuf.unsafe_offset(r * 4 * LANES))
         var i = 0
         while i < round_len:
             var n = min(w - wi, round_len - i)
@@ -477,6 +531,10 @@ def _scan_lanes[
                         ring_p,
                         obuf.unsafe_offset(batch * LANES),
                     )
+                    comptime if per_read:
+                        # Lanes past their own sequence's windows emit nothing.
+                        var window = _U32V(UInt32(t + i - first_out))
+                        bits &= UInt32(pack_bits[_Bits](window.lt(lane_windows)))
                     batch_bits |= UInt64(bits) << UInt64(batch * LANES)
                     batch += 1
                     if batch == _BATCH:
@@ -508,18 +566,27 @@ def _scan_lanes[
         t += round_len
 
     _emit(batch_bits, obuf, lane_fill, lanes_out)
-    var produced = 0
-    for l in range(LANES):
-        produced += lane_fill[unsafe_offset=l] - l * chunk
-    out.reserve(len(out) + produced)
-    for l in range(LANES):
-        append_dedup(
-            out,
-            Span(
-                unsafe_ptr=lanes_out.unsafe_offset(l * chunk),
-                length=lane_fill[unsafe_offset=l] - l * chunk,
-            ),
-        )
+    comptime if per_read:
+        for l in range(LANES):
+            outs[l].extend(
+                Span(
+                    unsafe_ptr=lanes_out.unsafe_offset(l * chunk),
+                    length=lane_fill[unsafe_offset=l] - l * chunk,
+                )
+            )
+    else:
+        var produced = 0
+        for l in range(LANES):
+            produced += lane_fill[unsafe_offset=l] - l * chunk
+        out.reserve(len(out) + produced)
+        for l in range(LANES):
+            append_dedup(
+                out,
+                Span(
+                    unsafe_ptr=lanes_out.unsafe_offset(l * chunk),
+                    length=lane_fill[unsafe_offset=l] - l * chunk,
+                ),
+            )
     dealloc(tbuf_alloc^)
     dealloc(obuf_alloc^)
     dealloc(lanes_alloc^)
@@ -537,37 +604,59 @@ def _scan_scalar[
     base: Int = 0,
 ):
     """Windows `[first, first + windows)` one by one (the lanes' remainder);
-    `codes[i]` is the base at position `base + i`."""
+    `codes[i]` is the base at position `base + i`. Each k-mer is hashed once,
+    then every window takes the minimum of its w keys."""
     var k = params.k
     var w = params.w
+    var kmers = windows + w - 1
+    var keys = List[UInt64](capacity=kmers)
+    # Roll ntHash over the bases (as the lanes do): bases before `first`
+    # contribute nothing, like the lanes' empty rings.
+    var fh: UInt32 = 0
+    var rh: UInt32 = 0
+    var run = 0
+    for i in range(first, first + kmers + k - 1):
+        var c = codes[unsafe_offset=i]
+        var c_out = codes[unsafe_offset=i - k] if i - k >= first else N_CODE
+        fh = rotl32(fh, ROTATION) ^ rotl32(seed(c_out), ROTATION * k) ^ seed(c)
+        rh = (
+            rotr32(rh, ROTATION)
+            ^ rotr32(seed(complement(c_out)), ROTATION)
+            ^ rotl32(seed(complement(c)), ROTATION * (k - 1))
+        )
+        run = run + 1 if c < N_CODE else 0
+        var start = i - k + 1
+        if start < first:
+            continue
+        if run < k:
+            keys.append(UInt64.MAX)
+            continue
+        var h: UInt32
+        if k <= SMALL_K:
+            h = seed_hash(codes.unsafe_offset(start), k, canonical)
+        else:
+            h = fh + rh if canonical else fh
+        keys.append((UInt64(order_key(h, w)) << 32) | UInt64(start))
     var tail = List[UInt32]()
+    var span_run = 0
+    for i in range(first, first + params.span - 1):
+        span_run = span_run + 1 if codes[unsafe_offset=i] < N_CODE else 0
     for j in range(first, first + windows):
         var best = UInt64.MAX
-        for i in range(j, j + w):
-            var ok = True
-            for b in range(i, i + k):
-                if codes[unsafe_offset=b] >= N_CODE:
-                    ok = False
-            if not ok:
-                continue
-            var p = codes.unsafe_offset(i)
-            var h = seed_hash(p, k, canonical)
-            best = min(best, (UInt64(order_key(h, w)) << 32) | UInt64(i))
+        for i in range(j - first, j - first + w):
+            best = min(best, keys[i])
         var minpos = Int(best & 0xFFFFFFFF)
         comptime if mode == MINIMIZERS:
             if best != UInt64.MAX:
                 tail.append(UInt32(base + minpos))
         else:
-            var span_ok = True
-            for b in range(j, j + params.span):
-                if codes[unsafe_offset=b] >= N_CODE:
-                    span_ok = False
+            span_run = span_run + 1 if codes[unsafe_offset=j + params.span - 1] < N_CODE else 0
             var hit: Bool
             comptime if mode == CLOSED_SYNCMERS:
                 hit = minpos == j or minpos == j + w - 1
             else:
                 hit = minpos == j + params.offset
-            if span_ok and hit:
+            if span_run >= params.span and hit:
                 tail.append(UInt32(base + j))
     var deduped = List[UInt32]()
     for v in tail:
@@ -696,3 +785,54 @@ def _scan[
     for r in results:
         append_dedup(out, Span(r))
     return out^
+
+
+def scan_reads(
+    mode: Int,
+    canonical: Bool,
+    codes: ImmPointer[UInt8, _],
+    stride: Int,
+    windows: _U32V,
+    chunk: Int,
+    params: ScanParams,
+    mut outs: List[List[UInt32]],
+):
+    """Scans `LANES` ASCII reads at once, read `l` at `codes[l * stride]` with
+    `windows[l] <= chunk` windows (each read followed by enough `N` padding);
+    lane `l`'s outputs, relative to its read, are appended to `outs[l]`."""
+    if mode == MINIMIZERS:
+        if canonical:
+            _scan_reads[MINIMIZERS, True](codes, stride, windows, chunk, params, outs)
+        else:
+            _scan_reads[MINIMIZERS, False](codes, stride, windows, chunk, params, outs)
+    elif mode == CLOSED_SYNCMERS:
+        if canonical:
+            _scan_reads[CLOSED_SYNCMERS, True](codes, stride, windows, chunk, params, outs)
+        else:
+            _scan_reads[CLOSED_SYNCMERS, False](codes, stride, windows, chunk, params, outs)
+    elif canonical:
+        _scan_reads[OPEN_SYNCMERS, True](codes, stride, windows, chunk, params, outs)
+    else:
+        _scan_reads[OPEN_SYNCMERS, False](codes, stride, windows, chunk, params, outs)
+
+
+def _scan_reads[
+    mode: Int, canonical: Bool
+](
+    codes: ImmPointer[UInt8, _],
+    stride: Int,
+    windows: _U32V,
+    chunk: Int,
+    params: ScanParams,
+    mut outs: List[List[UInt32]],
+):
+    var starts = iota[DType.int64, LANES]() * Int64(stride)
+    var unused = List[UInt32]()
+    if params.k <= SMALL_K:
+        _scan_lanes_core[mode, canonical, True, True, per_read=True](
+            codes, starts, windows, chunk, params, unused, outs
+        )
+    else:
+        _scan_lanes_core[mode, canonical, True, False, per_read=True](
+            codes, starts, windows, chunk, params, unused, outs
+        )

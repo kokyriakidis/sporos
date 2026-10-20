@@ -15,6 +15,7 @@ from sporos.window import (
     ScanParams,
     order_key,
     scan,
+    scan_ascii,
 )
 
 
@@ -68,8 +69,8 @@ def minimizer_positions(
         return _short_minimizer(codes.unsafe_ptr(), kmers, k, w, canonical)
     var params = ScanParams(k=k, w=w, span=k, offset=0)
     if canonical:
-        return scan[MINIMIZERS, True, ascii=True](seq.unsafe_ptr(), kmers - w + 1, params, threads, len(seq))
-    return scan[MINIMIZERS, False, ascii=True](seq.unsafe_ptr(), kmers - w + 1, params, threads, len(seq))
+        return scan_ascii[MINIMIZERS, True](seq, kmers - w + 1, params, threads)
+    return scan_ascii[MINIMIZERS, False](seq, kmers - w + 1, params, threads)
 
 
 def _short_minimizer(

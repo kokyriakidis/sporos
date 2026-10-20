@@ -14,6 +14,7 @@ from std.math import ceildiv
 from std.sys import argv, stderr
 from std.time import perf_counter_ns
 
+from sporos.batch import SeedBatch, minimizers_batch, syncmers_batch
 from sporos.fasta import FastaRecords, read_fasta
 from sporos.index import ALL_KMERS, MINIMIZER_SEEDS, SYNCMER_SEEDS, SeedHit, SeedIndex
 from sporos.mems import Mem, MemIndex, MemParams, filter_mums, find_mems
@@ -22,6 +23,7 @@ from sporos.output import OutputBuffer, put_padded
 from sporos.parallel import ParallelTask, default_threads, parallel_for
 from sporos.syncmers import syncmer_positions
 from sporos.text import SeqText
+from sporos.window import LANES
 
 comptime USAGE = """usage:
   sporos seeds -k K -w W [--syncmers | --all-kmers] [--query-kmers] [--max-occ N | --keep F] [-t threads]
@@ -461,16 +463,29 @@ def run_seeds(command: String, args: List[String]) raises:
     var records = read_fasta(paths[0], threads)
     var read_seconds = _seconds(start)
     start = perf_counter_ns()
+    if command == "syncmers" and s == 0:
+        raise Error("syncmers need -s")
+    # Many records (reads): scan them in batches, one read per SIMD lane.
+    var batched = len(records) >= 4 * LANES
+    var batch = SeedBatch(List[UInt32](), [0])
+    if batched:
+        var spans = List[Span[UInt8, origin_of(records.data)]](capacity=len(records))
+        for r in range(len(records)):
+            spans.append(records.seq(r))
+        if command == "minimizers":
+            batch = minimizers_batch(spans, k, w, canonical, threads)
+        else:
+            batch = syncmers_batch(spans, k, s, canonical, open_offset, threads)
     var seeds = 0
     var out = OutputBuffer()
     for r in range(len(records)):
         var seq = records.seq(r)
         var positions: List[UInt32]
-        if command == "minimizers":
+        if batched:
+            positions = List[UInt32](batch.seeds(r))
+        elif command == "minimizers":
             positions = minimizer_positions(seq, k, w, canonical, threads)
         else:
-            if s == 0:
-                raise Error("syncmers need -s")
             positions = syncmer_positions(seq, k, s, canonical, open_offset, threads)
         seeds += len(positions)
         if count_only:

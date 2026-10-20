@@ -13,6 +13,7 @@ from sporos.window import (
     PADDING,
     ScanParams,
     scan,
+    scan_ascii,
 )
 
 
@@ -69,16 +70,14 @@ def syncmer_positions(
     if kmers <= 0:
         return List[UInt32]()
     var w = k - s + 1
-    var p = seq.unsafe_ptr()
-    var n = len(seq)
     if case .Some(t) = open_offset:
         if t < 0 or t > k - s:
             raise Error(t"open syncmer offset must be in [0, {k - s}], got {t}")
         var params = ScanParams(k=s, w=w, span=k, offset=t)
         if canonical:
-            return scan[OPEN_SYNCMERS, True, ascii=True](p, kmers, params, threads, n)
-        return scan[OPEN_SYNCMERS, False, ascii=True](p, kmers, params, threads, n)
+            return scan_ascii[OPEN_SYNCMERS, True](seq, kmers, params, threads)
+        return scan_ascii[OPEN_SYNCMERS, False](seq, kmers, params, threads)
     var params = ScanParams(k=s, w=w, span=k, offset=0)
     if canonical:
-        return scan[CLOSED_SYNCMERS, True, ascii=True](p, kmers, params, threads, n)
-    return scan[CLOSED_SYNCMERS, False, ascii=True](p, kmers, params, threads, n)
+        return scan_ascii[CLOSED_SYNCMERS, True](seq, kmers, params, threads)
+    return scan_ascii[CLOSED_SYNCMERS, False](seq, kmers, params, threads)
