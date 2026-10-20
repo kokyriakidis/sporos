@@ -136,3 +136,16 @@ def naive_count(text: List[UInt8], pattern_start: Int, length: Int, source: List
         if ok:
             count += 1
     return count
+
+
+def canonical_kmer_of(codes: List[UInt8], start: Int, k: Int) -> Tuple[UInt64, Bool]:
+    """(canonical 2-bit k-mer, reverse) with base i in bits 2i, as SeedIndex."""
+    var fwd = UInt64(0)
+    var rc = UInt64(0)
+    for i in range(k):
+        var c = UInt64(codes[start + i])
+        fwd |= c << UInt64(2 * i)
+        rc |= (3 - c) << UInt64(2 * (k - 1 - i))
+    if rc < fwd:
+        return (rc, True)
+    return (fwd, False)
