@@ -93,8 +93,8 @@ def run_mem(args: List[String]) raises:
         raise Error(USAGE)
 
     var start = perf_counter_ns()
-    var reference = read_fasta(paths[0])
-    var query = read_fasta(paths[1])
+    var reference = read_fasta(paths[0], threads)
+    var query = read_fasta(paths[1], threads)
     _log(verbose, String(t"read inputs: {_seconds(start)} s"))
 
     start = perf_counter_ns()
@@ -458,7 +458,7 @@ def run_seeds(command: String, args: List[String]) raises:
     if len(paths) != 1:
         raise Error(USAGE)
     var start = perf_counter_ns()
-    var records = read_fasta(paths[0])
+    var records = read_fasta(paths[0], threads)
     var read_seconds = _seconds(start)
     start = perf_counter_ns()
     var seeds = 0
@@ -605,8 +605,8 @@ def run_seed_index(args: List[String]) raises:
         i += 1
     if len(paths) != 2:
         raise Error(USAGE)
-    var reference = read_fasta(paths[0])
-    var reads = read_fasta(paths[1])
+    var reference = read_fasta(paths[0], threads)
+    var reads = read_fasta(paths[1], threads)
     var seqs = List[Span[UInt8, origin_of(reference.data)]]()
     for r in range(len(reference)):
         seqs.append(reference.seq(r))

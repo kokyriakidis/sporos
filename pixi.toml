@@ -9,6 +9,7 @@ version = "0.1.0"
 # Latest Mojo (nightly channel): the vendored Modular skills track the latest compiler.
 [dependencies]
 mojo = ">=1.2.0.dev2026102005,<2"
+libdeflate = ">=1.26,<2"
 
 [tasks]
 # `mojo build -o` writes into a directory but will not create one.
