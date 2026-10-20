@@ -17,10 +17,10 @@ of the same query sequence.
 
 from std.bit import count_leading_zeros, count_trailing_zeros
 from std.math import ceildiv, gcd
-from std.memory import Layout, alloc, dealloc
 from std.sys.intrinsics import PrefetchOptions, prefetch
 
 from sporos.parallel import ParallelTask, parallel_for
+from sporos.table import AnchorSource, HashTable
 from sporos.text import SeqText
 
 
@@ -151,195 +151,51 @@ def _kmer_mask(k: Int) -> UInt64:
     return UInt64.MAX if k == 32 else (UInt64(1) << UInt64(2 * k)) - 1
 
 
-struct _AnchorCounts(ParallelTask):
-    """Counts the indexable reference anchors of each chunk."""
+struct _SampledAnchors(AnchorSource):
+    """Every `step`-th reference K-mer without masked bases, keyed by its
+    `mix64` hash; entries hold the hash's low 32 bits above the position."""
 
     var text: ImmPointer[SeqText, ImmUntrackedOrigin]
-    var counts: MutPointer[Int, MutUntrackedOrigin]
     var n: Int
     var k: Int
     var step: Int
 
-    def __init__(
-        out self,
-        text: ImmPointer[SeqText, ImmUntrackedOrigin],
-        counts: MutPointer[Int, MutUntrackedOrigin],
-        n: Int,
-        k: Int,
-        step: Int,
-    ):
+    def __init__(out self, text: ImmPointer[SeqText, ImmUntrackedOrigin], k: Int, step: Int):
         self.text = text
-        self.counts = counts
-        self.n = n
+        self.n = len(text[])
         self.k = k
         self.step = step
 
-    def run(self, index: Int):
-        var first = index * _BUILD_CHUNK
-        var last = min(self.n - self.k + 1, first + _BUILD_CHUNK)
-        var kmask = _kmer_mask(self.k)
-        var count = 0
-        for start in range(_next_multiple(first, self.step), last, self.step):
-            count += Int(self.text[].mask(start) & kmask == 0)
-        self.counts[unsafe_offset=index] = count
+    def chunks(self) -> Int:
+        return max(1, ceildiv(max(0, self.n - self.k + 1), _BUILD_CHUNK))
 
-
-struct _AnchorFill(ParallelTask):
-    """Writes each chunk's anchors (bucket, fingerprint << 32 | position) and
-    counts them per bucket part (the bucket's top `part_bits` bits)."""
-
-    var text: ImmPointer[SeqText, ImmUntrackedOrigin]
-    var firsts: ImmPointer[Int, ImmUntrackedOrigin]
-    var buckets: MutPointer[UInt32, MutUntrackedOrigin]
-    var anchors: MutPointer[UInt64, MutUntrackedOrigin]
-    var histogram: MutPointer[Int, MutUntrackedOrigin]
-    var n: Int
-    var k: Int
-    var step: Int
-    var shift: UInt64
-    var parts: Int
-    var part_shift: UInt32
-
-    def __init__(
-        out self,
-        text: ImmPointer[SeqText, ImmUntrackedOrigin],
-        firsts: ImmPointer[Int, ImmUntrackedOrigin],
-        buckets: MutPointer[UInt32, MutUntrackedOrigin],
-        anchors: MutPointer[UInt64, MutUntrackedOrigin],
-        histogram: MutPointer[Int, MutUntrackedOrigin],
-        n: Int,
-        k: Int,
-        step: Int,
-        shift: UInt64,
-        parts: Int,
-        part_shift: UInt32,
-    ):
-        self.text = text
-        self.firsts = firsts
-        self.buckets = buckets
-        self.anchors = anchors
-        self.histogram = histogram
-        self.n = n
-        self.k = k
-        self.step = step
-        self.shift = shift
-        self.parts = parts
-        self.part_shift = part_shift
-
-    def run(self, index: Int):
-        var first = index * _BUILD_CHUNK
+    def count(self, chunk: Int) -> Int:
+        var first = chunk * _BUILD_CHUNK
         var last = min(self.n - self.k + 1, first + _BUILD_CHUNK)
         var mask = _kmer_mask(self.k)
-        var slot = self.firsts[unsafe_offset=index]
-        var histogram = self.histogram.unsafe_offset(index * self.parts)
-        for p in range(self.parts):
-            histogram[unsafe_offset=p] = 0
+        var count = 0
+        for start in range(_next_multiple(first, self.step), last, self.step):
+            count += Int(self.text[].mask(start) & mask == 0)
+        return count
+
+    def fill(
+        self,
+        chunk: Int,
+        hashes: MutPointer[UInt64, MutUntrackedOrigin],
+        entries: MutPointer[UInt64, MutUntrackedOrigin],
+    ):
+        var first = chunk * _BUILD_CHUNK
+        var last = min(self.n - self.k + 1, first + _BUILD_CHUNK)
+        var mask = _kmer_mask(self.k)
         ref text = self.text[]
+        var slot = 0
         for start in range(_next_multiple(first, self.step), last, self.step):
             if text.mask(start) & mask != 0:
                 continue
             var h = mix64(text.window(start) & mask)
-            var bucket = UInt32(h >> self.shift)
-            self.buckets[unsafe_offset=slot] = bucket
-            self.anchors[unsafe_offset=slot] = (h << 32) | UInt64(start)
-            histogram[unsafe_offset=Int(bucket >> self.part_shift)] += 1
+            hashes[unsafe_offset=slot] = h
+            entries[unsafe_offset=slot] = (h << 32) | UInt64(start)
             slot += 1
-
-
-struct _PartScatter(ParallelTask):
-    """Moves one chunk's anchors to their parts (part-major, position order
-    kept within each part); `cursors` holds the chunk's start in each part."""
-
-    var firsts: ImmPointer[Int, ImmUntrackedOrigin]
-    var buckets: ImmPointer[UInt32, ImmUntrackedOrigin]
-    var anchors: ImmPointer[UInt64, ImmUntrackedOrigin]
-    var cursors: MutPointer[Int, MutUntrackedOrigin]
-    var part_buckets: MutPointer[UInt32, MutUntrackedOrigin]
-    var part_anchors: MutPointer[UInt64, MutUntrackedOrigin]
-    var parts: Int
-    var part_shift: UInt32
-
-    def __init__(
-        out self,
-        firsts: ImmPointer[Int, ImmUntrackedOrigin],
-        buckets: ImmPointer[UInt32, ImmUntrackedOrigin],
-        anchors: ImmPointer[UInt64, ImmUntrackedOrigin],
-        cursors: MutPointer[Int, MutUntrackedOrigin],
-        part_buckets: MutPointer[UInt32, MutUntrackedOrigin],
-        part_anchors: MutPointer[UInt64, MutUntrackedOrigin],
-        parts: Int,
-        part_shift: UInt32,
-    ):
-        self.firsts = firsts
-        self.buckets = buckets
-        self.anchors = anchors
-        self.cursors = cursors
-        self.part_buckets = part_buckets
-        self.part_anchors = part_anchors
-        self.parts = parts
-        self.part_shift = part_shift
-
-    def run(self, index: Int):
-        var cursors = self.cursors.unsafe_offset(index * self.parts)
-        for i in range(self.firsts[unsafe_offset=index], self.firsts[unsafe_offset=index + 1]):
-            var bucket = self.buckets[unsafe_offset=i]
-            var p = Int(bucket >> self.part_shift)
-            var slot = cursors[unsafe_offset=p]
-            self.part_buckets[unsafe_offset=slot] = bucket
-            self.part_anchors[unsafe_offset=slot] = self.anchors[unsafe_offset=i]
-            cursors[unsafe_offset=p] = slot + 1
-
-
-struct _PartSort(ParallelTask):
-    """Counting sort of one part's anchors by bucket into the final table."""
-
-    var part_starts: ImmPointer[Int, ImmUntrackedOrigin]
-    var part_buckets: ImmPointer[UInt32, ImmUntrackedOrigin]
-    var part_anchors: ImmPointer[UInt64, ImmUntrackedOrigin]
-    var offsets: MutPointer[UInt32, MutUntrackedOrigin]
-    var entries: MutPointer[UInt64, MutUntrackedOrigin]
-    var buckets_per_part: Int
-
-    def __init__(
-        out self,
-        part_starts: ImmPointer[Int, ImmUntrackedOrigin],
-        part_buckets: ImmPointer[UInt32, ImmUntrackedOrigin],
-        part_anchors: ImmPointer[UInt64, ImmUntrackedOrigin],
-        offsets: MutPointer[UInt32, MutUntrackedOrigin],
-        entries: MutPointer[UInt64, MutUntrackedOrigin],
-        buckets_per_part: Int,
-    ):
-        self.part_starts = part_starts
-        self.part_buckets = part_buckets
-        self.part_anchors = part_anchors
-        self.offsets = offsets
-        self.entries = entries
-        self.buckets_per_part = buckets_per_part
-
-    def run(self, index: Int):
-        var lo = self.part_starts[unsafe_offset=index]
-        var hi = self.part_starts[unsafe_offset=index + 1]
-        var first_bucket = index * self.buckets_per_part
-        var offsets = self.offsets.unsafe_offset(first_bucket)
-        for b in range(self.buckets_per_part):
-            offsets[unsafe_offset=b] = 0
-        for i in range(lo, hi):
-            offsets[unsafe_offset=Int(self.part_buckets[unsafe_offset=i]) - first_bucket] += 1
-        var at = UInt32(lo)
-        for b in range(self.buckets_per_part):
-            var count = offsets[unsafe_offset=b]
-            offsets[unsafe_offset=b] = at
-            at += count
-        # offsets[b] advances to the end of bucket b while scattering, which
-        # is the start of bucket b + 1; shift back afterwards.
-        for i in range(lo, hi):
-            var b = Int(self.part_buckets[unsafe_offset=i]) - first_bucket
-            var slot = offsets[unsafe_offset=b]
-            self.entries[unsafe_offset=Int(slot)] = self.part_anchors[unsafe_offset=i]
-            offsets[unsafe_offset=b] = slot + 1
-        for b in reversed(range(1, self.buckets_per_part)):
-            offsets[unsafe_offset=b] = offsets[unsafe_offset=b - 1]
-        offsets[unsafe_offset=0] = UInt32(lo)
 
 
 struct MemIndex(Movable):
@@ -350,9 +206,7 @@ struct MemIndex(Movable):
     """
 
     var params: MemParams
-    var offsets: List[UInt32]
-    var entries: List[UInt64]
-    var shift: UInt64
+    var table: HashTable
 
     def __init__(
         out self, reference: SeqText, params: MemParams, threads: Int = 1
@@ -361,87 +215,10 @@ struct MemIndex(Movable):
         if len(reference) >= Int(UInt32.MAX):
             raise Error("reference text must be shorter than 2^32")
         self.params = params
-        var k = params.k
-        var step = params.ref_step
-        var n = len(reference)
-        var text = Pointer(to=reference).unsafe_origin_cast[ImmUntrackedOrigin]()
-
-        # Anchors per chunk, then each chunk's anchors at its offset. The
-        # tasks reach these buffers through untracked pointers, so they are
-        # explicit allocations freed at the end.
-        var chunks = max(1, ceildiv(max(0, n - k + 1), _BUILD_CHUNK))
-        var firsts_alloc = alloc(Layout[Int](length=chunks + 1))
-        var firsts = firsts_alloc.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
-        for c in range(chunks + 1):
-            firsts[unsafe_offset=c] = 0
-        var count_task = _AnchorCounts(text, firsts.unsafe_offset(1), n, k, step)
-        parallel_for(count_task, chunks, threads)
-        for c in range(chunks):
-            firsts[unsafe_offset=c + 1] += firsts[unsafe_offset=c]
-        var total = firsts[unsafe_offset=chunks]
-
-        var bits = 1
-        while (1 << bits) < max(1, total):
-            bits += 1
-        self.shift = UInt64(64 - bits)
-        var num_buckets = 1 << bits
-
-        # Radix by the top bits of the bucket: fill chunks while counting
-        # their parts, scatter to part-major order, then sort each part.
-        var part_bits = min(8, bits)
-        var parts = 1 << part_bits
-        var part_shift = UInt32(bits - part_bits)
-        var buckets_alloc = alloc(Layout[UInt32](length=max(1, total)))
-        var anchors_alloc = alloc(Layout[UInt64](length=max(1, total)))
-        var histogram_alloc = alloc(Layout[Int](length=chunks * parts))
-        var buckets = buckets_alloc.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
-        var anchors = anchors_alloc.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
-        var histogram = histogram_alloc.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
-        var fill_task = _AnchorFill(
-            text, firsts, buckets, anchors, histogram, n, k, step, self.shift, parts, part_shift
+        var source = _SampledAnchors(
+            Pointer(to=reference).unsafe_origin_cast[ImmUntrackedOrigin](), params.k, params.ref_step
         )
-        parallel_for(fill_task, chunks, threads)
-
-        # Part-major start of every (chunk, part) cell, in place.
-        var starts_alloc = alloc(Layout[Int](length=parts + 1))
-        var part_starts = starts_alloc.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
-        var at = 0
-        for p in range(parts):
-            part_starts[unsafe_offset=p] = at
-            for c in range(chunks):
-                var cell = c * parts + p
-                var count = histogram[unsafe_offset=cell]
-                histogram[unsafe_offset=cell] = at
-                at += count
-        part_starts[unsafe_offset=parts] = at
-        var part_buckets_alloc = alloc(Layout[UInt32](length=max(1, total)))
-        var part_anchors_alloc = alloc(Layout[UInt64](length=max(1, total)))
-        var part_buckets = part_buckets_alloc.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
-        var part_anchors = part_anchors_alloc.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
-        var scatter_task = _PartScatter(
-            firsts, buckets, anchors, histogram, part_buckets, part_anchors, parts, part_shift
-        )
-        parallel_for(scatter_task, chunks, threads)
-        dealloc(buckets_alloc^)
-        dealloc(anchors_alloc^)
-        dealloc(histogram_alloc^)
-
-        self.offsets = List[UInt32](unsafe_uninit_length=num_buckets + 1)
-        self.entries = List[UInt64](unsafe_uninit_length=total)
-        var sort_task = _PartSort(
-            part_starts,
-            part_buckets,
-            part_anchors,
-            self.offsets.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
-            self.entries.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
-            num_buckets // parts,
-        )
-        parallel_for(sort_task, parts, threads)
-        self.offsets[num_buckets] = UInt32(total)
-        dealloc(firsts_alloc^)
-        dealloc(starts_alloc^)
-        dealloc(part_buckets_alloc^)
-        dealloc(part_anchors_alloc^)
+        self.table = HashTable(source, threads)
 
     def find(
         self,
@@ -455,8 +232,8 @@ struct MemIndex(Movable):
         var k = self.params.k
         var qstep = self.params.query_step
         var mask = _kmer_mask(k)
-        var off = self.offsets.unsafe_ptr()
-        var ent = self.entries.unsafe_ptr()
+        var off = self.table.offsets.unsafe_ptr()
+        var ent = self.table.entries.unsafe_ptr()
         # Software pipeline over anchors: anchor n is hashed (its bucket bounds
         # prefetched), anchor n - _LAG has its bounds read (entries prefetched),
         # and anchor n - 2 * _LAG is matched.
@@ -472,7 +249,7 @@ struct MemIndex(Movable):
             var slot = n & (_RING - 1)
             positions[slot] = j
             hashes[slot] = h
-            prefetch[_AHEAD](off.unsafe_offset(Int(h >> self.shift)))
+            prefetch[_AHEAD](off.unsafe_offset(Int(h >> self.table.shift)))
             if n >= _LAG:
                 self._bounds(n - _LAG, hashes, lows, highs)
             if n >= 2 * _LAG:
@@ -492,11 +269,11 @@ struct MemIndex(Movable):
         mut highs: Array[UInt32, _RING],
     ):
         var slot = n & (_RING - 1)
-        var b = Int(hashes[slot] >> self.shift)
-        var off = self.offsets.unsafe_ptr()
+        var b = Int(hashes[slot] >> self.table.shift)
+        var off = self.table.offsets.unsafe_ptr()
         lows[slot] = off[unsafe_offset=b]
         highs[slot] = off[unsafe_offset=b + 1]
-        prefetch[_AHEAD](self.entries.unsafe_ptr().unsafe_offset(Int(lows[slot])))
+        prefetch[_AHEAD](self.table.entries.unsafe_ptr().unsafe_offset(Int(lows[slot])))
 
     @inline(.always)
     def _match(
@@ -513,7 +290,7 @@ struct MemIndex(Movable):
         var k = self.params.k
         var period = self.params.ref_step * self.params.query_step
         var min_len = self.params.min_len
-        var ent = self.entries.unsafe_ptr()
+        var ent = self.table.entries.unsafe_ptr()
         var j = positions[slot]
         var fp = hashes[slot] << 32
         for e in range(Int(lows[slot]), Int(highs[slot])):

@@ -115,7 +115,7 @@ def run_mem(args: List[String]) raises:
     _log(
         verbose,
         String(
-            t"index: {_seconds(start)} s ({len(index.entries)} anchors, K={params.k}"
+            t"index: {_seconds(start)} s ({len(index.table)} anchors, K={params.k}"
             t" k1={params.ref_step} k2={params.query_step})"
         ),
     )
