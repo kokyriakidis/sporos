@@ -134,8 +134,10 @@ def match_backward(a: SeqText, i: Int, b: SeqText, j: Int, limit: Int) -> Int:
 comptime _AHEAD = PrefetchOptions().for_read().high_locality()
 comptime _BUILD_CHUNK = 1 << 20
 """Reference positions per anchor-collection task."""
-comptime _PROBE_BATCH = 32
-"""Query anchors hashed (and their buckets prefetched) before any is probed."""
+comptime _LAG = 16
+"""Anchors between pipeline stages (hash -> bucket bounds -> match)."""
+comptime _RING = 64
+"""Pipeline ring size (a power of two above 2 * _LAG)."""
 
 
 @inline(.always)
@@ -453,65 +455,82 @@ struct MemIndex(Movable):
         var k = self.params.k
         var qstep = self.params.query_step
         var mask = _kmer_mask(k)
-        var batch_pos = Array[Int, _PROBE_BATCH](fill=0)
-        var batch_hash = Array[UInt64, _PROBE_BATCH](fill=0)
-        var batched = 0
+        var off = self.offsets.unsafe_ptr()
+        var ent = self.entries.unsafe_ptr()
+        # Software pipeline over anchors: anchor n is hashed (its bucket bounds
+        # prefetched), anchor n - _LAG has its bounds read (entries prefetched),
+        # and anchor n - 2 * _LAG is matched.
+        var positions = Array[Int, _RING](fill=0)
+        var hashes = Array[UInt64, _RING](fill=0)
+        var lows = Array[UInt32, _RING](fill=0)
+        var highs = Array[UInt32, _RING](fill=0)
+        var n = 0
         for j in range(_next_multiple(begin, qstep), min(end, len(query) - k + 1), qstep):
             if query.mask(j) & mask != 0:
                 continue
             var h = mix64(query.window(j) & mask)
-            prefetch[_AHEAD](self.offsets.unsafe_ptr().unsafe_offset(Int(h >> self.shift)))
-            batch_pos[batched] = j
-            batch_hash[batched] = h
-            batched += 1
-            if batched == _PROBE_BATCH:
-                self._probe_batch(reference, query, batch_pos, batch_hash, batched, out)
-                batched = 0
-        self._probe_batch(reference, query, batch_pos, batch_hash, batched, out)
+            var slot = n & (_RING - 1)
+            positions[slot] = j
+            hashes[slot] = h
+            prefetch[_AHEAD](off.unsafe_offset(Int(h >> self.shift)))
+            if n >= _LAG:
+                self._bounds(n - _LAG, hashes, lows, highs)
+            if n >= 2 * _LAG:
+                self._match((n - 2 * _LAG) & (_RING - 1), positions, hashes, lows, highs, reference, query, out)
+            n += 1
+        for m in range(max(0, n - _LAG), n):
+            self._bounds(m, hashes, lows, highs)
+        for m in range(max(0, n - 2 * _LAG), n):
+            self._match(m & (_RING - 1), positions, hashes, lows, highs, reference, query, out)
 
     @inline(.always)
-    def _probe_batch(
+    def _bounds(
         self,
+        n: Int,
+        hashes: Array[UInt64, _RING],
+        mut lows: Array[UInt32, _RING],
+        mut highs: Array[UInt32, _RING],
+    ):
+        var slot = n & (_RING - 1)
+        var b = Int(hashes[slot] >> self.shift)
+        var off = self.offsets.unsafe_ptr()
+        lows[slot] = off[unsafe_offset=b]
+        highs[slot] = off[unsafe_offset=b + 1]
+        prefetch[_AHEAD](self.entries.unsafe_ptr().unsafe_offset(Int(lows[slot])))
+
+    @inline(.always)
+    def _match(
+        self,
+        slot: Int,
+        positions: Array[Int, _RING],
+        hashes: Array[UInt64, _RING],
+        lows: Array[UInt32, _RING],
+        highs: Array[UInt32, _RING],
         reference: SeqText,
         query: SeqText,
-        positions: Array[Int, _PROBE_BATCH],
-        hashes: Array[UInt64, _PROBE_BATCH],
-        count: Int,
         mut out: List[Mem],
     ):
-        """Probes a batch: bucket bounds (prefetching entries), then matches."""
-        var off = self.offsets.unsafe_ptr()
-        var ent = self.entries.unsafe_ptr()
-        var lows = Array[UInt32, _PROBE_BATCH](fill=0)
-        var highs = Array[UInt32, _PROBE_BATCH](fill=0)
-        for a in range(count):
-            var b = Int(hashes[a] >> self.shift)
-            lows[a] = off[unsafe_offset=b]
-            highs[a] = off[unsafe_offset=b + 1]
-            prefetch[_AHEAD](ent.unsafe_offset(Int(lows[a])))
         var k = self.params.k
         var period = self.params.ref_step * self.params.query_step
         var min_len = self.params.min_len
-        for a in range(count):
-            var j = positions[a]
-            var fp = hashes[a] << 32
-            for e in range(Int(lows[a]), Int(highs[a])):
-                var entry = ent[unsafe_offset=e]
-                if (entry ^ fp) >> 32 != 0:
-                    continue
-                var r = Int(entry & 0xFFFFFFFF)
-                # Anchors of one MEM sit `period` apart on its diagonal, so
-                # this anchor is the MEM's first iff the match does not reach
-                # `period` bases to the left: stop looking there.
-                var left = match_backward(reference, r, query, j, period)
-                if left >= period:
-                    continue
-                var right = match_forward(reference, r, query, j)
-                if right < k or left + right < min_len:
-                    continue
-                out.append(
-                    Mem(UInt32(r - left), UInt32(j - left), UInt32(left + right))
-                )
+        var ent = self.entries.unsafe_ptr()
+        var j = positions[slot]
+        var fp = hashes[slot] << 32
+        for e in range(Int(lows[slot]), Int(highs[slot])):
+            var entry = ent[unsafe_offset=e]
+            if (entry ^ fp) >> 32 != 0:
+                continue
+            var r = Int(entry & 0xFFFFFFFF)
+            # Anchors of one MEM sit `period` apart on its diagonal, so this
+            # anchor is the MEM's first iff the match does not reach `period`
+            # bases to the left: stop looking there.
+            var left = match_backward(reference, r, query, j, period)
+            if left >= period:
+                continue
+            var right = match_forward(reference, r, query, j)
+            if right < k or left + right < min_len:
+                continue
+            out.append(Mem(UInt32(r - left), UInt32(j - left), UInt32(left + right)))
 
 
 struct _FindTask(ParallelTask):
