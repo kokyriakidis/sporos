@@ -228,9 +228,9 @@ def sporos_index_matches(
     var kept: List[Mem]
     match Int(mode):
         case == MODE_MUM:
-            kept = filter_mums(mems, text)
+            kept = filter_mums(mems, text, threads=thread_count(threads))
         case == MODE_MUMREFERENCE:
-            kept = filter_mums(mems, text, unique_in_query=False)
+            kept = filter_mums(mems, text, unique_in_query=False, threads=thread_count(threads))
         case _:
             kept = mems^
     var matches = List[Match](capacity=len(kept))

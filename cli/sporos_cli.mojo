@@ -307,7 +307,7 @@ def _report(
     if mode == "maxmatch":
         hits = mems^
     elif mode == "mum":
-        hits = filter_mums(mems, qtext)
+        hits = filter_mums(mems, qtext, threads=threads)
 
         # MUMmer prints -mum matches in reference order.
         def by_ref(a: Mem, b: Mem) -> Bool:
@@ -315,7 +315,7 @@ def _report(
 
         sort(Span(hits), by_ref)
     else:
-        hits = filter_mums(mems, qtext, unique_in_query=False)
+        hits = filter_mums(mems, qtext, unique_in_query=False, threads=threads)
     out.write("> ")
     out.write(name)
     if reverse:

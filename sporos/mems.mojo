@@ -20,6 +20,7 @@ from std.math import ceildiv, gcd
 from std.sys.intrinsics import PrefetchOptions, prefetch
 
 from sporos.parallel import ParallelTask, parallel_for
+from sporos.sort import parallel_sort
 from sporos.table import AnchorSource, HashTable
 from sporos.text import SeqText
 
@@ -360,14 +361,14 @@ def find_mems(index: MemIndex, reference: SeqText, query: SeqText, threads: Int 
     return out^
 
 
-def filter_mums(mems: List[Mem], query: SeqText, unique_in_query: Bool = True) -> List[Mem]:
+def filter_mums(mems: List[Mem], query: SeqText, unique_in_query: Bool = True, threads: Int = 1) -> List[Mem]:
     """MEMs unique in the reference and (by default) in their query sequence.
 
     These are MUMmer's `-mum` matches; with `unique_in_query=False` they are
     its `-mumreference` matches (unique in the reference only). `mems` must
-    come from one `find_mems` call (sorted by query offset).
+    come from one `find_mems` call (sorted by query offset); so is the result.
     """
-    var out = List[Mem]()
+    var keep = List[Bool](length=len(mems), fill=True)
     var lo = 0
     while lo < len(mems):
         var seq = query.sequence_of(Int(mems[lo].query_pos))
@@ -375,53 +376,125 @@ def filter_mums(mems: List[Mem], query: SeqText, unique_in_query: Bool = True) -
         var hi = lo
         while hi < len(mems) and Int(mems[hi].query_pos) < seq_end:
             hi += 1
-        var group = List[Mem](capacity=hi - lo)
-        for i in range(lo, hi):
-            group.append(mems[i])
-        var keep = List[Bool](length=len(group), fill=True)
-        _mark_contained[by_ref=False](group, keep)
+        # Query intervals: `mems` is already in query order.
+        var count = hi - lo
+        var starts = List[UInt64](unsafe_uninit_length=count)
+        var lengths = List[UInt32](unsafe_uninit_length=count)
+        for i in range(count):
+            starts[i] = UInt64(mems[lo + i].query_pos)
+            lengths[i] = mems[lo + i].length
+        _mark_contained(starts, 0, lengths, keep.unsafe_ptr().unsafe_offset(lo))
         if unique_in_query:
-            _mark_contained[by_ref=True](group, keep)
-        for i in range(len(group)):
-            if keep[i]:
-                out.append(group[i])
+            # Reference intervals, in reference order: start << 32 | member.
+            for i in range(count):
+                starts[i] = (UInt64(mems[lo + i].ref_pos) << 32) | UInt64(i)
+            parallel_sort(starts, threads)
+            # Gather lengths, sweep, scatter the verdicts: the random accesses
+            # run in parallel, the sweep over contiguous arrays.
+            var flags = List[Bool](length=count, fill=True)
+            var gather = _RefOrderTask(
+                mems.unsafe_ptr().unsafe_offset(lo), starts.unsafe_ptr().as_imm(), lengths.unsafe_ptr(), count
+            )
+            parallel_for(gather, _REF_ORDER_TASKS, threads)
+            _mark_contained(starts, 32, lengths, flags.unsafe_ptr())
+            var scatter = _ClearTask(
+                starts.unsafe_ptr().as_imm(), flags.unsafe_ptr().as_imm(), keep.unsafe_ptr().unsafe_offset(lo), count
+            )
+            parallel_for(scatter, _REF_ORDER_TASKS, threads)
         lo = hi
-    sort(Span(out))
+    var out = List[Mem]()
+    for i in range(len(mems)):
+        if keep[i]:
+            out.append(mems[i])
     return out^
 
 
-@inline(.always)
-def _interval_start[by_ref: Bool](m: Mem) -> Int:
-    comptime if by_ref:
-        return Int(m.ref_pos)
-    else:
-        return Int(m.query_pos)
+comptime _REF_ORDER_TASKS = 64
 
 
-def _mark_contained[by_ref: Bool](group: List[Mem], mut keep: List[Bool]):
-    """Clears `keep` for intervals contained in (or equal to) another one."""
-    var order = List[Int](capacity=len(group))
-    for i in range(len(group)):
-        order.append(i)
+struct _RefOrderTask[mems_origin: ImmOrigin, order_origin: ImmOrigin, out_origin: MutOrigin](ParallelTask):
+    """Copies the lengths of a group's MEMs into reference order. Tracked
+    origins keep the buffers alive while the tasks run."""
 
-    def before(a: Int, b: Int) {imm group} -> Bool:
-        var sa = _interval_start[by_ref](group[a])
-        var sb = _interval_start[by_ref](group[b])
-        if sa != sb:
-            return sa < sb
-        return group[a].length > group[b].length
+    var mems: ImmPointer[Mem, Self.mems_origin]
+    var order: ImmPointer[UInt64, Self.order_origin]
+    """Reference start << 32 | member, in reference order."""
+    var lengths: MutPointer[UInt32, Self.out_origin]
+    var count: Int
 
-    sort(Span(order), before)
+    def __init__(
+        out self,
+        mems: ImmPointer[Mem, Self.mems_origin],
+        order: ImmPointer[UInt64, Self.order_origin],
+        lengths: MutPointer[UInt32, Self.out_origin],
+        count: Int,
+    ):
+        self.mems = mems
+        self.order = order
+        self.lengths = lengths
+        self.count = count
+
+    def run(self, index: Int):
+        var per = ceildiv(self.count, _REF_ORDER_TASKS)
+        for i in range(index * per, min(self.count, (index + 1) * per)):
+            var member = Int(self.order[unsafe_offset=i] & 0xFFFFFFFF)
+            self.lengths[unsafe_offset=i] = self.mems[unsafe_offset=member].length
+
+
+struct _ClearTask[order_origin: ImmOrigin, flags_origin: ImmOrigin, keep_origin: MutOrigin](ParallelTask):
+    """Clears `keep` for the members whose `flags`, in reference order, are
+    cleared."""
+
+    var order: ImmPointer[UInt64, Self.order_origin]
+    var flags: ImmPointer[Bool, Self.flags_origin]
+    var keep: MutPointer[Bool, Self.keep_origin]
+    var count: Int
+
+    def __init__(
+        out self,
+        order: ImmPointer[UInt64, Self.order_origin],
+        flags: ImmPointer[Bool, Self.flags_origin],
+        keep: MutPointer[Bool, Self.keep_origin],
+        count: Int,
+    ):
+        self.order = order
+        self.flags = flags
+        self.keep = keep
+        self.count = count
+
+    def run(self, index: Int):
+        var per = ceildiv(self.count, _REF_ORDER_TASKS)
+        for i in range(index * per, min(self.count, (index + 1) * per)):
+            if not self.flags[unsafe_offset=i]:
+                self.keep[unsafe_offset=Int(self.order[unsafe_offset=i] & 0xFFFFFFFF)] = False
+
+
+def _mark_contained(starts: List[UInt64], shift: UInt64, lengths: List[UInt32], keep: MutPointer[Bool, _]):
+    """Clears `keep[i]` for the intervals `[starts[i] >> shift, ... + lengths[i])`,
+    in increasing start, contained in (or equal to) another one.
+
+    Of the intervals sharing a start, all but the longest are contained in
+    it, and the longest is when it has a copy or an earlier start reaches as
+    far."""
     var max_end = -1
-    for idx in range(len(order)):
-        var m = group[order[idx]]
-        var s = _interval_start[by_ref](m)
-        var e = s + Int(m.length)
-        if e <= max_end:
-            keep[order[idx]] = False
-        # An identical interval right after this one makes both non-unique.
-        if idx + 1 < len(order):
-            var n = group[order[idx + 1]]
-            if _interval_start[by_ref](n) == s and n.length == m.length:
-                keep[order[idx]] = False
-        max_end = max(max_end, e)
+    var i = 0
+    var count = len(starts)
+    while i < count:
+        var start = Int(starts[i] >> shift)
+        var j = i
+        var longest = 0
+        var copies = 0
+        while j < count and Int(starts[j] >> shift) == start:
+            var length = Int(lengths[j])
+            if length > longest:
+                longest = length
+                copies = 0
+            copies += Int(length == longest)
+            j += 1
+        var end = start + longest
+        var dropped = copies > 1 or end <= max_end
+        for t in range(i, j):
+            if dropped or Int(lengths[t]) < longest:
+                keep[unsafe_offset=t] = False
+        max_end = max(max_end, end)
+        i = j

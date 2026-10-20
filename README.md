@@ -29,8 +29,10 @@ reads): 117 Mbp/s per thread and 560 Mbp/s on 8 threads for read minimizers on 1
 thread for every read k-mer (GraphAligner's mode). `sporos seeds` on 1 M 150 bp reads takes 1.2 s end to end
 with 10 threads, including index build and 27 M output lines.
 
-Known gaps: with 10 threads simd-minimizers' chunked harness is 1.1-1.8x faster on seeds, and `-mum` on
-repeat-dense input (chr1, L=50) spends most of its time filtering MEMs to MUMs.
+MUMs on repeat-dense input (hg38 chr1 vs CHM13 chr1, L=50, 65.6 M MEMs filtered to 233 K): `-mum` takes
+37.1 s on one thread and 7.6 s on ten, against MUMmer's 87.5 s; `-mumreference` 29.1 s and 6.1 s.
+
+Known gap: with 10 threads simd-minimizers' chunked harness is 1.1-1.8x faster on seeds.
 
 ## Design
 

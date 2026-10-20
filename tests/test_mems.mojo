@@ -1,6 +1,7 @@
 from std.testing import assert_equal, assert_true, TestSuite
 
 from sporos.mems import Mem, MemIndex, MemParams, filter_mums, find_mems
+from sporos.sort import parallel_sort
 from sporos.text import SeqText
 from sporos.alphabet import encode_base
 from reference import naive_count, naive_mems, random_dna
@@ -104,6 +105,53 @@ def test_low_complexity_repeats() raises:
     for i in range(500):
         query.append(UInt8(ord("ACACAGT"[byte=(i + 3) % 7])))
     _check_mems(reference, query, MemParams.choose(20, 600, 500), 1)
+
+
+def test_parallel_sort() raises:
+    var state = UInt64(12345)
+    for n in [0, 1, 1000, 70_000, 1_000_000]:
+        for bits in [8, 40, 64]:
+            var keys = List[UInt64](capacity=n)
+            for _ in range(n):
+                state ^= state << 13
+                state ^= state >> 7
+                state ^= state << 17
+                keys.append(state >> UInt64(64 - bits))
+            var expected = keys.copy()
+            sort(Span(expected))
+            for threads in [1, 4]:
+                var got = keys.copy()
+                parallel_sort(got, threads)
+                assert_equal(len(got), n)
+                for i in range(n):
+                    if got[i] != expected[i]:
+                        raise Error(String(t"n={n} bits={bits} threads={threads}: key {i} differs"))
+
+
+def test_mum_filter_threads_agree() raises:
+    # Sixty noisy copies of one unit: enough MEMs for the parallel sorts.
+    var unit = random_dna(2500, 31)
+    var reference = List[UInt8]()
+    for copy in range(60):
+        reference.extend(Span(_mutate(unit, 20_000, 100 + copy)))
+    var query = _mutate(reference, 20_000, 7)
+    var rseqs = List[Span[UInt8, origin_of(reference)]]()
+    rseqs.append(Span(reference))
+    var rtext = SeqText(rseqs)
+    var qseqs = List[Span[UInt8, origin_of(query)]]()
+    qseqs.append(Span(query))
+    var qtext = SeqText(qseqs)
+    var params = MemParams.choose(20, len(reference), len(query))
+    var index = MemIndex(rtext, params)
+    var mems = find_mems(index, rtext, qtext, 4)
+    if len(mems) <= 70_000:
+        raise Error(String(t"only {len(mems)} MEMs"))
+    for unique_in_query in [True, False]:
+        var serial = filter_mums(mems, qtext, unique_in_query, threads=1)
+        var parallel = filter_mums(mems, qtext, unique_in_query, threads=4)
+        assert_equal(len(parallel), len(serial))
+        for i in range(len(serial)):
+            assert_true(parallel[i] == serial[i])
 
 
 def main() raises:

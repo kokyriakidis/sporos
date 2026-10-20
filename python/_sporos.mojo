@@ -154,9 +154,9 @@ struct PyIndex(Movable, Writable):
         var kept: List[Mem]
         match Int(py=mode):
             case == MODE_MUM:
-                kept = filter_mums(mems, text)
+                kept = filter_mums(mems, text, threads=threads_of(threads))
             case == MODE_MUMREFERENCE:
-                kept = filter_mums(mems, text, unique_in_query=False)
+                kept = filter_mums(mems, text, unique_in_query=False, threads=threads_of(threads))
             case _:
                 kept = mems^
         var fields = List[UInt32](capacity=4 * len(kept))
