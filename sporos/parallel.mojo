@@ -6,6 +6,7 @@
 
 from std.atomic import Atomic
 from std.ffi import external_call
+from std.os import abort
 from std.sys import num_physical_cores
 
 
@@ -69,4 +70,7 @@ def parallel_for[T: ParallelTask](mut task: T, count: Int, num_threads: Int):
         )
     for t in range(threads):
         _ = external_call["pthread_join", Int32](handles[t], Int(0))
-    _ = job^
+    # A real read keeps `job` alive until every worker has joined; the workers
+    # reach it through an untracked pointer.
+    if Int(job.next.load()) < count:
+        abort("parallel_for: workers stopped early")

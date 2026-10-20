@@ -87,8 +87,9 @@ def run_mem(args: List[String]) raises:
     for r in range(len(reference)):
         ref_seqs.append(reference.seq(r))
     var rtext = SeqText(ref_seqs, is_query=False)
+    _log(verbose, String(t"  text: {_seconds(start)} s"))
     var params = MemParams.choose(min_len, len(rtext), query.total_length())
-    var index = MemIndex(rtext, params)
+    var index = MemIndex(rtext, params, threads)
     _log(
         verbose,
         String(

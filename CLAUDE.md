@@ -24,7 +24,8 @@ habits:
   format: `pixi run format` (120 columns).
 - Toolchain: latest Mojo from the nightly channel.
 - Pointers handed out by owning types must carry the owner's origin (see `CodeBuffer.unsafe_ptr`); an
-  untracked pointer lets the owner be destroyed early.
+  untracked pointer lets the owner be destroyed early. Buffers that tasks reach through untracked pointers
+  are explicit `alloc`/`dealloc` pairs: `_ = list^` after the tasks does not keep a `List` alive.
 - `unsafe_strided_load` on `UInt8` returns wrong lanes on the current nightly; gather explicitly.
 - Benchmark with min-of-N timings; other jobs share the machine.
 - Finished work merges straight into `main` and is pushed; no pull requests.
