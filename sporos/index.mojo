@@ -94,7 +94,14 @@ def canonical(kmer: UInt64, k: Int) -> Tuple[UInt64, Bool]:
 
 def select_positions[
     mut: Bool, //, origin: Origin[mut=mut]
-](seqs: List[Span[UInt8, origin]], k: Int, w: Int, scheme: Int, threads: Int) raises -> List[UInt32]:
+](
+    seqs: List[Span[UInt8, origin]],
+    k: Int,
+    w: Int,
+    scheme: Int,
+    threads: Int,
+    open_offset: Optional[Int] = None,
+) raises -> List[UInt32]:
     """Selected k-mer start positions in the concatenated text (sequences
     separated by one base, as in `SeqText`)."""
     var total = 0
@@ -110,7 +117,7 @@ def select_positions[
     if scheme == MINIMIZER_SEEDS:
         return minimizer_positions_from_codes(p, total, k, w, True, threads)
     if scheme == SYNCMER_SEEDS:
-        return syncmer_positions_from_codes(p, total, k, w, True, None, threads)
+        return syncmer_positions_from_codes(p, total, k, w, True, open_offset, threads)
     var out = List[UInt32]()
     var run = 0
     for i in range(total):
@@ -173,6 +180,8 @@ struct SeedIndex(Movable):
     var k: Int
     var w: Int
     var scheme: Int
+    var open_offset: Optional[Int]
+    """For syncmer seeds: open syncmers with this s-mer offset, else closed."""
     var verify: Bool
 
     def __init__[
@@ -184,18 +193,21 @@ struct SeedIndex(Movable):
         w: Int,
         scheme: Int = MINIMIZER_SEEDS,
         threads: Int = 1,
+        open_offset: Optional[Int] = None,
     ) raises:
-        """Indexes the (w, k)-minimizers, the closed syncmers with s-mer
-        length `w`, or (`ALL_KMERS`) every k-mer of `seqs`."""
+        """Indexes the (w, k)-minimizers, the syncmers with s-mer length `w`
+        (closed, or open with `open_offset`), or (`ALL_KMERS`) every k-mer of
+        `seqs`."""
         if k < 1 or k > 32:
             raise Error(t"seed index k must be in [1, 32], got {k}")
         self.k = k
         self.w = w
         self.scheme = scheme
+        self.open_offset = open_offset
         self.text = SeqText(seqs)
         if len(self.text) >= Int(UInt32.MAX):
             raise Error("reference text must be shorter than 2^32")
-        var positions = select_positions(seqs, k, w, scheme, threads)
+        var positions = select_positions(seqs, k, w, scheme, threads, open_offset)
         var source = _SelectedKmers(
             Pointer(to=self.text).unsafe_origin_cast[MutUntrackedOrigin](),
             positions.unsafe_ptr().as_imm(),
@@ -243,7 +255,9 @@ struct SeedIndex(Movable):
         or every k-mer."""
         var seqs = List[Span[UInt8, query.origin]]()
         seqs.append(query)
-        return select_positions(seqs, self.k, self.w, ALL_KMERS if all_kmers else self.scheme, threads)
+        return select_positions(
+            seqs, self.k, self.w, ALL_KMERS if all_kmers else self.scheme, threads, self.open_offset
+        )
 
     def lookup(
         self,

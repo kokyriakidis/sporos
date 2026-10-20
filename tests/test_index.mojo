@@ -29,7 +29,9 @@ def _sorted(var hits: List[SeedHit]) -> List[SeedHit]:
     return hits^
 
 
-def _check(scheme: Int, k: Int, w: Int, n: Int, case_id: Int, all_kmers: Bool, max_occ: Int) raises:
+def _check(
+    scheme: Int, k: Int, w: Int, n: Int, case_id: Int, all_kmers: Bool, max_occ: Int, open_offset: Int = -1
+) raises:
     var reference = random_dna(n, case_id, 0.003)
     # Plant repeats, reverse-complement copies and the reference itself in the query.
     var query = random_dna(n // 2, case_id + 1, 0.003)
@@ -37,12 +39,15 @@ def _check(scheme: Int, k: Int, w: Int, n: Int, case_id: Int, all_kmers: Bool, m
         query[i] = reference[i + 50]
     var seqs = List[Span[UInt8, origin_of(reference)]]()
     seqs.append(Span(reference))
-    var index = SeedIndex(seqs, k, w, scheme, threads=2)
+    var opened: Optional[Int] = None
+    if open_offset >= 0:
+        opened = open_offset
+    var index = SeedIndex(seqs, k, w, scheme, threads=2, open_offset=opened)
     var ref_positions: List[UInt32]
     if scheme == MINIMIZER_SEEDS:
         ref_positions = naive_minimizers(reference, k, w, True)
     elif scheme == SYNCMER_SEEDS:
-        ref_positions = naive_syncmers(reference, k, w, True)
+        ref_positions = naive_syncmers(reference, k, w, True, open_offset)
     else:
         ref_positions = List[UInt32]()
         var codes = encode_all(reference)
@@ -87,6 +92,7 @@ def test_seed_index_matches_reference() raises:
             _check(MINIMIZER_SEEDS, cfg[0], cfg[1], n, case_id, True, 2)
             if cfg[1] < cfg[0]:
                 _check(SYNCMER_SEEDS, cfg[0], cfg[1], n, case_id, False, 0)
+                _check(SYNCMER_SEEDS, cfg[0], cfg[1], n, case_id, False, 0, (cfg[0] - cfg[1]) // 2)
             _check(ALL_KMERS, cfg[0], cfg[1], n, case_id, False, 3)
 
 

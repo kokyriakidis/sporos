@@ -26,8 +26,8 @@ from sporos.text import SeqText
 from sporos.window import LANES
 
 comptime USAGE = """usage:
-  sporos seeds -k K -w W [--syncmers | --all-kmers] [--query-kmers] [--max-occ N | --keep F] [-t threads]
-               <reference.fa> <reads.fa>
+  sporos seeds -k K [-w W | --syncmers -s S [--open T] | --all-kmers] [--query-kmers]
+               [--max-occ N | --keep F] [-t threads] <reference.fa> <reads.fa>
   sporos mem [-mum | -mumreference | -maxmatch] [-l L] [-b | -r] [-F] [-n] [-t threads] [-v]
              [-K anchor_k] [-k1 ref_step] [-k2 query_step] <reference.fa> <query.fa>
   sporos minimizers -k K -w W [--forward] [--count] [-t threads] <seqs.fa>
@@ -583,6 +583,8 @@ def _append_int(mut text: List[UInt8], value: Int, mut digits: List[UInt8]):
 def run_seed_index(args: List[String]) raises:
     var k = 19
     var w = 12
+    var s = 0
+    var open_offset: Optional[Int] = None
     var scheme = MINIMIZER_SEEDS
     var all_kmers = False
     var max_occ = 0
@@ -601,6 +603,12 @@ def run_seed_index(args: List[String]) raises:
         elif a == "--keep":
             i += 1
             keep = Float64(args[i])
+        elif a == "-s":
+            i += 1
+            s = Int(args[i])
+        elif a == "--open":
+            i += 1
+            open_offset = Int(args[i])
         elif a == "--syncmers":
             scheme = SYNCMER_SEEDS
         elif a == "--all-kmers":
@@ -625,7 +633,13 @@ def run_seed_index(args: List[String]) raises:
     var seqs = List[Span[UInt8, origin_of(reference.data)]]()
     for r in range(len(reference)):
         seqs.append(reference.seq(r))
-    var index = SeedIndex(seqs, k, w, scheme, threads)
+    if scheme == SYNCMER_SEEDS:
+        if s == 0:
+            raise Error("--syncmers needs -s (the s-mer length)")
+        w = s  # SeedIndex takes the syncmers' s-mer length as `w`
+    elif open_offset:
+        raise Error("--open applies to --syncmers")
+    var index = SeedIndex(seqs, k, w, scheme, threads, open_offset)
     if keep > 0.0:
         max_occ = index.occurrence_cutoff(keep)
     var slices = max(1, min(threads * 8, len(reads)))

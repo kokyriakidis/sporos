@@ -56,7 +56,9 @@ pixi run build-cli
 build/sporos mem -mum -l 50 -t 8 reference.fa query.fa     # mummer's flags and output format
 build/sporos mem -maxmatch -b -l 100 reference.fa query.fa
 build/sporos minimizers -k 21 -w 11 -t 8 seqs.fa           # name<TAB>position
-build/sporos syncmers -k 21 -s 11 [--open 5] seqs.fa
+build/sporos syncmers -k 21 -s 11 [--open 5] seqs.fa         # closed, or open with --open
+build/sporos seeds -k 19 -w 12 ref.fa reads.fq.gz           # minimizer seed index + lookups
+build/sporos seeds -k 20 --syncmers -s 16 [--open 2] ref.fa reads.fq
 ```
 
 ## Library
@@ -70,6 +72,10 @@ var mins = minimizer_positions(seq, k=21, w=11)                  # canonical by 
 var syncs = syncmer_positions(seq, k=21, s=11)                   # closed syncmers
 var opens = syncmer_positions(seq, k=21, s=11, open_offset=5)    # open syncmers
 ```
+
+Syncmers come in both kinds everywhere (library, batches, seed index, CLI, C, Python): a k-mer is a
+**closed** syncmer when its smallest s-mer starts at offset 0 or k - s, and an **open** syncmer when it
+starts at offset `open_offset` (0-based; strobealign's k=20, s=16 is `open_offset=2`).
 
 ## Develop
 
