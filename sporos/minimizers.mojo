@@ -2,13 +2,13 @@
 
 The minimizer of a window of `w` consecutive k-mers is the k-mer with the
 smallest `window.order_key` (bits 30 down to `ceil(log2(w))` of its 32-bit
-ntHash, canonical by default), ties broken toward the leftmost k-mer. K-mers containing a non-ACGT base are never selected. Positions are
+seed hash, `nthash.seed_hash`: ntHash, canonical by default), ties broken toward the leftmost k-mer. K-mers containing a non-ACGT base are never selected. Positions are
 reported once per run of consecutive windows sharing a minimizer, in
 increasing order. A sequence with fewer than `w` k-mers forms one window.
 """
 
 from sporos.alphabet import CodeBuffer
-from sporos.nthash import canonical_hash, forward_hash
+from sporos.nthash import seed_hash
 from sporos.window import (
     MINIMIZERS,
     PADDING,
@@ -83,7 +83,7 @@ def _short_minimizer(
         if run < k:
             continue
         var p = codes.unsafe_offset(start)
-        var h = canonical_hash(p, k) if canonical else forward_hash(p, k)
+        var h = seed_hash(p, k, canonical)
         best = min(best, (UInt64(order_key(h, w)) << 32) | UInt64(start))
     var out = List[UInt32]()
     if best != UInt64.MAX:

@@ -1,7 +1,7 @@
 """Brute-force reference implementations used as test oracles."""
 
 from sporos.alphabet import encode_base
-from sporos.nthash import canonical_hash, forward_hash
+from sporos.nthash import seed_hash
 from sporos.window import order_key
 
 
@@ -48,7 +48,7 @@ def _kmer_keys(
             keys.append(UInt64.MAX)
             continue
         var p = codes.unsafe_ptr().unsafe_offset(i)
-        var h = canonical_hash(p, k) if canonical else forward_hash(p, k)
+        var h = seed_hash(p, k, canonical)
         keys.append((UInt64(order_key(h, w)) << 32) | UInt64(i))
     return keys^
 

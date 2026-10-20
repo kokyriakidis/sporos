@@ -37,8 +37,9 @@ from sporos.nthash import (
     SEED_C,
     SEED_G,
     SEED_T,
-    canonical_hash,
-    forward_hash,
+    MUL_SEED,
+    SMALL_K,
+    seed_hash,
     rotl32,
     rotr32,
 )
@@ -193,6 +194,8 @@ struct _Consts(ImplicitlyCopyable, TrivialRegisterPassable):
     var w: _U32V
     var back: _U32V
     var offset: _U32V
+    var kmer_mask: _U32V
+    var rc_shift: _U32V
 
 
 @fieldwise_init
@@ -236,7 +239,7 @@ def _store_indices[
 
 @inline(.always)
 def _step[
-    mode: Int, canonical: Bool, emit: Bool
+    mode: Int, canonical: Bool, emit: Bool, small: Bool
 ](
     mut lanes: _Lanes,
     consts: _Consts,
@@ -258,23 +261,34 @@ def _step[
     var valid = bitcast[DType.uint32, LANES](index).lt(0x80000000)
     lanes.run = valid.select(lanes.run + 1, _U32V(0))
 
-    lanes.fh = (
-        rotate_bits_left[ROTATION](lanes.fh)
-        ^ fring[unsafe_offset=ri]
-        ^ _lookup(consts.fin, index)
-    )
-    fring.unsafe_offset(ri).unsafe_write(_lookup(consts.fout, index))
     var h: _U32V
-    comptime if canonical:
-        lanes.rh = (
-            rotate_bits_right[ROTATION](lanes.rh)
-            ^ rring[unsafe_offset=ri]
-            ^ _lookup(consts.rin, index)
-        )
-        rring.unsafe_offset(ri).unsafe_write(_lookup(consts.rout, index))
-        h = lanes.fh + lanes.rh
+    comptime if small:
+        # k <= 16: roll the 2-bit k-mer (and its reverse complement) and
+        # multiply; index bytes are 4c, so c is bits 2-3 of each lane.
+        var c = (bitcast[DType.uint32, LANES](index) >> 2) & 3
+        lanes.fh = ((lanes.fh << 2) | c) & consts.kmer_mask
+        comptime if canonical:
+            lanes.rh = (lanes.rh >> 2) | ((c ^ 3) << consts.rc_shift)
+            h = min(lanes.fh, lanes.rh) * MUL_SEED
+        else:
+            h = lanes.fh * MUL_SEED
     else:
-        h = lanes.fh
+        lanes.fh = (
+            rotate_bits_left[ROTATION](lanes.fh)
+            ^ fring[unsafe_offset=ri]
+            ^ _lookup(consts.fin, index)
+        )
+        fring.unsafe_offset(ri).unsafe_write(_lookup(consts.fout, index))
+        comptime if canonical:
+            lanes.rh = (
+                rotate_bits_right[ROTATION](lanes.rh)
+                ^ rring[unsafe_offset=ri]
+                ^ _lookup(consts.rin, index)
+            )
+            rring.unsafe_offset(ri).unsafe_write(_lookup(consts.rout, index))
+            h = lanes.fh + lanes.rh
+        else:
+            h = lanes.fh
 
     # Hash bits 30..b above the b-bit block offset: `min` inside a
     # block is leftmost on ties; across blocks only hash bits are compared,
@@ -319,7 +333,7 @@ def _step[
 
 
 def scan_segment[
-    mode: Int, canonical: Bool, ascii: Bool = False
+    mode: Int, canonical: Bool, ascii: Bool = False, small: Bool = False
 ](
     codes: ImmPointer[UInt8, _],
     seg_start: Int,
@@ -343,7 +357,7 @@ def scan_segment[
         # Lanes read up to seg_start + LANES * chunk + k + w + 12.
         chunk = min(chunk, max(0, (readable - seg_start - params.k - params.w - 13) // LANES))
     if chunk > 0:
-        _scan_lanes[mode, canonical, ascii](codes, seg_start, chunk, params, out)
+        _scan_lanes[mode, canonical, ascii, small](codes, seg_start, chunk, params, out)
     var first = seg_start + chunk * LANES
     var rest = seg_windows - chunk * LANES
     comptime if ascii:
@@ -360,7 +374,7 @@ def scan_segment[
 
 @inline(.never)
 def _scan_lanes[
-    mode: Int, canonical: Bool, ascii: Bool
+    mode: Int, canonical: Bool, ascii: Bool, small: Bool
 ](
     codes: ImmPointer[UInt8, _],
     seg_start: Int,
@@ -401,6 +415,8 @@ def _scan_lanes[
         w=_U32V(UInt32(w)),
         back=_U32V(UInt32(w - 1)),
         offset=_U32V(UInt32(params.offset)),
+        kmer_mask=_U32V(UInt32.MAX if k >= 16 else (UInt32(1) << UInt32(2 * k)) - 1),
+        rc_shift=_U32V(UInt32(2 * (k - 1))),
     )
     var lane_ids = iota[DType.uint32, LANES]()
     var first_kmer = _U32V(UInt32(seg_start)) + lane_ids * UInt32(chunk) - UInt32(k - 1)
@@ -450,7 +466,7 @@ def _scan_lanes[
             if t + i >= first_out:
                 for _ in range(n):
                     var index = tbuf.unsafe_load[width=4 * LANES](i * 4 * LANES)
-                    var bits = _step[mode, canonical, True](
+                    var bits = _step[mode, canonical, True, small](
                         lanes,
                         consts,
                         index,
@@ -474,7 +490,7 @@ def _scan_lanes[
                 n = min(n, first_out - (t + i))
                 for _ in range(n):
                     var index = tbuf.unsafe_load[width=4 * LANES](i * 4 * LANES)
-                    _ = _step[mode, canonical, False](
+                    _ = _step[mode, canonical, False, small](
                         lanes, consts, index, ri, wi, fring_p, rring_p, ring_p, obuf
                     )
                     ri = 0 if ri + 1 == k else ri + 1
@@ -535,7 +551,7 @@ def _scan_scalar[
             if not ok:
                 continue
             var p = codes.unsafe_offset(i)
-            var h = canonical_hash(p, k) if canonical else forward_hash(p, k)
+            var h = seed_hash(p, k, canonical)
             best = min(best, (UInt64(order_key(h, w)) << 32) | UInt64(i))
         var minpos = Int(best & 0xFFFFFFFF)
         comptime if mode == MINIMIZERS:
@@ -592,7 +608,7 @@ def append_dedup(mut out: List[UInt32], src: Span[UInt32, _]):
     )
 
 
-struct _ScanTask[mode: Int, canonical: Bool, ascii: Bool](ParallelTask):
+struct _ScanTask[mode: Int, canonical: Bool, ascii: Bool, small: Bool](ParallelTask):
     var codes: ImmPointer[UInt8, ImmUntrackedOrigin]
     var results: MutPointer[List[UInt32], MutUntrackedOrigin]
     var segment: Int
@@ -619,7 +635,7 @@ struct _ScanTask[mode: Int, canonical: Bool, ascii: Bool](ParallelTask):
     def run(self, index: Int):
         var start = index * self.segment
         var count = min(self.segment, self.windows - start)
-        scan_segment[Self.mode, Self.canonical, Self.ascii](
+        scan_segment[Self.mode, Self.canonical, Self.ascii, Self.small](
             self.codes, start, count, self.params, self.results[unsafe_offset=index], self.readable
         )
 
@@ -632,6 +648,21 @@ def scan[
     params: ScanParams,
     threads: Int,
     readable: Int = Int.MAX,
+) -> List[UInt32]:
+    """Scans windows `[0, windows)` with the seed hash for `params.k`."""
+    if params.k <= SMALL_K:
+        return _scan[mode, canonical, ascii, True](codes, windows, params, threads, readable)
+    return _scan[mode, canonical, ascii, False](codes, windows, params, threads, readable)
+
+
+def _scan[
+    mode: Int, canonical: Bool, ascii: Bool, small: Bool
+](
+    codes: ImmPointer[UInt8, _],
+    windows: Int,
+    params: ScanParams,
+    threads: Int,
+    readable: Int,
 ) -> List[UInt32]:
     """Scans windows `[0, windows)`, split into segments across `threads`.
 
@@ -646,10 +677,10 @@ def scan[
     var segment = ceildiv(windows, num_segments)
     num_segments = ceildiv(windows, segment)
     if num_segments == 1:
-        scan_segment[mode, canonical, ascii](codes, 0, windows, params, out, readable)
+        scan_segment[mode, canonical, ascii, small](codes, 0, windows, params, out, readable)
         return out^
     var results = List[List[UInt32]](length=num_segments, fill=List[UInt32]())
-    var task = _ScanTask[mode, canonical, ascii](
+    var task = _ScanTask[mode, canonical, ascii, small](
         codes.unsafe_origin_cast[ImmUntrackedOrigin](),
         results.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
         segment,

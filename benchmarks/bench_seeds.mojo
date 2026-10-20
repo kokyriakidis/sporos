@@ -29,7 +29,7 @@ def main() raises:
         n = Int(args[1])
     var seq = random_dna(n, 5)
     var codes = CodeBuffer.encode(Span(seq), PADDING)
-    for cfg in [(21, 11), (31, 19)]:
+    for cfg in [(15, 10), (21, 11), (31, 19)]:
         var k = cfg[0]
         var w = cfg[1]
         for canonical in [False, True]:
@@ -58,3 +58,14 @@ def main() raises:
                 best = min(best, thread_cpu_ns() - start)
                 count = len(m)
             _report("closed-can" if canonical else "closed-fwd", k, w, n, count, best)
+    # strobealign's default syncmers: open, k=20, s=16, offset 2 (simd-minimizers'
+    # open syncmers with k=16, w=5).
+    for canonical in [False, True]:
+        var best = Int.MAX
+        var count = 0
+        for _ in range(REPS):
+            var start = thread_cpu_ns()
+            var m = syncmer_positions_from_codes(codes.unsafe_ptr(), n, 20, 16, canonical, 2, 1)
+            best = min(best, thread_cpu_ns() - start)
+            count = len(m)
+        _report("open-can" if canonical else "open-fwd", 16, 5, n, count, best)
