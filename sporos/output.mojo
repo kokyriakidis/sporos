@@ -6,7 +6,8 @@ comptime _FLUSH_AT = 1 << 20
 
 
 struct OutputBuffer(Movable):
-    """Accumulates bytes and writes them to `fd` in large blocks."""
+    """Accumulates bytes and writes them to `fd` in large blocks; with
+    `fd = -1` it only accumulates (read them from `buf`)."""
 
     var buf: List[UInt8]
     var fd: Int32
@@ -20,7 +21,7 @@ struct OutputBuffer(Movable):
 
     def write_bytes(mut self, bytes: Span[UInt8, _]):
         self.buf.extend(bytes)
-        if len(self.buf) >= _FLUSH_AT:
+        if len(self.buf) >= _FLUSH_AT and self.fd >= 0:
             self.flush()
 
     @inline(.always)
@@ -39,10 +40,12 @@ struct OutputBuffer(Movable):
         if left:
             for _ in range(pad):
                 self.buf.append(UInt8(ord(" ")))
-        if len(self.buf) >= _FLUSH_AT:
+        if len(self.buf) >= _FLUSH_AT and self.fd >= 0:
             self.flush()
 
     def flush(mut self):
+        if self.fd < 0:
+            return
         var done = 0
         while done < len(self.buf):
             var n = external_call["write", Int](

@@ -129,6 +129,32 @@ def run_mem(args: List[String]) raises:
     var out = OutputBuffer()
     var query_start = perf_counter_ns()
     var total = 0
+    if threads > 1 and len(query) >= 2 * threads:
+        # Many query records (reads): one thread per slice of records.
+        var slices = min(len(query), threads * 8)
+        var texts = List[List[UInt8]](length=slices, fill=List[UInt8]())
+        var totals = List[Int](length=slices, fill=0)
+        var task = _RecordsTask(
+            Pointer(to=index).as_imm(),
+            Pointer(to=rtext).as_imm(),
+            Pointer(to=query).as_imm(),
+            Pointer(to=reference).as_imm(),
+            texts.unsafe_ptr(),
+            totals.unsafe_ptr(),
+            slices,
+            mode,
+            forward,
+            reverse,
+            four_column,
+            name_width,
+        )
+        parallel_for(task, slices, threads)
+        for s in range(slices):
+            out.write_bytes(Span(texts[s]))
+            total += totals[s]
+        out.flush()
+        _log(verbose, String(t"matches: {_seconds(query_start)} s ({total} reported)"))
+        return
     for q in range(len(query)):
         var qseqs = List[Span[UInt8, origin_of(query.data)]]()
         qseqs.append(query.seq(q))
@@ -146,6 +172,83 @@ def run_mem(args: List[String]) raises:
             )
     out.flush()
     _log(verbose, String(t"matches: {_seconds(query_start)} s ({total} reported)"))
+
+
+struct _RecordsTask[
+    index_origin: ImmOrigin,
+    text_origin: ImmOrigin,
+    query_origin: ImmOrigin,
+    ref_origin: ImmOrigin,
+    out_origin: MutOrigin,
+    total_origin: MutOrigin,
+](ParallelTask):
+    """Reports the matches of one slice of query records, single-threaded."""
+
+    var index: ImmPointer[MemIndex, Self.index_origin]
+    var rtext: ImmPointer[SeqText, Self.text_origin]
+    var query: ImmPointer[FastaRecords, Self.query_origin]
+    var reference: ImmPointer[FastaRecords, Self.ref_origin]
+    var texts: MutPointer[List[UInt8], Self.out_origin]
+    var totals: MutPointer[Int, Self.total_origin]
+    var slices: Int
+    var mode: String
+    var forward: Bool
+    var reverse: Bool
+    var four_column: Bool
+    var name_width: Int
+
+    def __init__(
+        out self,
+        index: ImmPointer[MemIndex, Self.index_origin],
+        rtext: ImmPointer[SeqText, Self.text_origin],
+        query: ImmPointer[FastaRecords, Self.query_origin],
+        reference: ImmPointer[FastaRecords, Self.ref_origin],
+        texts: MutPointer[List[UInt8], Self.out_origin],
+        totals: MutPointer[Int, Self.total_origin],
+        slices: Int,
+        mode: String,
+        forward: Bool,
+        reverse: Bool,
+        four_column: Bool,
+        name_width: Int,
+    ):
+        self.index = index
+        self.rtext = rtext
+        self.query = query
+        self.reference = reference
+        self.texts = texts
+        self.totals = totals
+        self.slices = slices
+        self.mode = mode
+        self.forward = forward
+        self.reverse = reverse
+        self.four_column = four_column
+        self.name_width = name_width
+
+    def run(self, index: Int):
+        ref query = self.query[]
+        var per = ceildiv(len(query), self.slices)
+        var lo = index * per
+        var hi = min(len(query), lo + per)
+        var out = OutputBuffer(fd=-1)
+        var total = 0
+        for q in range(lo, hi):
+            var qseqs = List[Span[UInt8, origin_of(query.data)]]()
+            qseqs.append(query.seq(q))
+            if self.forward:
+                var qtext = SeqText(qseqs)
+                total += _report(
+                    out, self.index[], self.rtext[], qtext, query.names[q], False, self.mode,
+                    self.four_column, self.reference[], self.name_width, 1,
+                )
+            if self.reverse:
+                var rc = SeqText(qseqs, reverse_complement=True)
+                total += _report(
+                    out, self.index[], self.rtext[], rc, query.names[q], True, self.mode,
+                    self.four_column, self.reference[], self.name_width, 1,
+                )
+        self.texts[unsafe_offset=index] = out.buf.copy()
+        self.totals[unsafe_offset=index] = total
 
 
 def _report(
