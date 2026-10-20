@@ -24,7 +24,8 @@ from sporos.syncmers import syncmer_positions
 from sporos.text import SeqText
 
 comptime USAGE = """usage:
-  sporos seeds -k K -w W [--syncmers | --all-kmers] [--query-kmers] [--max-occ N] [-t threads] <reference.fa> <reads.fa>
+  sporos seeds -k K -w W [--syncmers | --all-kmers] [--query-kmers] [--max-occ N | --keep F] [-t threads]
+               <reference.fa> <reads.fa>
   sporos mem [-mum | -mumreference | -maxmatch] [-l L] [-b | -r] [-F] [-n] [-t threads] [-v]
              [-K anchor_k] [-k1 ref_step] [-k2 query_step] <reference.fa> <query.fa>
   sporos minimizers -k K -w W [--forward] [--count] [-t threads] <seqs.fa>
@@ -570,6 +571,7 @@ def run_seed_index(args: List[String]) raises:
     var scheme = MINIMIZER_SEEDS
     var all_kmers = False
     var max_occ = 0
+    var keep = 0.0
     var threads = default_threads()
     var paths = List[String]()
     var i = 0
@@ -581,6 +583,9 @@ def run_seed_index(args: List[String]) raises:
         elif a == "-w":
             i += 1
             w = Int(args[i])
+        elif a == "--keep":
+            i += 1
+            keep = Float64(args[i])
         elif a == "--syncmers":
             scheme = SYNCMER_SEEDS
         elif a == "--all-kmers":
@@ -606,6 +611,8 @@ def run_seed_index(args: List[String]) raises:
     for r in range(len(reference)):
         seqs.append(reference.seq(r))
     var index = SeedIndex(seqs, k, w, scheme, threads)
+    if keep > 0.0:
+        max_occ = index.occurrence_cutoff(keep)
     var slices = max(1, min(threads * 8, len(reads)))
     var texts = List[List[UInt8]](length=slices, fill=List[UInt8]())
     var task = _SeedLookupTask(

@@ -206,6 +206,38 @@ struct SeedIndex(Movable):
         var bucket_bits = 64 - Int(self.table.shift)
         self.verify = 2 * k > bucket_bits + 31
 
+    def occurrence_cutoff(self, keep_fraction: Float64) -> Int:
+        """The smallest occurrence count such that `keep_fraction` of the
+        distinct indexed k-mers occur at most that often (for `lookup`'s
+        `max_occurrences`, like GraphAligner's quantile cutoff). Counts are
+        exact when `verify` is false; otherwise k-mers sharing a fingerprint
+        are counted together."""
+        var counts = List[Int]()
+        var ent = self.table.entries.unsafe_ptr()
+        var off = self.table.offsets.unsafe_ptr()
+        for b in range(len(self.table.offsets) - 1):
+            var e = Int(off[unsafe_offset=b])
+            var end = Int(off[unsafe_offset=b + 1])
+            while e < end:
+                var fp = ent[unsafe_offset=e] >> 33
+                var run = 0
+                while e < end and ent[unsafe_offset=e] >> 33 == fp:
+                    run += 1
+                    e += 1
+                if len(counts) <= run:
+                    counts.resize(run + 1, 0)
+                counts[run] += 1
+        var distinct = 0
+        for c in counts:
+            distinct += c
+        var keep = Int(Float64(distinct) * keep_fraction)
+        var seen = 0
+        for occ in range(len(counts)):
+            seen += counts[occ]
+            if seen >= keep:
+                return max(1, occ)
+        return max(1, len(counts) - 1)
+
     def query_positions(self, query: Span[UInt8, _], all_kmers: Bool, threads: Int = 1) raises -> List[UInt32]:
         """The query k-mers to look up: its seeds under the index's scheme,
         or every k-mer."""

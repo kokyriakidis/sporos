@@ -90,5 +90,18 @@ def test_seed_index_matches_reference() raises:
             _check(ALL_KMERS, cfg[0], cfg[1], n, case_id, False, 3)
 
 
+def test_occurrence_cutoff() raises:
+    # Ten copies of one 40-mer among random sequence: its k-mers occur 10x.
+    var reference = random_dna(5000, 901)
+    for copy in range(10):
+        for i in range(40):
+            reference[1000 + copy * 300 + i] = reference[100 + i]
+    var seqs = List[Span[UInt8, origin_of(reference)]]()
+    seqs.append(Span(reference))
+    var index = SeedIndex(seqs, 15, 1, ALL_KMERS)
+    assert_equal(index.occurrence_cutoff(0.5), 1)
+    assert_true(index.occurrence_cutoff(1.0) >= 10)
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()
