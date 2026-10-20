@@ -1,12 +1,17 @@
 """32-bit ntHash: a rolling, strand-aware hash of nucleotide k-mers.
 
-The forward hash of a k-mer `b_0..b_{k-1}` is `XOR_j rotl(S[b_j], k-1-j)` and
-the reverse-complement hash is `XOR_j rotl(S[3-b_j], j)`. The canonical hash is
+The forward hash of a k-mer `b_0..b_{k-1}` is `XOR_j rotl(S[b_j], R(k-1-j))`
+and the reverse-complement hash is `XOR_j rotl(S[3-b_j], R j)`, with rotation
+step `R = ROTATION`. A step of 7 rather than ntHash's 1 decorrelates the high
+bits of consecutive k-mers' hashes, which the minimizer order compares. The canonical hash is
 their wrapping sum, which is identical for a k-mer and its reverse complement.
 Bases coded `N_CODE` contribute nothing; kernels mask such k-mers out.
 """
 
 from sporos.alphabet import N_CODE
+
+comptime ROTATION = 7
+"""Bits each base's seed rotates by per position."""
 
 comptime SEED_A: UInt32 = 0x3C8BFBB3
 comptime SEED_C: UInt32 = 0x3193C185
@@ -50,7 +55,7 @@ def forward_hash(codes: ImmPointer[UInt8, _], k: Int) -> UInt32:
     """Non-rolling forward ntHash of the k-mer at `codes`."""
     var h: UInt32 = 0
     for j in range(k):
-        h ^= rotl32(seed(codes[unsafe_offset=j]), k - 1 - j)
+        h ^= rotl32(seed(codes[unsafe_offset=j]), ROTATION * (k - 1 - j))
     return h
 
 
@@ -58,7 +63,7 @@ def reverse_hash(codes: ImmPointer[UInt8, _], k: Int) -> UInt32:
     """Non-rolling reverse-complement ntHash of the k-mer at `codes`."""
     var h: UInt32 = 0
     for j in range(k):
-        h ^= rotl32(seed(complement(codes[unsafe_offset=j])), j)
+        h ^= rotl32(seed(complement(codes[unsafe_offset=j])), ROTATION * j)
     return h
 
 

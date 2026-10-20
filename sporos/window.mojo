@@ -17,16 +17,28 @@ cross-block comparison looks at hash bits only. Bases reach the
 lanes through a 16-step byte transpose, and seed lookups are single byte
 shuffles (NEON `tbl` / x86 `pshufb`).
 
-Window results go to a small transposed block buffer that is compacted per
-lane, then lanes are concatenated in order.
+Window results are deduplicated in the loop with one vertical compare per
+step; every 8 steps the survivors' bitmask is walked with count-trailing-zeros
+and each survivor is appended to its lane, then lanes are concatenated.
 """
 
-from std.bit import rotate_bits_left, rotate_bits_right
+from std.bit import count_trailing_zeros, rotate_bits_left, rotate_bits_right
 from std.math import ceildiv
-from std.memory import Layout, alloc, bitcast, dealloc
+from std.memory import Layout, alloc, bitcast, dealloc, pack_bits
+from std.sys.info import CompilationTarget
 
 from sporos.alphabet import N_CODE
-from sporos.nthash import SEED_A, SEED_C, SEED_G, SEED_T, rotl32, rotr32
+from sporos.nthash import (
+    ROTATION,
+    SEED_A,
+    SEED_C,
+    SEED_G,
+    SEED_T,
+    canonical_hash,
+    forward_hash,
+    rotl32,
+    rotr32,
+)
 from sporos.parallel import ParallelTask, parallel_for
 
 comptime LANES = 8
@@ -36,7 +48,8 @@ comptime _U64V = SIMD[DType.uint64, LANES]
 
 comptime SENTINEL: UInt32 = 0xFFFFFFFF
 """Marks a window without output."""
-comptime _BLOCK = 512
+comptime _BATCH = 64 // LANES
+"""Steps per output bitmask (one bit per lane and step)."""
 comptime PADDING = 96
 """Bytes of `N_CODE` padding kernels need after the last base."""
 comptime _MIN_SEGMENT = 1 << 20
@@ -49,6 +62,8 @@ comptime OPEN_SYNCMERS = 2
 comptime _U8x16 = SIMD[DType.uint8, 16]
 comptime _TRANSPOSE = 16
 """Steps per transposed input block (bytes loaded per lane at once)."""
+comptime _ROUND = 256
+"""Steps transposed ahead of the main loop at a time."""
 
 
 @inline(.always)
@@ -67,7 +82,8 @@ def _lookup(table: _U8x16, index: SIMD[DType.uint8, 4 * LANES]) -> _U32V:
 def _transpose(
     src: ImmPointer[UInt8, _], chunk: Int, dst: MutPointer[UInt8, _]
 ):
-    """Writes `_TRANSPOSE` steps of `LANES` codes, step-major, into `dst`.
+    """Writes `_TRANSPOSE` steps of `LANES` codes, step-major and scaled by
+    `_TIMES4`, into `dst`.
 
     Lane `l` reads `src[l * chunk : l * chunk + 16]`; three rounds of
     interleaves turn the 8 lane vectors into 16 vectors of 8 lanes.
@@ -86,7 +102,10 @@ def _transpose(
     var a3 = bitcast[DType.uint16, 16](v6.interleave(v7))
     var b0 = bitcast[DType.uint32, 16](a0.interleave(a1))
     var b1 = bitcast[DType.uint32, 16](a2.interleave(a3))
-    dst.unsafe_store(0, bitcast[DType.uint8, 128](b0.interleave(b1)))
+    # Scale codes to seed-table byte offsets (see `_TIMES4`) 16 at a time.
+    dst.unsafe_store(
+        0, _TIMES4._dynamic_shuffle(bitcast[DType.uint8, 128](b0.interleave(b1)))
+    )
 
 
 @fieldwise_init
@@ -124,6 +143,134 @@ def order_key(hash: UInt32, w: Int) -> UInt32:
     return (hash >> 1) >> UInt32(offset_bits(w))
 
 
+@fieldwise_init
+struct _Consts(ImplicitlyCopyable, TrivialRegisterPassable):
+    """Loop-invariant vectors of one scan."""
+
+    var fin: _U8x16
+    var fout: _U8x16
+    var rin: _U8x16
+    var rout: _U8x16
+    var k: _U32V
+    var span: _U32V
+    var hash_mask: _U32V
+    var pos_mask: _U32V
+    var w: _U32V
+    var back: _U32V
+    var offset: _U32V
+
+
+@fieldwise_init
+struct _Lanes(ImplicitlyCopyable, TrivialRegisterPassable):
+    """Per-lane state carried from step to step (kept in registers)."""
+
+    var fh: _U32V
+    var rh: _U32V
+    var run: _U32V
+    var pos: _U32V
+    var prefix: _U32V
+    var prev: _U32V
+
+
+comptime _TIMES4 = _U8x16(0, 4, 8, 12, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80)
+"""Maps a code c to 4c, and N to 0x80, which both tbl and pshufb read as zero."""
+comptime _REPLICATE = SIMD[DType.uint8, 4 * LANES](
+    0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7
+)
+comptime _BYTE_IN_WORD = SIMD[DType.uint8, 4 * LANES](
+    0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3
+)
+
+
+@inline(.always)
+def _index(c4: SIMD[DType.uint8, LANES]) -> SIMD[DType.uint8, 4 * LANES]:
+    """Byte indices `4c .. 4c+3` per lane for `_lookup`, from codes already
+    scaled by `_TIMES4`; N's indices stay >= 0x80 and look up zero."""
+    return c4.join(c4)._dynamic_shuffle(_REPLICATE) + _BYTE_IN_WORD
+
+
+@inline(.always)
+def _step[
+    mode: Int, canonical: Bool, emit: Bool
+](
+    mut lanes: _Lanes,
+    consts: _Consts,
+    c8: SIMD[DType.uint8, LANES],
+    ri: Int,
+    wi: Int,
+    fring: MutPointer[_U32V, _],
+    rring: MutPointer[_U32V, _],
+    ring: MutPointer[_U32V, _],
+    obuf: MutPointer[UInt32, _],
+) -> UInt32:
+    """Advances every lane one base; returns the lanes' keep bits if `emit`.
+
+    `wi` is the k-mer's offset in its w-block: the block's prefix minimum
+    is in `lanes.prefix` and the previous block's suffix minima are in
+    `ring[wi + 1 ..]` (`ring[w]` is a permanent `HASH_NONE`).
+    """
+    var valid = c8.lt(16)
+    var index = _index(c8)
+    lanes.run = valid.select(lanes.run + 1, _U32V(0))
+
+    lanes.fh = (
+        rotate_bits_left[ROTATION](lanes.fh)
+        ^ fring[unsafe_offset=ri]
+        ^ _lookup(consts.fin, index)
+    )
+    fring.unsafe_offset(ri).unsafe_write(_lookup(consts.fout, index))
+    var h: _U32V
+    comptime if canonical:
+        lanes.rh = (
+            rotate_bits_right[ROTATION](lanes.rh)
+            ^ rring[unsafe_offset=ri]
+            ^ _lookup(consts.rin, index)
+        )
+        rring.unsafe_offset(ri).unsafe_write(_lookup(consts.rout, index))
+        h = lanes.fh + lanes.rh
+    else:
+        h = lanes.fh
+
+    # Top (31 - b) hash bits above the b-bit block offset: `min` inside a
+    # block is leftmost on ties; across blocks only hash bits are compared,
+    # so the older (left) k-mer wins ties there too.
+    var key = lanes.run.ge(consts.k).select(
+        ((h >> 1) & consts.hash_mask) | UInt32(wi), _U32V(HASH_NONE)
+    )
+    lanes.prefix = min(lanes.prefix, key)
+    var suffix = ring[unsafe_offset=wi + 1]
+    var from_prefix = (lanes.prefix | consts.pos_mask).lt(
+        suffix & ~consts.pos_mask
+    )
+    var win = from_prefix.select(lanes.prefix, suffix)
+    ring.unsafe_offset(wi).unsafe_write(key)
+
+    var bits: UInt32 = 0
+    comptime if emit:
+        var block_start = lanes.pos - UInt32(wi)
+        var minpos = (win & consts.pos_mask) + from_prefix.select(
+            block_start, block_start - consts.w
+        )
+        var value: _U32V
+        var keep: _Mask
+        comptime if mode == MINIMIZERS:
+            value = win.eq(HASH_NONE).select(_U32V(SENTINEL), minpos)
+            keep = value.ne(lanes.prev) & value.ne(SENTINEL)
+            lanes.prev = value
+        else:
+            value = lanes.pos - consts.back
+            var hit: _Mask
+            comptime if mode == CLOSED_SYNCMERS:
+                hit = minpos.eq(value) | minpos.eq(lanes.pos)
+            else:
+                hit = minpos.eq(value + consts.offset)
+            keep = hit & lanes.run.ge(consts.span)
+        obuf.unsafe_store(0, value)
+        bits = UInt32(pack_bits[DType.uint8](keep))
+    lanes.pos += 1
+    return bits
+
+
 def scan_segment[
     mode: Int, canonical: Bool
 ](
@@ -137,218 +284,233 @@ def scan_segment[
 
     Window `j` covers k-mers `j .. j + w - 1`. For minimizers the output is
     the minimizer position (deduplicated across consecutive windows); for
-    syncmers it is `j` itself when the k-mer at `j` is a syncmer.
+    syncmers it is `j` itself when the k-mer at `j` is a syncmer. Lanes get
+    `seg_windows // LANES` windows each; the few left over run scalar.
     """
     var k = params.k
     var w = params.w
-    var chunk = ceildiv(seg_windows, LANES)
+    var chunk = seg_windows // LANES
+    if chunk > 0:
+        _scan_lanes[mode, canonical](codes, seg_start, chunk, params, out)
+    _scan_scalar[mode, canonical](
+        codes, seg_start + chunk * LANES, seg_windows - chunk * LANES, params, out
+    )
+
+
+def _scan_lanes[
+    mode: Int, canonical: Bool
+](
+    codes: ImmPointer[UInt8, _],
+    seg_start: Int,
+    chunk: Int,
+    params: ScanParams,
+    mut out: List[UInt32],
+):
+    var k = params.k
+    var w = params.w
     var steps = chunk + k + w - 2
     var first_out = k + w - 2
+    var bits_w = offset_bits(w)
+    var pos_mask = _U32V(UInt32((1 << bits_w) - 1))
+    var consts = _Consts(
+        fin=_seed_table(SEED_A, SEED_C, SEED_G, SEED_T),
+        fout=_seed_table(
+            rotl32(SEED_A, ROTATION * k),
+            rotl32(SEED_C, ROTATION * k),
+            rotl32(SEED_G, ROTATION * k),
+            rotl32(SEED_T, ROTATION * k),
+        ),
+        rin=_seed_table(
+            rotl32(SEED_T, ROTATION * (k - 1)),
+            rotl32(SEED_G, ROTATION * (k - 1)),
+            rotl32(SEED_C, ROTATION * (k - 1)),
+            rotl32(SEED_A, ROTATION * (k - 1)),
+        ),
+        rout=_seed_table(
+            rotr32(SEED_T, ROTATION),
+            rotr32(SEED_G, ROTATION),
+            rotr32(SEED_C, ROTATION),
+            rotr32(SEED_A, ROTATION),
+        ),
+        k=_U32V(UInt32(k)),
+        span=_U32V(UInt32(params.span)),
+        hash_mask=_U32V(0x7FFFFFFF) & ~pos_mask,
+        pos_mask=pos_mask,
+        w=_U32V(UInt32(w)),
+        back=_U32V(UInt32(w - 1)),
+        offset=_U32V(UInt32(params.offset)),
+    )
+    var lane_ids = _U32V(0, 1, 2, 3, 4, 5, 6, 7)
+    var lanes = _Lanes(
+        fh=_U32V(0),
+        rh=_U32V(0),
+        run=_U32V(0),
+        pos=_U32V(UInt32(seg_start)) + lane_ids * UInt32(chunk) - UInt32(k - 1),
+        prefix=_U32V(HASH_NONE),
+        prev=_U32V(SENTINEL),
+    )
 
-    var fin = _seed_table(SEED_A, SEED_C, SEED_G, SEED_T)
-    var fout = _seed_table(
-        rotl32(SEED_A, k), rotl32(SEED_C, k), rotl32(SEED_G, k), rotl32(SEED_T, k)
-    )
-    var rin = _seed_table(
-        rotl32(SEED_T, k - 1),
-        rotl32(SEED_G, k - 1),
-        rotl32(SEED_C, k - 1),
-        rotl32(SEED_A, k - 1),
-    )
-    var rout = _seed_table(
-        rotr32(SEED_T, 1), rotr32(SEED_G, 1), rotr32(SEED_C, 1), rotr32(SEED_A, 1)
-    )
-
-    # Rings: outgoing hash contributions (size k) and window keys (size w).
+    # Rings: outgoing hash contributions (k) and window keys (w + sentinel).
     var fring = List[_U32V](length=k, fill=_U32V(0))
     var rring = List[_U32V](length=k, fill=_U32V(0))
-    var ring = List[_U32V](length=w, fill=_U32V(HASH_NONE))
+    var ring = List[_U32V](length=w + 1, fill=_U32V(HASH_NONE))
     var fring_p = fring.unsafe_ptr()
     var rring_p = rring.unsafe_ptr()
     var ring_p = ring.unsafe_ptr()
 
-    var buf_alloc = alloc(Layout[UInt32](length=_BLOCK * LANES))
-    var buf = buf_alloc.unsafe_ptr()
-    var tbuf_alloc = alloc(Layout[UInt8](length=_TRANSPOSE * LANES))
+    var tbuf_alloc = alloc(Layout[UInt8](length=_ROUND * LANES))
     var tbuf = tbuf_alloc.unsafe_ptr()
-
-    # Each lane compacts into its own region of `lanes_out` (capacity chunk).
-    var lanes_alloc = alloc(Layout[UInt32](length=LANES * chunk + 1))
+    var obuf_alloc = alloc(Layout[UInt32](length=_BATCH * LANES))
+    var obuf = obuf_alloc.unsafe_ptr()
+    # Lane l compacts into lanes_out[l * chunk ...] (capacity chunk).
+    var lanes_alloc = alloc(Layout[UInt32](length=LANES * chunk))
     var lanes_out = lanes_alloc.unsafe_ptr()
-    var lane_counts = List[Int](length=LANES, fill=0)
-    var lane_fill = List[Int](length=LANES, fill=0)
-    var lane_last = List[UInt32](length=LANES, fill=SENTINEL)
+    var fill_alloc = alloc(Layout[Int](length=LANES))
+    var lane_fill = fill_alloc.unsafe_ptr()
     for l in range(LANES):
-        lane_counts[l] = max(0, min(chunk, seg_windows - l * chunk))
-
-    var lane_ids = _U32V(0, 1, 2, 3, 4, 5, 6, 7)
-    var pos = (
-        _U32V(UInt32(seg_start)) + lane_ids * UInt32(chunk) - UInt32(k - 1)
-    )
-    var fh = _U32V(0)
-    var rh = _U32V(0)
-    var run = _U32V(0)
-    var prefix = _U32V(HASH_NONE)
-    var bits = offset_bits(w)
-    var pos_mask_v = _U32V(UInt32((1 << bits) - 1))
-    var hash_mask_v = _U32V(0x7FFFFFFF) & ~pos_mask_v
-    var w_v = _U32V(UInt32(w))
-    var k_v = _U32V(UInt32(k))
-    var span_v = _U32V(UInt32(params.span))
-    var back_v = _U32V(UInt32(w - 1))
-    var offset_v = _U32V(UInt32(params.offset))
-    var none_v = _U32V(HASH_NONE)
-    var ri = 0
-    var wi = 0
-    var filled = 0
-    var block_base = 0
+        lane_fill.unsafe_offset(l).unsafe_write(0)
+    var batch_bits: UInt64 = 0
+    var batch = 0
 
     var src = codes.unsafe_offset(seg_start)
+    var ri = 0
+    var wi = 0
     var t = 0
     while t < steps:
-        _transpose(src.unsafe_offset(t), chunk, tbuf)
-        var block_end = min(steps, t + _TRANSPOSE)
-        for tt in range(block_end - t):
-            var c8 = tbuf.unsafe_load[width=LANES](tt * LANES)
-            var valid = c8.lt(UInt8(N_CODE))
-            var c = c8.cast[DType.uint32]()
-            # Byte indices 4c..4c+3 per lane; N (c=4) gets bit 7 set -> 0.
-            var index = bitcast[DType.uint8, 4 * LANES](
-                c * 0x04040404 + 0x03020100 + (c >> 2) * 0x80808080
-            )
-            run = valid.select(run + 1, _U32V(0))
-
-            fh = rotate_bits_left[1](fh) ^ fring_p[unsafe_offset=ri] ^ _lookup(
-                fin, index
-            )
-            fring_p.unsafe_offset(ri).unsafe_write(_lookup(fout, index))
-            var h: _U32V
-            comptime if canonical:
-                rh = (
-                    rotate_bits_right[1](rh)
-                    ^ rring_p[unsafe_offset=ri]
-                    ^ _lookup(rin, index)
-                )
-                rring_p.unsafe_offset(ri).unsafe_write(_lookup(rout, index))
-                h = fh + rh
+        var round_len = min(_ROUND, steps - t)
+        for r in range(0, round_len, _TRANSPOSE):
+            _transpose(src.unsafe_offset(t + r), chunk, tbuf.unsafe_offset(r * LANES))
+        var i = 0
+        while i < round_len:
+            var n = min(w - wi, round_len - i)
+            if t + i >= first_out:
+                for _ in range(n):
+                    var c8 = tbuf.unsafe_load[width=LANES](i * LANES)
+                    var bits = _step[mode, canonical, True](
+                        lanes,
+                        consts,
+                        c8,
+                        ri,
+                        wi,
+                        fring_p,
+                        rring_p,
+                        ring_p,
+                        obuf.unsafe_offset(batch * LANES),
+                    )
+                    batch_bits |= UInt64(bits) << UInt64(batch * LANES)
+                    batch += 1
+                    if batch == _BATCH:
+                        _emit(batch_bits, obuf, chunk, lane_fill, lanes_out)
+                        batch_bits = 0
+                        batch = 0
+                    ri = 0 if ri + 1 == k else ri + 1
+                    wi += 1
+                    i += 1
             else:
-                h = fh
-            ri = 0 if ri + 1 == k else ri + 1
-            # Key: top (31 - b) hash bits above the k-mer's offset within its
-            # w-aligned block, so `min` inside a block is leftmost on ties.
-            var key = run.ge(k_v).select(
-                ((h >> 1) & hash_mask_v) | UInt32(wi), none_v
-            )
-
-            # Sliding minimum over the last w keys: prefix of the current
-            # block vs suffix of the previous one. Across blocks only the
-            # hash bits are compared, so the older k-mer wins ties.
-            if wi == 0:
-                prefix = key
-            else:
-                prefix = min(prefix, key)
-            var cur_start = pos - UInt32(wi)
-            var win: _U32V
-            var from_prefix: _Mask
-            if wi == w - 1:
-                win = prefix
-                from_prefix = _Mask(fill=True)
-            else:
-                var suffix = ring_p[unsafe_offset=wi + 1]
-                from_prefix = (prefix | pos_mask_v).lt(suffix & ~pos_mask_v)
-                win = from_prefix.select(prefix, suffix)
-            ring_p.unsafe_offset(wi).unsafe_write(key)
-            if wi == w - 1:
+                n = min(n, first_out - (t + i))
+                for _ in range(n):
+                    var c8 = tbuf.unsafe_load[width=LANES](i * LANES)
+                    _ = _step[mode, canonical, False](
+                        lanes, consts, c8, ri, wi, fring_p, rring_p, ring_p, obuf
+                    )
+                    ri = 0 if ri + 1 == k else ri + 1
+                    wi += 1
+                    i += 1
+            if wi == w:
+                # Close the block: its keys become suffix minima in place.
                 for j in reversed(range(w - 1)):
                     ring_p.unsafe_offset(j).unsafe_write(
                         min(ring_p[unsafe_offset=j], ring_p[unsafe_offset=j + 1])
                     )
+                lanes.prefix = _U32V(HASH_NONE)
                 wi = 0
-            else:
-                wi += 1
+        t += round_len
 
-            if t + tt >= first_out:
-                var minpos = (win & pos_mask_v) + from_prefix.select(
-                    cur_start, cur_start - w_v
-                )
-                var value: _U32V
-                comptime if mode == MINIMIZERS:
-                    value = win.eq(none_v).select(_U32V(SENTINEL), minpos)
-                elif mode == CLOSED_SYNCMERS:
-                    var start = pos - back_v
-                    value = (
-                        (minpos.eq(start) | minpos.eq(pos)) & run.ge(span_v)
-                    ).select(start, _U32V(SENTINEL))
-                else:
-                    var start = pos - back_v
-                    value = (
-                        minpos.eq(start + offset_v) & run.ge(span_v)
-                    ).select(start, _U32V(SENTINEL))
-                buf.unsafe_store(filled * LANES, value)
-                filled += 1
-                if filled == _BLOCK:
-                    _flush(
-                        buf,
-                        filled,
-                        block_base,
-                        chunk,
-                        lane_counts,
-                        lane_last,
-                        lane_fill,
-                        lanes_out,
-                    )
-                    block_base += filled
-                    filled = 0
-            pos += 1
-        t = block_end
-
-    _flush(
-        buf,
-        filled,
-        block_base,
-        chunk,
-        lane_counts,
-        lane_last,
-        lane_fill,
-        lanes_out,
-    )
-    dealloc(buf_alloc^)
-    dealloc(tbuf_alloc^)
-
+    _emit(batch_bits, obuf, chunk, lane_fill, lanes_out)
     for l in range(LANES):
         append_dedup(
             out,
-            Span(unsafe_ptr=lanes_out.unsafe_offset(l * chunk), length=lane_fill[l]),
+            Span(
+                unsafe_ptr=lanes_out.unsafe_offset(l * chunk),
+                length=lane_fill[unsafe_offset=l],
+            ),
         )
+    dealloc(tbuf_alloc^)
+    dealloc(obuf_alloc^)
     dealloc(lanes_alloc^)
+    dealloc(fill_alloc^)
+
+
+def _scan_scalar[
+    mode: Int, canonical: Bool
+](
+    codes: ImmPointer[UInt8, _],
+    first: Int,
+    windows: Int,
+    params: ScanParams,
+    mut out: List[UInt32],
+):
+    """Windows `[first, first + windows)` one by one (the lanes' remainder)."""
+    var k = params.k
+    var w = params.w
+    var tail = List[UInt32]()
+    for j in range(first, first + windows):
+        var best = UInt64.MAX
+        for i in range(j, j + w):
+            var ok = True
+            for b in range(i, i + k):
+                if codes[unsafe_offset=b] >= N_CODE:
+                    ok = False
+            if not ok:
+                continue
+            var p = codes.unsafe_offset(i)
+            var h = canonical_hash(p, k) if canonical else forward_hash(p, k)
+            best = min(best, (UInt64(order_key(h, w)) << 32) | UInt64(i))
+        var minpos = Int(best & 0xFFFFFFFF)
+        comptime if mode == MINIMIZERS:
+            if best != UInt64.MAX:
+                tail.append(UInt32(minpos))
+        else:
+            var span_ok = True
+            for b in range(j, j + params.span):
+                if codes[unsafe_offset=b] >= N_CODE:
+                    span_ok = False
+            var hit: Bool
+            comptime if mode == CLOSED_SYNCMERS:
+                hit = minpos == j or minpos == j + w - 1
+            else:
+                hit = minpos == j + params.offset
+            if span_ok and hit:
+                tail.append(UInt32(j))
+    var deduped = List[UInt32]()
+    for v in tail:
+        if len(deduped) == 0 or deduped[len(deduped) - 1] != v:
+            deduped.append(v)
+    append_dedup(out, Span(deduped))
 
 
 @inline(.always)
-def _flush(
-    buf: ImmPointer[UInt32, _],
-    filled: Int,
-    block_base: Int,
+def _emit(
+    bits: UInt64,
+    values: ImmPointer[UInt32, _],
     chunk: Int,
-    lane_counts: List[Int],
-    mut lane_last: List[UInt32],
-    mut lane_fill: List[Int],
+    lane_fill: MutPointer[Int, _],
     lanes_out: MutPointer[UInt32, _],
 ):
-    """Branch-free per-lane compaction: every value is written, and the
-    cursor only advances past values that are neither `SENTINEL` nor a
-    repeat of the previous window's value."""
-    for l in range(LANES):
-        var limit = min(filled, lane_counts[l] - block_base)
-        var last = lane_last[l]
-        var dst = lanes_out.unsafe_offset(l * chunk)
-        var n = lane_fill[l]
-        for s in range(limit):
-            var v = buf[unsafe_offset=s * LANES + l]
-            dst.unsafe_offset(n).unsafe_write(v)
-            n += Int((v != SENTINEL) & (v != last))
-            last = v
-        lane_last[l] = last
-        lane_fill[l] = n
+    """Appends the values whose bit is set to their lanes' regions.
+
+    Bit `s * LANES + l` stands for step `s` of lane `l`; walking bits in
+    increasing order keeps each lane's values in step order."""
+    var remaining = bits
+    while remaining != 0:
+        var i = Int(count_trailing_zeros(remaining))
+        var lane = i % LANES
+        var n = lane_fill[unsafe_offset=lane]
+        lanes_out.unsafe_offset(lane * chunk + n).unsafe_write(
+            values[unsafe_offset=i]
+        )
+        lane_fill.unsafe_offset(lane).unsafe_write(n + 1)
+        remaining &= remaining - 1
 
 
 def append_dedup(mut out: List[UInt32], src: Span[UInt32, _]):
