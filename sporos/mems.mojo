@@ -346,9 +346,13 @@ def find_mems(index: MemIndex, reference: SeqText, query: SeqText, threads: Int 
         chunk,
     )
     parallel_for(task, chunks, threads)
-    var out = List[Mem]()
+    var total = 0
     for r in results:
-        out.extend(Span(r))
+        total += len(r)
+    var out = List[Mem](capacity=total)
+    for i in range(len(results)):
+        out.extend(Span(results[i]))
+        results[i] = List[Mem]()  # freed as it is copied: one copy at a time
     # Chunks are sorted and cover consecutive query ranges; only MEMs that
     # start left of their anchor's chunk can be out of place, by little.
     for i in range(1, len(out)):

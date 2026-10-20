@@ -321,28 +321,34 @@ def _report(
     if reverse:
         out.write(" Reverse")
     out.write_byte(ord("\n"))
-    # Format slices of the matches in parallel, then write them in order.
-    var slices = max(1, min(threads * 4, len(hits) // 50_000))
-    var texts = List[List[UInt8]](length=slices, fill=List[UInt8]())
-    var task = _FormatTask(
-        Pointer(to=hits).as_imm(),
-        Pointer(to=rtext),
-        Pointer(to=reference),
-        texts.unsafe_ptr(),
-        slices,
-        four_column,
-        name_width,
-    )
-    parallel_for(task, slices, threads)
-    for text in texts:
-        out.write_bytes(Span(text))
+    # Format rounds of slices in parallel and write each round in order, so
+    # the formatted text in memory stays small.
+    comptime per = 1 << 16
+    var slices = ceildiv(len(hits), per)
+    var round = threads * 4
+    var texts = List[List[UInt8]](length=min(round, max(slices, 1)), fill=List[UInt8]())
+    for first in range(0, slices, round):
+        var count = min(round, slices - first)
+        var task = _FormatTask(
+            Pointer(to=hits).as_imm(),
+            Pointer(to=rtext),
+            Pointer(to=reference),
+            texts.unsafe_ptr(),
+            first,
+            per,
+            four_column,
+            name_width,
+        )
+        parallel_for(task, count, threads)
+        for t in range(count):
+            out.write_bytes(Span(texts[t]))
     return len(hits)
 
 
 struct _FormatTask[hit_origin: ImmOrigin, text_origin: ImmOrigin, fasta_origin: ImmOrigin, out_origin: MutOrigin](
     ParallelTask
 ):
-    """Formats one slice of matches as MUMmer lines.
+    """Formats slice `first + index` (`per` matches each) as MUMmer lines.
 
     Tracked origins keep the inputs alive while the task runs."""
 
@@ -350,7 +356,8 @@ struct _FormatTask[hit_origin: ImmOrigin, text_origin: ImmOrigin, fasta_origin: 
     var rtext: ImmPointer[SeqText, Self.text_origin]
     var reference: ImmPointer[FastaRecords, Self.fasta_origin]
     var texts: MutPointer[List[UInt8], Self.out_origin]
-    var slices: Int
+    var first: Int
+    var per: Int
     var four_column: Bool
     var name_width: Int
 
@@ -360,7 +367,8 @@ struct _FormatTask[hit_origin: ImmOrigin, text_origin: ImmOrigin, fasta_origin: 
         rtext: ImmPointer[SeqText, Self.text_origin],
         reference: ImmPointer[FastaRecords, Self.fasta_origin],
         texts: MutPointer[List[UInt8], Self.out_origin],
-        slices: Int,
+        first: Int,
+        per: Int,
         four_column: Bool,
         name_width: Int,
     ):
@@ -368,15 +376,15 @@ struct _FormatTask[hit_origin: ImmOrigin, text_origin: ImmOrigin, fasta_origin: 
         self.rtext = rtext
         self.reference = reference
         self.texts = texts
-        self.slices = slices
+        self.first = first
+        self.per = per
         self.four_column = four_column
         self.name_width = name_width
 
     def run(self, index: Int):
         ref hits = self.hits[]
-        var per = ceildiv(len(hits), self.slices)
-        var lo = index * per
-        var hi = min(len(hits), lo + per)
+        var lo = (self.first + index) * self.per
+        var hi = min(len(hits), lo + self.per)
         ref text = self.texts[unsafe_offset=index]
         var line_max = 3 * 22 + 8 + (self.name_width + 4 if self.four_column else 0)
         text.resize(unsafe_uninit_length=max(0, hi - lo) * line_max)

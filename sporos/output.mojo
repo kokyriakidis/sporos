@@ -20,6 +20,11 @@ struct OutputBuffer(Movable):
         self.write_bytes(text.as_bytes())
 
     def write_bytes(mut self, bytes: Span[UInt8, _]):
+        if self.fd >= 0 and len(bytes) >= _FLUSH_AT:
+            # Large blocks go out directly, without a copy into the buffer.
+            self.flush()
+            _write_all(self.fd, bytes.unsafe_ptr(), len(bytes))
+            return
         self.buf.extend(bytes)
         if len(self.buf) >= _FLUSH_AT and self.fd >= 0:
             self.flush()
@@ -46,15 +51,17 @@ struct OutputBuffer(Movable):
     def flush(mut self):
         if self.fd < 0:
             return
-        var done = 0
-        while done < len(self.buf):
-            var n = external_call["write", Int](
-                self.fd, self.buf.unsafe_ptr().unsafe_offset(done), len(self.buf) - done
-            )
-            if n <= 0:
-                break
-            done += n
+        _write_all(self.fd, self.buf.unsafe_ptr(), len(self.buf))
         self.buf.clear()
+
+
+def _write_all(fd: Int32, data: ImmPointer[UInt8, _], length: Int):
+    var done = 0
+    while done < length:
+        var n = external_call["write", Int](fd, data.unsafe_offset(done), length - done)
+        if n <= 0:
+            break
+        done += n
 
 
 @fieldwise_init
