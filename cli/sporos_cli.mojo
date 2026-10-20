@@ -61,18 +61,18 @@ def run_mem(args: List[String]) raises:
         var a = args[i]
         if a == "-K":
             i += 1
-            anchor_k = Int(args[i])
+            anchor_k = Int(_value(args, i))
         elif a == "-k1":
             i += 1
-            ref_step = Int(args[i])
+            ref_step = Int(_value(args, i))
         elif a == "-k2":
             i += 1
-            query_step = Int(args[i])
+            query_step = Int(_value(args, i))
         elif a == "-mum" or a == "-mumreference" or a == "-maxmatch":
             mode = String(a.removeprefix("-"))
         elif a == "-l":
             i += 1
-            min_len = Int(args[i])
+            min_len = Int(_value(args, i))
         elif a == "-b":
             reverse = True
         elif a == "-r":
@@ -84,7 +84,7 @@ def run_mem(args: List[String]) raises:
             pass
         elif a == "-t" or a == "-threads":
             i += 1
-            threads = Int(args[i])
+            threads = Int(_value(args, i))
         elif a == "-v":
             verbose = True
         elif a.startswith("-"):
@@ -106,6 +106,9 @@ def run_mem(args: List[String]) raises:
         ref_seqs.append(reference.seq(r))
     var rtext = SeqText(ref_seqs)
     _log(verbose, String(t"  text: {_seconds(start)} s"))
+    for q in range(len(query)):
+        if len(query.seq(q)) >= Int(UInt32.MAX):
+            raise Error("query sequences must be shorter than 2^32 bases")
     var params = MemParams.choose(min_len, len(rtext), query.total_length())
     if anchor_k > 0 or ref_step > 0 or query_step > 0:
         # Tuning overrides: anchor length and coprime sampling steps.
@@ -465,6 +468,13 @@ struct _SeedFormatTask[seeds: ImmOrigin, names: ImmOrigin, out_origin: MutOrigin
         text.resize(unsafe_uninit_length=at)
 
 
+def _value(args: List[String], i: Int) raises -> String:
+    """The value of the option before `args[i]`."""
+    if i >= len(args):
+        raise Error(t"{args[i - 1]} needs a value\n{USAGE}")
+    return args[i]
+
+
 def _int_list(arg: String) raises -> List[Int]:
     """The integers of a comma-separated list."""
     var out = List[Int]()
@@ -489,21 +499,21 @@ def run_seeds(command: String, args: List[String]) raises:
             count_only = True
         elif a == "-k":
             i += 1
-            k = Int(args[i])
+            k = Int(_value(args, i))
         elif a == "-w":
             i += 1
-            w = Int(args[i])
+            w = Int(_value(args, i))
         elif a == "-s":
             i += 1
-            s = Int(args[i])
+            s = Int(_value(args, i))
         elif a == "--open":
             i += 1
-            open_offsets = _int_list(args[i])
+            open_offsets = _int_list(_value(args, i))
         elif a == "--forward":
             canonical = False
         elif a == "-t" or a == "-threads":
             i += 1
-            threads = Int(args[i])
+            threads = Int(_value(args, i))
         elif a.startswith("-"):
             raise Error(t"unknown option {a}\n{USAGE}")
         else:
@@ -660,19 +670,19 @@ def run_seed_index(args: List[String]) raises:
         var a = args[i]
         if a == "-k":
             i += 1
-            k = Int(args[i])
+            k = Int(_value(args, i))
         elif a == "-w":
             i += 1
-            w = Int(args[i])
+            w = Int(_value(args, i))
         elif a == "--keep":
             i += 1
-            keep = Float64(args[i])
+            keep = Float64(_value(args, i))
         elif a == "-s":
             i += 1
-            s = Int(args[i])
+            s = Int(_value(args, i))
         elif a == "--open":
             i += 1
-            open_offsets = _int_list(args[i])
+            open_offsets = _int_list(_value(args, i))
         elif a == "--syncmers":
             scheme = SYNCMER_SEEDS
         elif a == "--all-kmers":
@@ -681,10 +691,10 @@ def run_seed_index(args: List[String]) raises:
             all_kmers = True
         elif a == "--max-occ":
             i += 1
-            max_occ = Int(args[i])
+            max_occ = Int(_value(args, i))
         elif a == "-t" or a == "-threads":
             i += 1
-            threads = Int(args[i])
+            threads = Int(_value(args, i))
         elif a == "-v":
             verbose = True
         elif a.startswith("-"):

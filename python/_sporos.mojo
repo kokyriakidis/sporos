@@ -15,7 +15,7 @@ from std.sys import size_of
 
 from sporos.mems import Mem, MemIndex, MemParams, filter_mums, find_mems
 from sporos.minimizers import minimizer_positions
-from sporos.parallel import default_threads
+from sporos.parallel import MAX_THREADS, default_threads
 from sporos.syncmers import syncmer_positions
 from sporos.text import SeqText
 
@@ -51,7 +51,7 @@ def bases(seq: PythonObject) -> Span[UInt8, ImmutAnyOrigin]:
 def threads_of(count: PythonObject) raises -> Int:
     """`count`, or every physical core for zero or less."""
     var threads = Int(py=count)
-    return threads if threads > 0 else default_threads()
+    return min(threads, MAX_THREADS) if threads > 0 else default_threads()
 
 
 def bytes_of[T: TrivialRegisterPassable](items: List[T]) raises -> PythonObject:

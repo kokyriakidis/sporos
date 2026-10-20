@@ -15,9 +15,11 @@ comptime _SERIAL = 1 << 16
 """Below this many keys, one `sort` call."""
 
 
-def parallel_sort(mut keys: List[UInt64], threads: Int):
+def parallel_sort(mut keys: List[UInt64], var threads: Int):
     """Sorts `keys` in increasing order using up to `threads` threads."""
     var n = len(keys)
+    # Each thread's chunks need a histogram: at most one thread per _SERIAL keys.
+    threads = min(threads, n // _SERIAL)
     if threads <= 1 or n < _SERIAL:
         sort(Span(keys))
         return

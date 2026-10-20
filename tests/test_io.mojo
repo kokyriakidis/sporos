@@ -51,5 +51,41 @@ def test_gzip_round_trip() raises:
     assert_true(_is(packed, 0, "ACGTACGT") and _is(plain, 0, "ACGTACGT"))
 
 
+def _system(command: String) -> Int32:
+    var bytes = List[UInt8](command.as_bytes())
+    bytes.append(0)
+    return external_call["system", Int32](bytes.unsafe_ptr())
+
+
+def test_fastq_header_at_end() raises:
+    var r = parse_sequences(String("@r1\nACGT\n+\nIIII\n@r2").as_bytes())
+    assert_equal(len(r), 2)
+    assert_true(_is(r, 0, "ACGT") and _is(r, 1, ""))
+    assert_true(r.names[1] == "r2")
+    assert_equal(len(parse_sequences(String("@r").as_bytes())), 1)
+
+
+def test_pipe_input() raises:
+    # A FIFO reports size 0: reading must still run to end of file.
+    var fifo = String("build/test_io_fifo")
+    assert_equal(_system("rm -f " + fifo + " && mkfifo " + fifo), 0)
+    assert_equal(_system("(printf '>a\\nACGTACGT\\n>b\\nGG\\n' > " + fifo + " &)"), 0)
+    var r = read_fasta(fifo)
+    assert_equal(len(r), 2)
+    assert_true(_is(r, 0, "ACGTACGT") and _is(r, 1, "GG"))
+
+
+def test_bgzf_then_gzip_members() raises:
+    if _system("command -v bgzip > /dev/null") != 0:
+        return  # needs htslib's bgzip
+    assert_equal(_system("printf '>a\\nACGT\\n' > build/test_io_a.fa && printf '>b\\nGGCC\\n' > build/test_io_b.fa"), 0)
+    assert_equal(_system("(bgzip -c build/test_io_a.fa; gzip -c build/test_io_b.fa) > build/test_io_mixed.fa.gz"), 0)
+    assert_equal(_system("(gzip -c build/test_io_a.fa; bgzip -c build/test_io_b.fa) > build/test_io_mixed2.fa.gz"), 0)
+    for path in ["build/test_io_mixed.fa.gz", "build/test_io_mixed2.fa.gz"]:
+        var r = read_fasta(path)
+        assert_equal(len(r), 2)
+        assert_true(_is(r, 0, "ACGT") and _is(r, 1, "GGCC"))
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

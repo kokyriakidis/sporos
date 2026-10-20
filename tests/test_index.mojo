@@ -1,6 +1,16 @@
 from std.testing import assert_equal, assert_true, TestSuite
 
-from sporos.index import ALL_KMERS, MINIMIZER_SEEDS, SYNCMER_SEEDS, SeedHit, SeedIndex, reverse_complement
+from sporos.index import (
+    ALL_KMERS,
+    MINIMIZER_SEEDS,
+    SYNCMER_SEEDS,
+    SeedHit,
+    SeedIndex,
+    fingerprint,
+    kmer_hash,
+    kmer_mask,
+    reverse_complement,
+)
 from reference import canonical_kmer_of, encode_all, naive_minimizers, naive_syncmers, random_dna
 
 
@@ -166,6 +176,45 @@ def test_lookup_batch_matches_lookup() raises:
                         for i in range(len(hits)):
                             if not (got[i] == hits[i]):
                                 raise Error(String(t"scheme={scheme} read {r}: hit {i} differs"))
+
+
+def test_bucket_and_fingerprint_identify_kmers() raises:
+    # With bucket bits + 31 >= 2k, (bucket, fingerprint) must be unique per k-mer.
+    var state = UInt64(99)
+    for k in [5, 12, 16, 19, 25, 31, 32]:
+        var bucket_bits = max(1, 2 * k - 31)
+        var keys = List[UInt64]()
+        var seen = List[UInt64]()
+        for _ in range(100_000):
+            state ^= state << 13
+            state ^= state >> 7
+            state ^= state << 17
+            var kmer = state & kmer_mask(k)
+            var h = kmer_hash(kmer, k)
+            seen.append(kmer)
+            keys.append(((h >> UInt64(64 - bucket_bits)) << 31) | fingerprint(h, k))
+        sort(Span(seen))
+        sort(Span(keys))
+        var distinct_kmers = 0
+        var distinct_keys = 0
+        for i in range(len(seen)):
+            distinct_kmers += Int(i == 0 or seen[i] != seen[i - 1])
+            distinct_keys += Int(i == 0 or keys[i] != keys[i - 1])
+        assert_equal(distinct_keys, distinct_kmers)
+
+
+def test_no_hits_for_absent_kmers() raises:
+    # These 16-mers shared a bucket and fingerprint under the previous hash.
+    var reference = List[UInt8]("CCGCGCGGACAGCGAG".as_bytes())
+    var query = List[UInt8]("CAGGCGTTAATGAATA".as_bytes())
+    var seqs = List[Span[UInt8, origin_of(reference)]]()
+    seqs.append(Span(reference))
+    var index = SeedIndex(seqs, 16, 1, ALL_KMERS)
+    var hits = List[SeedHit]()
+    index.lookup(Span(query), hits, True)
+    assert_equal(len(hits), 0)
+    index.lookup(Span(reference), hits, True)
+    assert_equal(len(hits), 1)
 
 
 def test_occurrence_cutoff() raises:

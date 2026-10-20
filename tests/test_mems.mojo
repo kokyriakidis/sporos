@@ -154,5 +154,14 @@ def test_mum_filter_threads_agree() raises:
             assert_true(parallel[i] == serial[i])
 
 
+def test_params_for_long_min_len() raises:
+    # The step search is linear in L - k: long minimum lengths stay instant.
+    var params = MemParams.choose(10_000_000, 1000, 1000)
+    params.validate()
+    var short = MemParams.choose(50, 1_000_000, 1_000_000)
+    short.validate()
+    assert_equal(short.ref_step * short.query_step <= 50 - short.k + 1, True)
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

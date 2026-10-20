@@ -6,12 +6,13 @@ occurrences on both strands. Lookups take the query's minimizers (or every
 query k-mer), probe the table through a software prefetch pipeline, and
 return hits with occurrence counts for abundance filtering.
 
-Entries are `fingerprint << 33 | reverse << 32 | position`, where the
-fingerprint is the low 31 bits of the canonical k-mer's `mix64` hash and
-`reverse` says the reference k-mer is the reverse complement of its
-canonical form. Buckets are sorted, so the occurrences of one k-mer are
-contiguous. When bucket and fingerprint bits cannot tell all k-mers apart
-(`2k > bucket bits + 31`), candidates are checked against the text.
+K-mers are hashed by `kmer_hash`, a bijection on 2k bits: its top bits pick
+the bucket and its low 31 bits are the fingerprint. Entries are
+`fingerprint << 33 | reverse << 32 | position`, where `reverse` says the
+reference k-mer is the reverse complement of its canonical form. Buckets are
+sorted, so the occurrences of one k-mer are contiguous. Bucket and
+fingerprint identify a k-mer exactly when `bucket bits + 31 >= 2k`;
+otherwise (`verify`) candidates are checked against the text.
 """
 
 from std.bit import bit_reverse, count_trailing_zeros, pop_count
@@ -22,7 +23,6 @@ from std.os import abort
 
 from sporos.alphabet import CodeBuffer, N_CODE, encode_into
 from sporos.batch import SeedBatch, minimizers_batch, syncmers_batch
-from sporos.mems import mix64
 from sporos.parallel import ParallelTask, parallel_for
 from sporos.minimizers import minimizer_positions, minimizer_positions_from_codes
 from sporos.syncmers import syncmer_positions, syncmer_positions_from_codes
@@ -93,6 +93,29 @@ def reverse_complement(kmer: UInt64, k: Int) -> UInt64:
     # bit_reverse also swapped the two bits of every base; swap them back.
     r = ((r >> 1) & _PAIRS) | ((r & _PAIRS) << 1)
     return r >> UInt64(64 - 2 * k)
+
+
+@inline(.always)
+def kmer_hash(kmer: UInt64, k: Int) -> UInt64:
+    """An invertible mix of a 2k-bit k-mer, in the top 2k bits of the result
+    (xorshifts and odd multiplies modulo 2^2k), so any of its top bits
+    together with its low 31 (`fingerprint`) that cover all 2k identify the
+    k-mer."""
+    var mask = kmer_mask(k)
+    var half = UInt64(k)
+    var h = kmer
+    h ^= h >> half
+    h = (h * 0xFF51AFD7ED558CCD) & mask
+    h ^= h >> half
+    h = (h * 0xC4CEB9FE1A85EC53) & mask
+    h ^= h >> half
+    return h << UInt64(64 - 2 * k)
+
+
+@inline(.always)
+def fingerprint(hash: UInt64, k: Int) -> UInt64:
+    """The low 31 bits of a `kmer_hash` value's 2k-bit mix."""
+    return (hash >> UInt64(64 - 2 * k)) & 0x7FFFFFFF
 
 
 @inline(.always)
@@ -180,9 +203,9 @@ struct _SelectedKmers[origin: ImmOrigin](AnchorSource):
         for i in range(lo, lo + self.count(chunk)):
             var pos = Int(self.positions[unsafe_offset=i])
             var form = canonical(self.text[].window(pos) & mask, self.k)
-            var h = mix64(form[0])
+            var h = kmer_hash(form[0], self.k)
             hashes[unsafe_offset=i - lo] = h
-            entries[unsafe_offset=i - lo] = ((h & 0x7FFFFFFF) << 33) | (UInt64(Int(form[1])) << 32) | UInt64(pos)
+            entries[unsafe_offset=i - lo] = (fingerprint(h, self.k) << 33) | (UInt64(Int(form[1])) << 32) | UInt64(pos)
 
 
 struct SeedIndex(Movable):
@@ -378,7 +401,7 @@ struct SeedIndex(Movable):
                 else:
                     start = Int(selected[unsafe_offset=seeds.offsets[r] + i])
                 var form = canonical(text.window(base + start) & mask, self.k)
-                var h = mix64(form[0])
+                var h = kmer_hash(form[0], self.k)
                 ring[n & (_RING - 1)] = _Probe(r, UInt32(start), form[0], h, form[1], 0, 0)
                 prefetch[_AHEAD](off.unsafe_offset(self.table.bucket(h)))
                 if n >= _LAG:
@@ -405,7 +428,7 @@ struct SeedIndex(Movable):
     @inline(.always)
     def _report(self, probe: _Probe, max_occurrences: Int, mut hits: List[SeedHit], counts: MutPointer[Int, _]):
         var ent = self.table.entries.unsafe_ptr()
-        var fp = probe.hash & 0x7FFFFFFF
+        var fp = fingerprint(probe.hash, self.k)
         # Entries are sorted, so this k-mer's occurrences are one run.
         var first = Int(probe.low)
         var end = Int(probe.high)

@@ -85,7 +85,8 @@ def parse_fastq(bytes: Span[UInt8, _]) raises -> FastaRecords:
         ):
             j += 1
         records.names.append(String(StringSlice(unsafe_from_utf8=bytes[i + 1 : j])))
-        var seq_start = _line_end(src, j, n) + 1
+        # A header at the end of the input has an empty sequence.
+        var seq_start = min(_line_end(src, j, n) + 1, n)
         var seq_end = min(_line_end(src, seq_start, n), n)
         var trimmed = seq_end
         if trimmed > seq_start and src[unsafe_offset=trimmed - 1] == _RETURN:
@@ -220,34 +221,47 @@ def parse_fasta_in_place(var bytes: List[UInt8]) raises -> FastaRecords:
 
 
 def read_file(path: String, threads: Int = 1) raises -> List[UInt8]:
-    """The file's bytes, inflated if it is gzipped."""
-    var magic: List[UInt8]
-    with open(path, "r") as f:
-        magic = f.read_bytes(2)
-    if len(magic) == 2 and magic[0] == 0x1F and magic[1] == 0x8B:
+    """The file's (or pipe's) bytes, inflated if they are gzipped."""
+    var raw = _read_raw(path)
+    if len(raw) >= 2 and raw[0] == 0x1F and raw[1] == 0x8B:
         var libdeflate = _load_libdeflate()
         if libdeflate:
-            var packed = _read_raw(path)
-            if _is_bgzf(Span(packed)):
-                return _inflate_bgzf(Span(packed), libdeflate.value(), threads)
-            return _inflate_gzip(Span(packed), libdeflate.value())
+            if _is_bgzf(Span(raw)):
+                return _inflate_bgzf(Span(raw), libdeflate.value(), threads)
+            return _inflate_gzip(Span(raw), libdeflate.value())
         return _gunzip(path)
-    return _read_raw(path)
+    return raw^
 
 
 def _read_raw(path: String) raises -> List[UInt8]:
-    # Read straight into one buffer of the file's size; a single read() call
-    # cannot return 2 GiB or more on macOS, so read in blocks.
-    var size = Int(stat(path).st_size)
-    var out = List[UInt8](unsafe_uninit_length=size)
+    """Every byte of `path` up to end of file. The size `stat` reports is
+    only a first guess (pipes report 0). A single read() call cannot return
+    2 GiB or more on macOS, so reads go in blocks."""
+    var guess = max(0, Int(stat(path).st_size))
+    var out = List[UInt8](unsafe_uninit_length=max(guess, 1 << 16))
+    var probe = List[UInt8](unsafe_uninit_length=1 << 16)
     var done = 0
     with open(path, "r") as f:
-        while done < size:
-            var room = min(1 << 30, size - done)
+        while True:
+            if done == len(out):
+                # Full: probe for more before growing (a regular file ends here).
+                var more = f.read(Span(probe))
+                if more < 0:
+                    raise Error(t"cannot read {path}")
+                if more == 0:
+                    break
+                out.resize(unsafe_uninit_length=2 * len(out))
+                unsafe_memcpy(dest=out.unsafe_ptr().unsafe_offset(done), src=probe.unsafe_ptr(), count=Int(more))
+                done += Int(more)
+                continue
+            var room = min(1 << 30, len(out) - done)
             var got = f.read(Span(out)[done : done + room])
-            if got <= 0:
+            if got < 0:
                 raise Error(t"cannot read {path}")
-            done += got
+            if got == 0:
+                break
+            done += Int(got)
+    out.resize(unsafe_uninit_length=done)
     return out^
 
 
@@ -274,11 +288,11 @@ def _is_bgzf(data: Span[UInt8, _]) -> Bool:
     return len(data) >= 18 and data[3] & 4 != 0 and data[12] == 66 and data[13] == 67
 
 
-struct _InflateTask[data_origin: ImmOrigin, lib_origin: ImmOrigin](ParallelTask):
+struct _InflateTask[data_origin: ImmOrigin, blocks_origin: ImmOrigin, lib_origin: ImmOrigin](ParallelTask):
     """Inflates one run of BGZF blocks into their slots of the output."""
 
     var data: ImmPointer[UInt8, Self.data_origin]
-    var blocks: ImmPointer[Int, ImmUntrackedOrigin]
+    var blocks: ImmPointer[Int, Self.blocks_origin]
     var dst: MutPointer[UInt8, MutUntrackedOrigin]
     var lib: ImmPointer[OwnedDLHandle, Self.lib_origin]
     var per_task: Int
@@ -288,7 +302,7 @@ struct _InflateTask[data_origin: ImmOrigin, lib_origin: ImmOrigin](ParallelTask)
     def __init__(
         out self,
         data: ImmPointer[UInt8, Self.data_origin],
-        blocks: ImmPointer[Int, ImmUntrackedOrigin],
+        blocks: ImmPointer[Int, Self.blocks_origin],
         dst: MutPointer[UInt8, MutUntrackedOrigin],
         lib: ImmPointer[OwnedDLHandle, Self.lib_origin],
         per_task: Int,
@@ -334,18 +348,21 @@ def _inflate_bgzf(data: Span[UInt8, _], lib: OwnedDLHandle, threads: Int) raises
     var total = 0
     var at = 0
     var n = len(data)
-    while at + 18 <= n:
-        if data[at] != 0x1F or data[at + 1] != 0x8B or data[at + 3] & 4 == 0:
+    while at < n:
+        if at + 18 > n or data[at] != 0x1F or data[at + 1] != 0x8B:
             raise Error("corrupt BGZF block header")
+        if not _is_bgzf(data[at:]):
+            break  # a plain gzip member: the rest inflates serially
         var xlen = Int(data[at + 10]) | (Int(data[at + 11]) << 8)
         var bsize = -1
         var x = at + 12
-        while x + 4 <= at + 12 + xlen:
+        while x + 4 <= at + 12 + xlen and x + 4 <= n:
             var sub_len = Int(data[x + 2]) | (Int(data[x + 3]) << 8)
-            if data[x] == 66 and data[x + 1] == 67 and sub_len == 2:
+            if data[x] == 66 and data[x + 1] == 67 and sub_len == 2 and x + 6 <= n:
                 bsize = Int(data[x + 4]) | (Int(data[x + 5]) << 8)
             x += 4 + sub_len
-        if bsize < 0 or at + bsize + 1 > n:
+        # A block holds its header, the extra field, deflate data and an 8-byte trailer.
+        if bsize < xlen + 19 or at + bsize + 1 > n:
             raise Error("corrupt BGZF block")
         var end = at + bsize + 1
         var isize = (
@@ -363,16 +380,19 @@ def _inflate_bgzf(data: Span[UInt8, _], lib: OwnedDLHandle, threads: Int) raises
     var failed = List[Int](length=1, fill=0)
     var task = _InflateTask(
         data.unsafe_ptr().as_imm(),
-        blocks.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+        blocks.unsafe_ptr().as_imm(),
         out.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
         Pointer(to=lib),
         per_task,
         count,
         failed.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
     )
-    parallel_for(task, ceildiv(count, per_task), threads)
-    if failed[0] != 0 or len(blocks) == 0:
+    if count > 0:
+        parallel_for(task, ceildiv(count, per_task), threads)
+    if failed[0] != 0 or (count == 0 and at >= n):
         raise Error("BGZF inflation failed")
+    if at < n:
+        out.extend(Span(_inflate_gzip(data[at:], lib)))
     return out^
 
 

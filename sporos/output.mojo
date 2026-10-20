@@ -1,6 +1,8 @@
 """Buffered byte output to a file descriptor with fast integer formatting."""
 
 from std.ffi import external_call
+from std.sys import exit, stderr
+from std.sys.info import CompilationTarget
 
 comptime _FLUSH_AT = 1 << 20
 
@@ -56,12 +58,29 @@ struct OutputBuffer(Movable):
 
 
 def _write_all(fd: Int32, data: ImmPointer[UInt8, _], length: Int):
+    """Writes every byte, retrying interrupted writes; any other failure (a
+    full disk, a closed pipe) ends the program with an error, never silently
+    truncated output."""
     var done = 0
     while done < length:
         var n = external_call["write", Int](fd, data.unsafe_offset(done), length - done)
-        if n <= 0:
-            break
-        done += n
+        if n > 0:
+            done += n
+            continue
+        if n < 0 and _errno() == _EINTR:
+            continue
+        print("sporos: write failed (errno ", _errno(), ")", sep="", file=stderr)
+        exit(1)
+
+
+comptime _EINTR: Int32 = 4
+
+
+def _errno() -> Int32:
+    comptime if CompilationTarget.is_macos():
+        return external_call["__error", MutPointer[Int32, MutAnyOrigin]]()[]
+    else:
+        return external_call["__errno_location", MutPointer[Int32, MutAnyOrigin]]()[]
 
 
 @fieldwise_init

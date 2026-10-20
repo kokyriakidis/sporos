@@ -333,7 +333,8 @@ def _step[
                 # Is the minimum's offset in the k-mer one of the allowed?
                 var rel = minpos - value
                 var word = rel.lt(32).select(consts.offsets_lo, consts.offsets_hi)
-                hit = ((word >> (rel & 31)) & 1).ne(0)
+                # Offsets are below 64: a minimum further in is never allowed.
+                hit = rel.lt(64) & ((word >> (rel & 31)) & 1).ne(0)
             keep = hit & lanes.run.ge(consts.span)
         obuf.unsafe_store(0, value)
         bits = UInt32(pack_bits[_Bits](keep))

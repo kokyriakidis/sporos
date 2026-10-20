@@ -16,7 +16,8 @@ of the same query sequence.
 """
 
 from std.bit import count_leading_zeros, count_trailing_zeros
-from std.math import ceildiv, gcd
+from std.math import ceildiv, gcd, iota
+from std.memory import pack_bits
 from std.sys.intrinsics import PrefetchOptions, prefetch
 
 from sporos.parallel import ParallelTask, parallel_for
@@ -66,13 +67,14 @@ struct MemParams(ImplicitlyCopyable, TrivialRegisterPassable, Writable):
         var best = Self(min_len, k, 1, 1)
         var best_cost = Float64.MAX
         for k1 in range(1, span + 1):
-            for k2 in range(1, span // k1 + 1):
-                if gcd(k1, k2) != 1:
-                    continue
-                var cost = Float64(ref_len) / Float64(k1) + 3.0 * Float64(query_len) / Float64(k2)
-                if cost < best_cost:
-                    best_cost = cost
-                    best = Self(min_len, k, k1, k2)
+            # The cost falls as k2 grows: only the largest coprime k2 counts.
+            var k2 = span // k1
+            while gcd(k1, k2) != 1:
+                k2 -= 1
+            var cost = Float64(ref_len) / Float64(k1) + 3.0 * Float64(query_len) / Float64(k2)
+            if cost < best_cost:
+                best_cost = cost
+                best = Self(min_len, k, k1, k2)
         return best
 
     def validate(self) raises:
@@ -129,6 +131,11 @@ def match_backward(a: SeqText, i: Int, b: SeqText, j: Int, limit: Int) -> Int:
 comptime _AHEAD = PrefetchOptions().for_read().high_locality()
 comptime _BUILD_CHUNK = 1 << 20
 """Reference positions per anchor-collection task."""
+comptime _SCAN = 8
+"""Entries a bucket's vector prefilter covers."""
+comptime _BUCKET_LOAD = 4
+"""Anchors per bucket: a quarter of the offsets, with no loss of speed
+(measured on hg38 chr1 and chr21)."""
 comptime _LAG = 16
 """Anchors between pipeline stages (hash -> bucket bounds -> match)."""
 comptime _RING = 64
@@ -211,7 +218,7 @@ struct MemIndex(Movable):
         var source = _SampledAnchors(
             Pointer(to=reference).unsafe_origin_cast[ImmUntrackedOrigin](), params.k, params.ref_step
         )
-        self.table = HashTable(source, threads)
+        self.table = HashTable(source, threads, bucket_load=_BUCKET_LOAD)
 
     def find(
         self,
@@ -265,7 +272,10 @@ struct MemIndex(Movable):
         var off = self.table.offsets.unsafe_ptr()
         lows[slot] = off[unsafe_offset=b]
         highs[slot] = off[unsafe_offset=b + 1]
-        prefetch[_AHEAD](self.table.entries.unsafe_ptr().unsafe_offset(Int(lows[slot])))
+        var first = self.table.entries.unsafe_ptr().unsafe_offset(Int(lows[slot]))
+        prefetch[_AHEAD](first)
+        # The bucket's vector prefilter usually spans two lines.
+        prefetch[_AHEAD](first.unsafe_offset(_SCAN - 1))
 
     @inline(.always)
     def _match(
@@ -285,7 +295,20 @@ struct MemIndex(Movable):
         var ent = self.table.entries.unsafe_ptr()
         var j = positions[slot]
         var fp = hashes[slot] << 32
-        for e in range(Int(lows[slot]), Int(highs[slot])):
+        var lo = Int(lows[slot])
+        var hi = Int(highs[slot])
+        # Small buckets: one vector compare of the fingerprints picks the
+        # candidates (`table.ENTRY_PADDING` keeps the load in bounds).
+        var candidates = UInt64.MAX
+        if hi - lo <= _SCAN:
+            var lanes = ent.unsafe_offset(lo).unsafe_load[width=_SCAN]() >> 32
+            var hit = lanes.eq(fp >> 32) & iota[DType.uint64, _SCAN]().lt(UInt64(hi - lo))
+            candidates = UInt64(pack_bits[DType.uint8](hit))
+            if candidates == 0:
+                return
+        for e in range(lo, hi):
+            if e - lo < _SCAN and (candidates >> UInt64(e - lo)) & 1 == 0:
+                continue
             var entry = ent[unsafe_offset=e]
             if (entry ^ fp) >> 32 != 0:
                 continue

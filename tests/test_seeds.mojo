@@ -98,7 +98,8 @@ def test_syncmers_match_reference() raises:
 
 
 def test_open_syncmers_with_several_offsets() raises:
-    var configs = [(15, 5), (21, 11), (20, 16), (40, 5)]
+    # (100, 10): minima up to 90 bases in, past the 64-bit offset mask.
+    var configs = [(15, 5), (21, 11), (20, 16), (40, 5), (100, 10)]
     var lengths = [10, 65, 3000]
     var case_id = 3000
     for cfg in configs:
@@ -107,6 +108,8 @@ def test_open_syncmers_with_several_offsets() raises:
         var sets: List[List[Int]] = [[0, k - s], [1, (k - s) // 2, k - s - 1], [k - s]]
         if k - s >= 32:
             sets.append([3, 31, 32, 33])
+        if k - s >= 64:
+            sets = [[1, 33], [0, 63], [3, 31, 32, 33]]  # offsets stop at 63
         for n in lengths:
             for canonical in [True, False]:
                 for ref offsets in sets:

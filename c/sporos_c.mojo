@@ -14,7 +14,7 @@ from std.memory import Allocation, Layout, alloc, dealloc, unsafe_memcpy
 
 from sporos.mems import Mem, MemIndex, MemParams, filter_mums, find_mems
 from sporos.minimizers import minimizer_positions
-from sporos.parallel import default_threads
+from sporos.parallel import MAX_THREADS, default_threads
 from sporos.syncmers import syncmer_positions
 from sporos.text import SeqText
 
@@ -66,7 +66,7 @@ struct Matches(Movable):
 @inline(.always)
 def thread_count(threads: Int32) -> Int:
     """`threads`, or every physical core for zero or less."""
-    return Int(threads) if threads > 0 else default_threads()
+    return min(Int(threads), MAX_THREADS) if threads > 0 else default_threads()
 
 
 def bytes_of(seq: CBytes, length: Int) -> Span[UInt8, ImmutAnyOrigin]:
