@@ -29,5 +29,7 @@ habits:
   generic over the origins of the data they read (`cli/sporos_cli.mojo`'s `_FormatTask`): tracked pointers keep
   the owners alive while the task runs.
 - `unsafe_strided_load` on `UInt8` returns wrong lanes on the current nightly; gather explicitly.
+- In a `TestSuite` file, `String(StringSlice(unsafe_from_utf8=span))` fails to compile (recursive
+  `CStringSpan.__init__`); compare bytes instead. `std.subprocess` trips the same bug.
 - Benchmark with min-of-N timings; other jobs share the machine.
 - Finished work merges straight into `main` and is pushed; no pull requests.

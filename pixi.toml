@@ -17,8 +17,9 @@ build = { cmd = "mojo precompile sporos -o build/sporos.mojoc", depends-on = ["p
 build-test-seeds = { cmd = "mojo build -I . -I tests tests/test_seeds.mojo -o build/test_seeds", depends-on = ["prepare"] }
 build-test-mems = { cmd = "mojo build -I . -I tests tests/test_mems.mojo -o build/test_mems", depends-on = ["prepare"] }
 build-test-index = { cmd = "mojo build -I . -I tests tests/test_index.mojo -o build/test_index", depends-on = ["prepare"] }
+build-test-io = { cmd = "mojo build -I . -I tests tests/test_io.mojo -o build/test_io", depends-on = ["prepare"] }
 # Every kernel held to a brute-force oracle (tests/reference.mojo).
-test = { cmd = "./build/test_seeds && ./build/test_mems && ./build/test_index", depends-on = ["build-test-seeds", "build-test-mems", "build-test-index"] }
+test = { cmd = "./build/test_io && ./build/test_seeds && ./build/test_mems && ./build/test_index", depends-on = ["build-test-io", "build-test-seeds", "build-test-mems", "build-test-index"] }
 build-bench-seeds = { cmd = "mojo build -I . -I tests -I benchmarks benchmarks/bench_seeds.mojo -o build/bench_seeds", depends-on = ["prepare"] }
 # Single-thread minimizer/syncmer throughput on random DNA: `pixi run bench-seeds [length]`.
 bench-seeds = { cmd = "./build/bench_seeds", depends-on = ["build-bench-seeds"] }

@@ -1,9 +1,16 @@
-"""Minimal, fast FASTA reading: whole file in, records out."""
+"""Fast FASTA/FASTQ reading: whole file in (gzip transparently), records out.
+
+Gzipped input is detected by its magic bytes and inflated with the system
+zlib, loaded at run time, so sporos has no build-time dependency on it.
+"""
 
 from std.bit import count_trailing_zeros
+from std.ffi import OwnedDLHandle
 from std.memory import pack_bits, unsafe_memcpy
+from std.sys.info import CompilationTarget
 
 comptime _HEADER = UInt8(ord(">"))
+comptime _AT = UInt8(ord("@"))
 comptime _NEWLINE = UInt8(ord("\n"))
 comptime _RETURN = UInt8(ord("\r"))
 comptime _SPACE = UInt8(ord(" "))
@@ -47,6 +54,49 @@ def _line_end(src: ImmPointer[UInt8, _], start: Int, n: Int) -> Int:
     while i < n and src[unsafe_offset=i] != _NEWLINE:
         i += 1
     return i
+
+
+def parse_fastq(bytes: Span[UInt8, _]) raises -> FastaRecords:
+    """Parses four-line FASTQ records (qualities are skipped)."""
+    var records = FastaRecords()
+    var n = len(bytes)
+    var src = bytes.unsafe_ptr()
+    var i = 0
+    while i < n:
+        var c = src[unsafe_offset=i]
+        if c == _NEWLINE or c == _RETURN:
+            i += 1
+            continue
+        if c != _AT:
+            raise Error("FASTQ record must start with '@'")
+        var j = i + 1
+        while j < n and src[unsafe_offset=j] != _SPACE and src[unsafe_offset=j] != _TAB and src[
+            unsafe_offset=j
+        ] != _NEWLINE and src[unsafe_offset=j] != _RETURN:
+            j += 1
+        records.names.append(String(StringSlice(unsafe_from_utf8=bytes[i + 1 : j])))
+        var seq_start = _line_end(src, j, n) + 1
+        var seq_end = min(_line_end(src, seq_start, n), n)
+        var trimmed = seq_end
+        if trimmed > seq_start and src[unsafe_offset=trimmed - 1] == _RETURN:
+            trimmed -= 1
+        records.starts.append(len(records.data))
+        records.lengths.append(trimmed - seq_start)
+        records.data.extend(bytes[seq_start:trimmed])
+        var plus_end = _line_end(src, seq_end + 1, n)
+        i = _line_end(src, plus_end + 1, n) + 1
+    return records^
+
+
+def parse_sequences(bytes: Span[UInt8, _]) raises -> FastaRecords:
+    """Parses FASTA or FASTQ, telling them apart by the first record."""
+    for i in range(len(bytes)):
+        var c = bytes[i]
+        if c == _AT:
+            return parse_fastq(bytes)
+        if c != _NEWLINE and c != _RETURN and c != _SPACE:
+            break
+    return parse_fasta(bytes)
 
 
 def parse_fasta(bytes: Span[UInt8, _]) raises -> FastaRecords:
@@ -99,7 +149,45 @@ def parse_fasta(bytes: Span[UInt8, _]) raises -> FastaRecords:
 
 
 def read_fasta(path: String) raises -> FastaRecords:
-    var bytes: List[UInt8]
+    """Reads a FASTA or FASTQ file, gzipped or not."""
+    var bytes = read_file(path)
+    return parse_sequences(Span(bytes))
+
+
+def read_file(path: String) raises -> List[UInt8]:
+    """The file's bytes, inflated if it is gzipped."""
+    var magic: List[UInt8]
     with open(path, "r") as f:
-        bytes = f.read_bytes()
-    return parse_fasta(Span(bytes))
+        magic = f.read_bytes(2)
+    if len(magic) == 2 and magic[0] == 0x1F and magic[1] == 0x8B:
+        return _gunzip(path)
+    with open(path, "r") as f:
+        return f.read_bytes()
+
+
+def _gunzip(path: String) raises -> List[UInt8]:
+    comptime library = "libz.dylib" if CompilationTarget.is_macos() else "libz.so.1"
+    var zlib = OwnedDLHandle(library)
+    var c_path = List[UInt8](path.as_bytes())
+    c_path.append(0)
+    var mode: List[UInt8] = [UInt8(ord("r")), UInt8(ord("b")), 0]
+    var gz = zlib.get_function[Int]("gzopen")(c_path.unsafe_ptr(), mode.unsafe_ptr())
+    if gz == 0:
+        raise Error(t"cannot open {path}")
+    _ = zlib.get_function[Int32]("gzbuffer")(gz, UInt32(1 << 20))
+    comptime CHUNK = 1 << 24
+    var out = List[UInt8]()
+    while True:
+        var old = len(out)
+        out.resize(unsafe_uninit_length=old + CHUNK)
+        var got = Int(
+            zlib.get_function[Int32]("gzread")(gz, out.unsafe_ptr().unsafe_offset(old), UInt32(CHUNK))
+        )
+        if got < 0:
+            _ = zlib.get_function[Int32]("gzclose")(gz)
+            raise Error(t"error inflating {path}")
+        out.resize(unsafe_uninit_length=old + got)
+        if got < CHUNK:
+            break
+    _ = zlib.get_function[Int32]("gzclose")(gz)
+    return out^
