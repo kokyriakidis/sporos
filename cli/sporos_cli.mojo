@@ -25,7 +25,8 @@ from sporos.text import SeqText
 from sporos.window import PADDING
 
 comptime USAGE = """usage:
-  sporos mem [-mum | -mumreference | -maxmatch] [-l L] [-b | -r] [-F] [-n] [-t threads] [-v] <reference.fa> <query.fa>
+  sporos mem [-mum | -mumreference | -maxmatch] [-l L] [-b | -r] [-F] [-n] [-t threads] [-v]
+             [-K anchor_k] [-k1 ref_step] [-k2 query_step] <reference.fa> <query.fa>
   sporos minimizers -k K -w W [--forward] [-t threads] <seqs.fa>
   sporos syncmers -k K -s S [--open T] [--forward] [-t threads] <seqs.fa>"""
 
@@ -47,11 +48,23 @@ def run_mem(args: List[String]) raises:
     var four_column = False
     var threads = default_threads()
     var verbose = False
+    var anchor_k = 0
+    var ref_step = 0
+    var query_step = 0
     var paths = List[String]()
     var i = 0
     while i < len(args):
         var a = args[i]
-        if a == "-mum" or a == "-mumreference" or a == "-maxmatch":
+        if a == "-K":
+            i += 1
+            anchor_k = Int(args[i])
+        elif a == "-k1":
+            i += 1
+            ref_step = Int(args[i])
+        elif a == "-k2":
+            i += 1
+            query_step = Int(args[i])
+        elif a == "-mum" or a == "-mumreference" or a == "-maxmatch":
             mode = String(a.removeprefix("-"))
         elif a == "-l":
             i += 1
@@ -90,6 +103,14 @@ def run_mem(args: List[String]) raises:
     var rtext = SeqText(ref_seqs)
     _log(verbose, String(t"  text: {_seconds(start)} s"))
     var params = MemParams.choose(min_len, len(rtext), query.total_length())
+    if anchor_k > 0 or ref_step > 0 or query_step > 0:
+        # Tuning overrides: anchor length and coprime sampling steps.
+        params = MemParams(
+            min_len,
+            anchor_k if anchor_k > 0 else params.k,
+            ref_step if ref_step > 0 else params.ref_step,
+            query_step if query_step > 0 else params.query_step,
+        )
     var index = MemIndex(rtext, params, threads)
     _log(
         verbose,
