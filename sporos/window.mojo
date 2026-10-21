@@ -23,6 +23,7 @@ and each survivor is appended to its lane, then lanes are concatenated.
 """
 
 from std.bit import count_trailing_zeros, rotate_bits_left, rotate_bits_right
+from std.atomic import Atomic
 from std.math import ceildiv
 from std.memory import Layout, alloc, bitcast, dealloc, pack_bits, unsafe_memcpy
 from std.math import iota
@@ -676,38 +677,6 @@ def append_dedup(mut out: List[UInt32], src: Span[UInt32, _]):
     out.extend(Span(unsafe_ptr=src.unsafe_ptr().unsafe_offset(begin), length=len(src) - begin))
 
 
-struct _ScanTask[mode: Int, canonical: Bool, ascii: Bool, small: Bool](ParallelTask):
-    var codes: ImmPointer[UInt8, ImmUntrackedOrigin]
-    var results: MutPointer[List[UInt32], MutUntrackedOrigin]
-    var segment: Int
-    var windows: Int
-    var params: ScanParams
-    var readable: Int
-
-    def __init__(
-        out self,
-        codes: ImmPointer[UInt8, ImmUntrackedOrigin],
-        results: MutPointer[List[UInt32], MutUntrackedOrigin],
-        segment: Int,
-        windows: Int,
-        params: ScanParams,
-        readable: Int,
-    ):
-        self.codes = codes
-        self.results = results
-        self.segment = segment
-        self.windows = windows
-        self.params = params
-        self.readable = readable
-
-    def run(self, index: Int):
-        var start = index * self.segment
-        var count = min(self.segment, self.windows - start)
-        scan_segment[Self.mode, Self.canonical, Self.ascii, Self.small](
-            self.codes, start, count, self.params, self.results[unsafe_offset=index], self.readable
-        )
-
-
 def scan[
     mode: Int, canonical: Bool, ascii: Bool = False
 ](
@@ -743,66 +712,103 @@ def _scan[
     if num_segments == 1:
         scan_segment[mode, canonical, ascii, small](codes, 0, windows, params, out, readable)
         return out^
-    var results = List[List[UInt32]](length=num_segments, fill=List[UInt32]())
-    var task = _ScanTask[mode, canonical, ascii, small](
+    # Workers take small segments in order, scan each into their own reused
+    # buffer, then copy it straight into the output once the previous segment
+    # has published where it ends: one write of every position.
+    num_segments = ceildiv(windows, _SEGMENT)
+    out = List[UInt32](unsafe_uninit_length=windows)  # at most one position per window
+    var published_alloc = alloc(Layout[Atomic[Int64]](length=2 * num_segments))
+    var published = published_alloc.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+    for i in range(2 * num_segments):
+        published.unsafe_offset(i).unsafe_write(Atomic[Int64](-1))
+    var next = Atomic[Int64](0)
+    var task = _ChainTask[mode, canonical, ascii, small](
         codes.unsafe_origin_cast[ImmUntrackedOrigin](),
-        results.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
-        segment,
+        out.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+        published,
+        Pointer(to=next).unsafe_origin_cast[MutUntrackedOrigin](),
+        num_segments,
         windows,
         params,
         readable,
     )
-    parallel_for(task, num_segments, threads)
-    # Each segment's place in the output, dropping a first position equal to
-    # the last one before it (a minimizer spanning the boundary); then the
-    # copies, and the page faults of the output, run in parallel.
-    var firsts = List[Int](length=num_segments, fill=0)
-    var offsets = List[Int](length=num_segments + 1, fill=0)
-    var last = -1
-    for i in range(num_segments):
-        ref r = results[i]
-        if len(r) > 0 and Int(r[0]) == last:
-            firsts[i] = 1
-        offsets[i + 1] = offsets[i] + len(r) - firsts[i]
-        if len(r) > 0:
-            last = Int(r[len(r) - 1])
-    out.resize(unsafe_uninit_length=offsets[num_segments])
-    var copy = _CopyTask(
-        results.unsafe_ptr().as_imm(), firsts.unsafe_ptr().as_imm(), offsets.unsafe_ptr().as_imm(), out.unsafe_ptr()
-    )
-    parallel_for(copy, num_segments, threads)
+    parallel_for(task, min(threads, num_segments), threads)
+    var total = Int(published[unsafe_offset=2 * (num_segments - 1)].load())
+    _ = next.load()
+    dealloc(published_alloc^)
+    out.resize(unsafe_uninit_length=total)
     return out^
 
 
-struct _CopyTask[results_origin: ImmOrigin, firsts_origin: ImmOrigin, offsets_origin: ImmOrigin, out_origin: MutOrigin](
-    ParallelTask
-):
-    """Copies segment results into their places in the merged output."""
+comptime _SEGMENT = 1 << 18
+"""Windows per segment of a multithreaded scan (its output stays in L2)."""
 
-    var results: ImmPointer[List[UInt32], Self.results_origin]
-    var firsts: ImmPointer[Int, Self.firsts_origin]
-    var offsets: ImmPointer[Int, Self.offsets_origin]
-    var out: MutPointer[UInt32, Self.out_origin]
+
+struct _ChainTask[mode: Int, canonical: Bool, ascii: Bool, small: Bool](ParallelTask):
+    """One worker of a multithreaded scan. Segment i publishes its end in the
+    output at `published[2i]` (-1 until then), after its last position so far
+    at `published[2i + 1]` (-1: none)."""
+
+    var codes: ImmPointer[UInt8, ImmUntrackedOrigin]
+    var out: MutPointer[UInt32, MutUntrackedOrigin]
+    var published: MutPointer[Atomic[Int64], MutUntrackedOrigin]
+    var next: MutPointer[Atomic[Int64], MutUntrackedOrigin]
+    var segments: Int
+    var windows: Int
+    var params: ScanParams
+    var readable: Int
 
     def __init__(
         out self,
-        results: ImmPointer[List[UInt32], Self.results_origin],
-        firsts: ImmPointer[Int, Self.firsts_origin],
-        offsets: ImmPointer[Int, Self.offsets_origin],
-        out_ptr: MutPointer[UInt32, Self.out_origin],
+        codes: ImmPointer[UInt8, ImmUntrackedOrigin],
+        out_ptr: MutPointer[UInt32, MutUntrackedOrigin],
+        published: MutPointer[Atomic[Int64], MutUntrackedOrigin],
+        next: MutPointer[Atomic[Int64], MutUntrackedOrigin],
+        segments: Int,
+        windows: Int,
+        params: ScanParams,
+        readable: Int,
     ):
-        self.results = results
-        self.firsts = firsts
-        self.offsets = offsets
+        self.codes = codes
         self.out = out_ptr
+        self.published = published
+        self.next = next
+        self.segments = segments
+        self.windows = windows
+        self.params = params
+        self.readable = readable
 
-    def run(self, index: Int):
-        ref r = self.results[unsafe_offset=index]
-        var first = self.firsts[unsafe_offset=index]
-        var at = self.offsets[unsafe_offset=index]
-        var count = self.offsets[unsafe_offset=index + 1] - at
-        if count > 0:
-            unsafe_memcpy(dest=self.out.unsafe_offset(at), src=r.unsafe_ptr().unsafe_offset(first), count=count)
+    def run(self, worker: Int):
+        var buffer = List[UInt32]()
+        while True:
+            var i = Int(self.next[].fetch_add(1))
+            if i >= self.segments:
+                return
+            var start = i * _SEGMENT
+            buffer.clear()
+            scan_segment[Self.mode, Self.canonical, Self.ascii, Self.small](
+                self.codes, start, min(_SEGMENT, self.windows - start), self.params, buffer, self.readable
+            )
+            # Where the previous segment ends, and the last position before it.
+            var at = 0
+            var last = -1
+            if i > 0:
+                while True:
+                    var end = self.published[unsafe_offset=2 * (i - 1)].load()
+                    if end >= 0:
+                        at = Int(end)
+                        break
+                last = Int(self.published[unsafe_offset=2 * (i - 1) + 1].load())
+            # A minimizer spanning the boundary is the previous segment's.
+            var first = 1 if len(buffer) > 0 and Int(buffer[0]) == last else 0
+            var count = len(buffer) - first
+            if count > 0:
+                unsafe_memcpy(
+                    dest=self.out.unsafe_offset(at), src=buffer.unsafe_ptr().unsafe_offset(first), count=count
+                )
+                last = Int(buffer[len(buffer) - 1])
+            self.published[unsafe_offset=2 * i + 1].store(Int64(last))
+            self.published[unsafe_offset=2 * i].store(Int64(at + count))
 
 
 def scan_reads(
