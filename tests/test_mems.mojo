@@ -126,6 +126,16 @@ def test_parallel_sort() raises:
                 for i in range(n):
                     if got[i] != expected[i]:
                         raise Error(String(t"n={n} bits={bits} threads={threads}: key {i} differs"))
+                # By the high bits only: those in order, and the same keys.
+                var partial = keys.copy()
+                parallel_sort(partial, threads, low_bits=bits // 2)
+                for i in range(1, n):
+                    if partial[i - 1] >> UInt64(bits // 2) > partial[i] >> UInt64(bits // 2):
+                        raise Error(String(t"n={n} bits={bits} threads={threads}: high bits out of order at {i}"))
+                sort(Span(partial))
+                for i in range(n):
+                    if partial[i] != expected[i]:
+                        raise Error(String(t"n={n} bits={bits} threads={threads}: partial sort lost key {i}"))
 
 
 def test_mum_filter_threads_agree() raises:

@@ -15,13 +15,18 @@ comptime _SERIAL = 1 << 16
 """Below this many keys, one `sort` call."""
 
 
-def parallel_sort(mut keys: List[UInt64], var threads: Int):
-    """Sorts `keys` in increasing order using up to `threads` threads."""
+def parallel_sort(mut keys: List[UInt64], var threads: Int, low_bits: Int = 0):
+    """Sorts `keys` in increasing order of `key >> low_bits` (keys equal
+    there end up in any order) using up to `threads` threads."""
     var n = len(keys)
     # Each thread's chunks need a histogram: at most one thread per _SERIAL keys.
     threads = min(threads, n // _SERIAL)
     if threads <= 1 or n < _SERIAL:
-        sort(Span(keys))
+        if low_bits == 0:
+            sort(Span(keys))
+        else:
+            var scratch = List[UInt64](unsafe_uninit_length=n)
+            _radix_sort(keys.unsafe_ptr(), scratch.unsafe_ptr(), n, low_bits, 64)
         return
     var top = UInt64(0)
     for k in keys:
@@ -51,7 +56,7 @@ def parallel_sort(mut keys: List[UInt64], var threads: Int):
     var dst = sorted_alloc.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
     var scatter_task = _ScatterTask(src, dst, n, chunks, histogram, buckets, shift)
     parallel_for(scatter_task, chunks, threads)
-    var sort_task = _BucketSortTask(dst, starts)
+    var sort_task = _BucketSortTask(dst, starts, low_bits, Int(shift))
     parallel_for(sort_task, buckets, threads)
     for i in range(n):
         src[unsafe_offset=i] = dst[unsafe_offset=i]
@@ -133,13 +138,70 @@ struct _ScatterTask(ParallelTask):
 struct _BucketSortTask(ParallelTask):
     var keys: MutPointer[UInt64, MutUntrackedOrigin]
     var starts: MutPointer[Int, MutUntrackedOrigin]
+    var low_bits: Int
+    var bucket_shift: Int
 
-    def __init__(out self, keys: MutPointer[UInt64, MutUntrackedOrigin], starts: MutPointer[Int, MutUntrackedOrigin]):
+    def __init__(
+        out self,
+        keys: MutPointer[UInt64, MutUntrackedOrigin],
+        starts: MutPointer[Int, MutUntrackedOrigin],
+        low_bits: Int,
+        bucket_shift: Int,
+    ):
         self.keys = keys
         self.starts = starts
+        self.low_bits = low_bits
+        self.bucket_shift = bucket_shift
 
     def run(self, index: Int):
         var lo = self.starts[unsafe_offset=index]
         var hi = self.starts[unsafe_offset=index + 1]
-        if hi - lo > 1:
+        if hi - lo <= 1:
+            return
+        if self.low_bits == 0:
             sort(Span(unsafe_ptr=self.keys.unsafe_offset(lo), length=hi - lo))
+            return
+        # Keys of one bucket share their bits from bucket_shift up.
+        var scratch = List[UInt64](unsafe_uninit_length=hi - lo)
+        _radix_sort(self.keys.unsafe_offset(lo), scratch.unsafe_ptr(), hi - lo, self.low_bits, self.bucket_shift)
+
+
+comptime _DIGIT_BITS = 11
+
+
+def _radix_sort(keys: MutPointer[UInt64, _], scratch: MutPointer[UInt64, _], n: Int, low_bit: Int, high_bit: Int):
+    """LSD radix sort of `keys[0:n]` by bits `[low_bit, high_bit)`; `scratch`
+    holds `n` keys. Digits every key shares are skipped."""
+    if n <= 1:
+        return
+    comptime digits = 1 << _DIGIT_BITS
+    var counts = List[Int](length=digits, fill=0)
+    var src = keys.unsafe_origin_cast[MutUntrackedOrigin]()
+    var dst = scratch.unsafe_origin_cast[MutUntrackedOrigin]()
+    var in_scratch = False
+    for shift in range(low_bit, high_bit, _DIGIT_BITS):
+        var bits = min(_DIGIT_BITS, high_bit - shift)
+        var mask = UInt64((1 << bits) - 1)
+        for d in range(digits):
+            counts[d] = 0
+        for i in range(n):
+            counts[Int((src[unsafe_offset=i] >> UInt64(shift)) & mask)] += 1
+        if counts[Int((src[unsafe_offset=0] >> UInt64(shift)) & mask)] == n:
+            continue
+        var at = 0
+        for d in range(1 << bits):
+            var c = counts[d]
+            counts[d] = at
+            at += c
+        for i in range(n):
+            var k = src[unsafe_offset=i]
+            var d = Int((k >> UInt64(shift)) & mask)
+            dst[unsafe_offset=counts[d]] = k
+            counts[d] += 1
+        var t = src
+        src = dst
+        dst = t
+        in_scratch = not in_scratch
+    if in_scratch:
+        for i in range(n):
+            dst[unsafe_offset=i] = src[unsafe_offset=i]

@@ -506,7 +506,8 @@ def filter_mums(mems: List[Mem], query: SeqText, unique_in_query: Bool = True, t
             # Reference intervals, in reference order: start << 32 | member.
             for i in range(count):
                 starts[i] = (UInt64(mems[lo + i].ref_pos) << 32) | UInt64(i)
-            parallel_sort(starts, threads)
+            # Order by start only: the sweep groups equal starts in any order.
+            parallel_sort(starts, threads, low_bits=32)
             # Gather lengths, sweep, scatter the verdicts: the random accesses
             # run in parallel, the sweep over contiguous arrays.
             var flags = List[Bool](length=count, fill=True)
