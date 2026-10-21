@@ -20,7 +20,7 @@ from std.time import perf_counter_ns
 from sporos.batch import SeedBatch, minimizers_batch, syncmers_batch
 from sporos.fasta import FastaRecords, read_fasta
 from sporos.index import ALL_KMERS, MINIMIZER_SEEDS, SYNCMER_SEEDS, SeedIndex
-from sporos.mems import Mem, MemIndex, MemParams, filter_mums, find_mems
+from sporos.mems import Mem, MemIndex, MemParams, Smems, filter_mums, find_mems, find_smems
 from sporos.minimizers import minimizer_positions
 from sporos.output import OutputBuffer, _PAIRS, put_padded
 from sporos.parallel import ParallelTask, default_threads, parallel_for
@@ -33,6 +33,7 @@ comptime USAGE = """usage:
                [--max-occ N | --keep F] [-t threads] [-v] <reference.fa> <reads.fa>
   sporos mem [-mum | -mumreference | -maxmatch] [-l L] [-b | -r] [-F] [-n] [-t threads] [-v]
              [-K anchor_k] [-k1 ref_step] [-k2 query_step] <reference.fa> <query.fa>
+  sporos smem [-l L] [-w W] [-t threads] [-v] <reference.fa> <query.fa>
   sporos minimizers -k K -w W [--forward] [--count] [-t threads] <seqs.fa>
   sporos syncmers -k K -s S [--open T[,T...]] [--forward] [--count] [-t threads] <seqs.fa>"""
 
@@ -976,6 +977,170 @@ def run_seed_index(args: List[String]) raises:
     _log(verbose, String(t"lookups and output: {_seconds(start)} s"))
 
 
+def run_smem(args: List[String]) raises:
+    """SMEMs of every query record against the reference on both strands, in
+    `bwa fastmap`'s output format."""
+    var min_len = 17
+    var max_hits = 20
+    var threads = default_threads()
+    var verbose = False
+    var paths = List[String]()
+    var i = 0
+    while i < len(args):
+        var a = args[i]
+        if a == "-l":
+            i += 1
+            min_len = Int(_value(args, i))
+        elif a == "-w":
+            i += 1
+            max_hits = Int(_value(args, i))
+        elif a == "-t" or a == "-threads":
+            i += 1
+            threads = Int(_value(args, i))
+        elif a == "-v":
+            verbose = True
+        elif a.startswith("-"):
+            raise Error(t"unknown option {a}\n{USAGE}")
+        else:
+            paths.append(a)
+        i += 1
+    if len(paths) != 2:
+        raise Error(USAGE)
+    var start = perf_counter_ns()
+    var reference = read_fasta(paths[0], threads)
+    var query = read_fasta(paths[1], threads)
+    _log(verbose, String(t"read inputs: {_seconds(start)} s"))
+    start = perf_counter_ns()
+    var ref_seqs = List[Span[UInt8, origin_of(reference.data)]]()
+    for r in range(len(reference)):
+        ref_seqs.append(reference.seq(r))
+    var rtext = SeqText(ref_seqs)
+    for q in range(len(query)):
+        if len(query.seq(q)) >= Int(UInt32.MAX):
+            raise Error("query sequences must be shorter than 2^32 bases")
+    var index = MemIndex(rtext, MemParams.choose(min_len, len(rtext), query.total_length()), threads)
+    _log(verbose, String(t"index: {_seconds(start)} s ({len(index.table)} anchors)"))
+    start = perf_counter_ns()
+    var out = OutputBuffer()
+    # One record per slice task (single-threaded each) for many records; a
+    # single record uses every thread inside the matcher.
+    var bounds: List[Int] = [0]
+    var bases = 0
+    for q in range(len(query)):
+        bases += query.lengths[q]
+        if bases >= _SEED_SLICE_BASES or q + 1 - bounds[len(bounds) - 1] >= _SEED_SLICE:
+            bounds.append(q + 1)
+            bases = 0
+    if bounds[len(bounds) - 1] != len(query):
+        bounds.append(len(query))
+    var slices = len(bounds) - 1
+    var round = threads * 4
+    var texts = List[List[UInt8]](length=round, fill=List[UInt8]())
+    var inner = threads if len(query) == 1 else 1
+    var total = 0
+    for first in range(0, slices, round):
+        var count = min(round, slices - first)
+        var task = _SmemTask(
+            Pointer(to=index).as_imm(),
+            Pointer(to=rtext).as_imm(),
+            Pointer(to=query).as_imm(),
+            Pointer(to=reference.names).as_imm(),
+            Pointer(to=bounds).as_imm(),
+            texts.unsafe_ptr(),
+            first,
+            max_hits,
+            inner,
+        )
+        parallel_for(task, count, threads if inner == 1 else 1)
+        for s in range(count):
+            out.write_bytes(Span(texts[s]))
+    out.flush()
+    _log(verbose, String(t"smems: {_seconds(start)} s"))
+
+
+struct _SmemTask[
+    index_origin: ImmOrigin,
+    text_origin: ImmOrigin,
+    query_origin: ImmOrigin,
+    names_origin: ImmOrigin,
+    bounds_origin: ImmOrigin,
+    out_origin: MutOrigin,
+](ParallelTask):
+    """Finds and formats (as `bwa fastmap`) the SMEMs of one slice of query
+    records."""
+
+    var index: ImmPointer[MemIndex, Self.index_origin]
+    var rtext: ImmPointer[SeqText, Self.text_origin]
+    var query: ImmPointer[FastaRecords, Self.query_origin]
+    var names: ImmPointer[List[String], Self.names_origin]
+    var bounds: ImmPointer[List[Int], Self.bounds_origin]
+    var texts: MutPointer[List[UInt8], Self.out_origin]
+    var first: Int
+    var max_hits: Int
+    var threads: Int
+
+    def __init__(
+        out self,
+        index: ImmPointer[MemIndex, Self.index_origin],
+        rtext: ImmPointer[SeqText, Self.text_origin],
+        query: ImmPointer[FastaRecords, Self.query_origin],
+        names: ImmPointer[List[String], Self.names_origin],
+        bounds: ImmPointer[List[Int], Self.bounds_origin],
+        texts: MutPointer[List[UInt8], Self.out_origin],
+        first: Int,
+        max_hits: Int,
+        threads: Int,
+    ):
+        self.index = index
+        self.rtext = rtext
+        self.query = query
+        self.names = names
+        self.bounds = bounds
+        self.texts = texts
+        self.first = first
+        self.max_hits = max_hits
+        self.threads = threads
+
+    def run(self, index: Int):
+        ref query = self.query[]
+        ref rtext = self.rtext[]
+        var lo = self.bounds[][self.first + index]
+        var hi = self.bounds[][self.first + index + 1]
+        var out = OutputBuffer(fd=-1)
+        for q in range(lo, hi):
+            var qseqs = List[Span[UInt8, origin_of(query.data)]]()
+            qseqs.append(query.seq(q))
+            var qtext = SeqText(qseqs)
+            var qrc = SeqText(qseqs, reverse_complement=True)
+            var found = find_smems(self.index[], rtext, qtext, qrc, self.threads)
+            out.write("SQ\t")
+            out.write(query.names[q])
+            out.write_byte(ord("\t"))
+            out.write_int(len(query.seq(q)))
+            out.write_byte(ord("\n"))
+            for s in range(len(found)):
+                var smem = found.smems[s]
+                out.write("EM\t")
+                out.write_int(Int(smem.start))
+                out.write_byte(ord("\t"))
+                out.write_int(Int(smem.end))
+                out.write_byte(ord("\t"))
+                out.write_int(smem.count)
+                if smem.count > self.max_hits:
+                    out.write("\t*\n")  # bwa fastmap follows these lines with an empty one
+                else:
+                    for h in found.hits_of(s):
+                        var pos = Int(h.ref_pos)
+                        var seq = rtext.sequence_of(pos)
+                        out.write_byte(ord("\t"))
+                        out.write(self.names[][seq])
+                        out.write(":-" if h.reverse else ":+")
+                        out.write_int(pos - rtext.starts[seq] + 1)
+                out.write_byte(ord("\n"))
+            out.write("//\n")
+        self.texts[unsafe_offset=index] = out.take()
+
+
 def main() raises:
     var raw = argv()
     if len(raw) < 2:
@@ -989,6 +1154,8 @@ def main() raises:
         run_mem(args)
     elif command == "seeds":
         run_seed_index(args)
+    elif command == "smem":
+        run_smem(args)
     elif command == "minimizers" or command == "syncmers":
         run_seeds(command, args)
     else:

@@ -1,6 +1,6 @@
 from std.testing import assert_equal, assert_true, TestSuite
 
-from sporos.mems import Mem, MemIndex, MemParams, filter_mums, find_mems
+from sporos.mems import Mem, MemIndex, MemParams, SmemHit, filter_mums, find_mems, find_smems
 from sporos.sort import parallel_sort
 from sporos.text import SeqText
 from sporos.alphabet import encode_base
@@ -171,6 +171,107 @@ def test_params_for_long_min_len() raises:
     var short = MemParams.choose(50, 1_000_000, 1_000_000)
     short.validate()
     assert_equal(short.ref_step * short.query_step <= 50 - short.k + 1, True)
+
+
+def _reverse_complement(seq: List[UInt8]) -> List[UInt8]:
+    var out = List[UInt8](capacity=len(seq))
+    for i in reversed(range(len(seq))):
+        var c = seq[i] | 0x20
+        var rc = UInt8(ord("N"))
+        if c == UInt8(ord("a")):
+            rc = UInt8(ord("T"))
+        elif c == UInt8(ord("c")):
+            rc = UInt8(ord("G"))
+        elif c == UInt8(ord("g")):
+            rc = UInt8(ord("C"))
+        elif c == UInt8(ord("t")):
+            rc = UInt8(ord("A"))
+        out.append(rc)
+    return out^
+
+
+def _naive_smems(reference: List[UInt8], query: List[UInt8], min_len: Int) -> List[Tuple[Int, Int, Int, Bool]]:
+    """(start, end, ref_pos, reverse) for every hit of every SMEM, by definition:
+    MEM intervals on both strands that no other MEM interval strictly contains."""
+    var all = List[Tuple[Int, Int, Int, Bool]]()
+    for m in naive_mems(reference, query, min_len):
+        all.append((m[1], m[1] + m[2], m[0], False))
+    var n = len(query)
+    for m in naive_mems(reference, _reverse_complement(query), min_len):
+        all.append((n - m[1] - m[2], n - m[1], m[0], True))
+    var out = List[Tuple[Int, Int, Int, Bool]]()
+    for a in all:
+        var contained = False
+        for b in all:
+            if b[0] <= a[0] and a[1] <= b[1] and (b[0] < a[0] or a[1] < b[1]):
+                contained = True
+                break
+        if not contained:
+            out.append(a)
+    return out^
+
+
+def test_smems_match_definition() raises:
+    var case_id = 4000
+    for n in [300, 1500]:
+        for min_len in [12, 20, 31]:
+            for threads in [1, 3]:
+                case_id += 1
+                # Two reference sequences with repeats, a reverse-complement copy and N runs;
+                # two query sequences of their pieces.
+                var ref1 = _mutate(random_dna(n, case_id, 0.003), 30_000, case_id)
+                var ref2 = random_dna(n // 2, case_id + 1, 0.003)
+                var piece = List[UInt8](Span(ref1)[50 : 50 + n // 4])
+                ref2.extend(Span(_reverse_complement(piece)))
+                var reference = ref1.copy()
+                reference.append(UInt8(ord("N")))  # the separator SeqText puts between sequences
+                reference.extend(Span(ref2))
+                var q1 = _mutate(List[UInt8](Span(ref1)[n // 3 :]), 20_000, case_id + 2)
+                var q2 = _reverse_complement(List[UInt8](Span(ref2)[10 : n // 3]))
+                # Sequences as slices of one buffer each (one origin per list).
+                var ref_buffer = ref1.copy()
+                ref_buffer.extend(Span(ref2))
+                var rspans = List[Span[UInt8, origin_of(ref_buffer)]]()
+                rspans.append(Span(ref_buffer)[: len(ref1)])
+                rspans.append(Span(ref_buffer)[len(ref1) :])
+                var rtext = SeqText(rspans)
+                var queries = List[List[UInt8]]()
+                queries.append(q1.copy())
+                queries.append(q2.copy())
+                var query_buffer = q1.copy()
+                query_buffer.extend(Span(q2))
+                var qspans = List[Span[UInt8, origin_of(query_buffer)]]()
+                qspans.append(Span(query_buffer)[: len(q1)])
+                qspans.append(Span(query_buffer)[len(q1) :])
+                var qtext = SeqText(qspans)
+                var qrc = SeqText(qspans, reverse_complement=True)
+                var index = MemIndex(rtext, MemParams.choose(min_len, len(rtext), len(qtext)), threads)
+                var got = find_smems(index, rtext, qtext, qrc, threads)
+                var flat = List[Tuple[Int, Int, Int, Bool]]()
+                for i in range(len(got)):
+                    var smem = got.smems[i]
+                    for h in got.hits_of(i):
+                        flat.append((Int(smem.start), Int(smem.end), Int(h.ref_pos), h.reverse))
+                var expected = List[Tuple[Int, Int, Int, Bool]]()
+                for qi in range(len(queries)):
+                    for e in _naive_smems(reference, queries[qi], min_len):
+                        var offset = qtext.starts[qi]
+                        expected.append((e[0] + offset, e[1] + offset, e[2], e[3]))
+                if len(flat) != len(expected):
+                    raise Error(String(t"n={n} L={min_len}: {len(flat)} SMEM hits, expected {len(expected)}"))
+                # Same multiset: compare as sorted keys.
+                var a = List[Int]()
+                var b = List[Int]()
+                for x in flat:
+                    a.append(((x[0] * 4096 + (x[1] - x[0])) * 65536 + x[2]) * 2 + Int(x[3]))
+                for x in expected:
+                    b.append(((x[0] * 4096 + (x[1] - x[0])) * 65536 + x[2]) * 2 + Int(x[3]))
+                sort(Span(a))
+                sort(Span(b))
+                for i in range(len(a)):
+                    if a[i] != b[i]:
+                        raise Error(String(t"n={n} L={min_len} threads={threads}: SMEM hit {i} differs"))
+                assert_true(len(flat) > 0)
 
 
 def main() raises:

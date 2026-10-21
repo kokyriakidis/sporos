@@ -3,7 +3,7 @@
 # sporos
 
 **Fast, exact DNA seeding in [Mojo](https://mojolang.org)**<br>
-minimizers · syncmers · seed indexes · maximal exact matches · maximal unique matches
+minimizers · syncmers · seed indexes · MEMs · SMEMs · MUMs
 
 [![CI](https://github.com/kokyriakidis/sporos/actions/workflows/ci.yml/badge.svg)](https://github.com/kokyriakidis/sporos/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2a78d6)](LICENSE)
@@ -62,6 +62,7 @@ build/sporos seeds -k 19 -w 12 --keep 0.9998 ref.fa reads.fq.gz
 | **Open syncmers** | k-mers whose smallest s-mer starts at a chosen offset `t`, or at any offset of a set. strobealign's default is `k=20, s=16, t=2`. |
 | **Seed index** | Reference minimizers, syncmers or all k-mers, keyed by canonical k-mer so lookups find both strands. Hits carry occurrence counts, with an optional abundance cutoff (GraphAligner-style `--keep`). |
 | **MEMs** | Every maximal exact match of length ≥ L between a query sequence and the reference (MUMmer's `-maxmatch`). Matches can be any length, up to whole sequences. |
+| **SMEMs** | Supermaximal exact matches, as in BWA: query intervals of MEMs (on either strand) that no other MEM's query interval contains, each with every reference position where it matches. The seeds `bwa fastmap` and minibwa find. |
 | **MUMs** | MEMs whose string occurs exactly once in the reference and once in the query sequence (MUMmer's `-mum`). `-mumreference` requires uniqueness in the reference only. |
 
 > [!NOTE]
@@ -102,6 +103,7 @@ sporos syncmers -k 20 -s 16 --open 2 genome.fa          # open syncmers (--open 
 sporos seeds -k 19 -w 12 --keep 0.9998 ref.fa reads.fq.gz
 sporos mem -mum -l 50 -t 8 reference.fa query.fa        # MUMmer's flags and output format
 sporos mem -maxmatch -b -l 100 reference.fa query.fa    # all MEMs, both strands
+sporos smem -l 19 reference.fa reads.fq                 # SMEMs, in bwa fastmap's output format
 ```
 
 - **Threads:** every command takes `-t` (default: every physical core).
@@ -171,6 +173,29 @@ sporos mem [-mum | -mumreference | -maxmatch] [-l L] [-b | -r] [-F] [-n] [-t thr
 
 The output follows `mummer`: a `> query` header (`> query Reverse` for the reverse strand), then one
 `ref_pos query_pos length` line per match, 1-based.
+
+</details>
+
+<details>
+<summary><b><code>smem</code></b>: SMEMs, bwa fastmap-compatible</summary>
+
+```
+sporos smem [-l L] [-w W] [-t threads] [-v] <reference.fa> <query.fa>
+```
+
+| Option | Meaning |
+|---|---|
+| `-l L` | minimum SMEM length (default 17, as in `bwa fastmap`) |
+| `-w W` | print positions only for SMEMs with at most `W` hits, else `*` (default 20) |
+
+Both strands are searched, as with BWA's index of the reference and its reverse complement. The output is
+`bwa fastmap`'s: per query, `SQ name length`, then `EM start end count positions...` (0-based query
+interval, positions as `name:+pos` or `name:-pos`, 1-based), then `//`. The SMEMs equal BWA's and minibwa's;
+positions are listed in increasing order rather than in suffix-array order.
+
+SMEMs are computed from sporos's MEM engine, which needs no index build: a good fit for comparing genomes.
+On short reads with repetitive references, FM-index tools that never enumerate repeat copies (minibwa,
+`bwa fastmap`) are currently faster.
 
 </details>
 
