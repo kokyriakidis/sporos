@@ -65,6 +65,32 @@ def test_minimizers_match_reference() raises:
                     )
 
 
+def test_repeats_match_reference() raises:
+    # Homopolymers and short-period repeats: equal hashes in every window, so
+    # the window minimum changes at every step. Short inputs (scalar kernel),
+    # long ones (lanes and their scalar remainder), large and small w.
+    var units: List[String] = ["A", "AC", "ACG", "ACGTTGCA"]
+    for unit in units:
+        for n in [40, 300, 3000, 20000]:
+            var seq = List[UInt8](capacity=n)
+            while len(seq) < n:
+                for b in unit.as_bytes():
+                    if len(seq) < n:
+                        seq.append(b)
+            for cfg in [(5, 1), (15, 10), (21, 200), (11, 1000)]:
+                for canonical in [True, False]:
+                    _assert_same(
+                        minimizer_positions(Span(seq), cfg[0], cfg[1], canonical),
+                        naive_minimizers(seq, cfg[0], cfg[1], canonical),
+                        String(t"minimizers of {unit} repeats n={n} k={cfg[0]} w={cfg[1]}"),
+                    )
+            _assert_same(
+                syncmer_positions(Span(seq), 21, 11, True),
+                naive_syncmers(seq, 21, 11, True),
+                String(t"syncmers of {unit} repeats n={n}"),
+            )
+
+
 def test_minimizers_multithreaded_match_single() raises:
     var seq = random_dna(5_000_000, 99, 0.0001)
     var single = minimizer_positions(Span(seq), 21, 11, True, 1)

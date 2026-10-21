@@ -38,10 +38,10 @@ cpu=${3:-$cpu}
 mkdir -p "$out"
 if $library; then
     [ "$(uname -s)" = Darwin ] && file=lib$name.dylib || file=lib$name.so
-    mojo build --emit shared-lib --target-cpu "$cpu" -I "$root" "$program" -o "$out/$file"
+    mojo build -D ASSERT=none --emit shared-lib --target-cpu "$cpu" -I "$root" "$program" -o "$out/$file"
 else
     file=$name
-    mojo build --target-cpu "$cpu" -I "$root" "$program" -o "$out/$file"
+    mojo build -D ASSERT=none --target-cpu "$cpu" -I "$root" "$program" -o "$out/$file"
 fi
 
 if [ "$(uname -s)" = Linux ]; then

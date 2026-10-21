@@ -595,7 +595,9 @@ def _scan_scalar[
     """Windows `[first, first + windows)` one by one (short inputs, and the
     lanes' remainder); `codes[i]` is the base at position `base + i`. One
     pass rolls ntHash, keeps the last w keys in a ring and the window's
-    minimum, rescanning the ring only when the minimum leaves the window."""
+    minimum, rescanning the ring only when the minimum leaves the window (as
+    minimap2's sketcher does: O(w) per step at worst, on repeats; a monotone
+    deque is twice as slow on real reads, its pops being unpredictable)."""
     var k = params.k
     var w = params.w
     var kmers = windows + w - 1

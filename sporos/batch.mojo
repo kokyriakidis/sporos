@@ -7,6 +7,7 @@ groups) and scanned together. Results are flat, with per-read offsets.
 """
 
 from std.math import ceildiv
+from std.os import abort
 
 from std.memory import unsafe_memcpy
 
@@ -118,8 +119,9 @@ struct _BatchTask[mut: Bool, //, origin: Origin[mut=mut]](ParallelTask):
                 if (params.offsets >> UInt64(t)) & 1 != 0:
                     opened.append(t)
             return syncmer_positions(read, params.span, params.k, self.cfg.canonical, open_offsets=opened)
-        except:
-            return List[UInt32]()
+        except e:
+            # Parameters are validated before batches start: never reached.
+            abort(String(t"seed batch: {e}"))
 
     def _group(
         self,

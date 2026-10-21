@@ -511,6 +511,7 @@ struct _InflateTask[data_origin: ImmOrigin, blocks_origin: ImmOrigin, lib_origin
             var decompressor = lib.get_function[Int]("libdeflate_alloc_decompressor")()
             # One symbol lookup per task, not per block.
             var inflate = lib.get_function[Int32]("libdeflate_deflate_decompress")
+            var crc32 = lib.get_function[UInt32]("libdeflate_crc32")
             for b in range(index * self.per_task, min(self.count, (index + 1) * self.per_task)):
                 # Block b: compressed deflate data, its size, output offset and size.
                 var block = self.blocks.unsafe_offset(4 * b)
@@ -523,6 +524,17 @@ struct _InflateTask[data_origin: ImmOrigin, blocks_origin: ImmOrigin, lib_origin
                     Int(0),
                 )
                 if status != 0:
+                    self.failed[unsafe_offset=0] = 1
+                    continue
+                # The trailer's CRC32 follows the deflate data.
+                var t = self.data.unsafe_offset(block[unsafe_offset=0] + block[unsafe_offset=1])
+                var stored = (
+                    UInt32(t[unsafe_offset=0])
+                    | (UInt32(t[unsafe_offset=1]) << 8)
+                    | (UInt32(t[unsafe_offset=2]) << 16)
+                    | (UInt32(t[unsafe_offset=3]) << 24)
+                )
+                if crc32(UInt32(0), self.dst.unsafe_offset(block[unsafe_offset=2]), block[unsafe_offset=3]) != stored:
                     self.failed[unsafe_offset=0] = 1
             lib.get_function[NoneType]("libdeflate_free_decompressor")(decompressor)
         except:

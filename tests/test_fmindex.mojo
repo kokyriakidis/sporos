@@ -57,7 +57,9 @@ def _reads(reference: List[UInt8], count: Int, seed: Int) -> List[List[UInt8]]:
     return reads^
 
 
-def _check(reference: List[UInt8], cuts: List[Int], queries: List[List[UInt8]], threads: Int, save: Bool) raises:
+def _check(
+    reference: List[UInt8], cuts: List[Int], queries: List[List[UInt8]], threads: Int, save: Bool, sample_bits: Int = 0
+) raises:
     """FM-index SMEMs equal the MEM engine's (`find_smems`, itself held to a
     brute-force oracle) for every query and several lengths."""
     var rspans = List[Span[UInt8, origin_of(reference)]]()
@@ -66,7 +68,7 @@ def _check(reference: List[UInt8], cuts: List[Int], queries: List[List[UInt8]], 
         rspans.append(Span(reference)[cuts[i] : cuts[i + 1]])
         names.append(String(t"r{i}"))
     var rtext = SeqText(rspans)
-    var fm = FMIndex.build(rspans, names, threads)
+    var fm = FMIndex.build(rspans, names, threads, sample_bits)
     if save:
         fm.save("build/test_fmindex.sfm")
         fm = FMIndex.load("build/test_fmindex.sfm", threads)
@@ -82,6 +84,12 @@ def _check(reference: List[UInt8], cuts: List[Int], queries: List[List[UInt8]], 
     for min_len in [3, 12, 19, 40]:
         var got = fm.smems(qspans, min_len, max_hits=1 << 30)
         var capped = fm.smems(qspans, min_len, max_hits=2)
+        # With no hits wanted, nothing is located: unique matches extend in the index.
+        var unlocated = fm.smems(qspans, min_len, max_hits=0)
+        assert_equal(len(unlocated.hits), 0)
+        assert_equal(len(unlocated.smems), len(got.smems))
+        for i in range(len(got.smems)):
+            assert_true(unlocated.smems[i] == got.smems[i])
         assert_equal(len(got), len(queries))
         var total = 0
         for qi in range(len(queries)):
@@ -141,6 +149,14 @@ def test_fm_smems_repeats() raises:
     _check(reference, cuts, _reads(reference, 300, 6), 3, True)
 
 
+def test_fm_sample_spacing() raises:
+    # Every row sampled, and one in 256 (long locate walks through separators).
+    var reference = random_dna(20_000, 41, 0.002)
+    var cuts: List[Int] = [0, 7_000, len(reference)]
+    for bits in [1, 8]:
+        _check(reference, cuts, _reads(reference, 120, 7 + bits), 2, False, bits)
+
+
 def test_fm_wide_suffix_array() raises:
     # The 64-bit suffix array path (references past 2^30 bases) writes the same index.
     var reference = random_dna(40_000, 31, 0.001)
@@ -173,6 +189,10 @@ def test_fm_smems_no_bases() raises:
     qspans.append(Span(query))
     var got = fm.smems(qspans, 1)
     assert_equal(len(got.smems), 0)
+    # Saved and loaded, it is still empty.
+    fm.save("build/test_fm_empty.sfm")
+    var loaded = FMIndex.load("build/test_fm_empty.sfm")
+    assert_equal(len(loaded.smems(qspans, 1).smems), 0)
 
 
 def main() raises:

@@ -37,6 +37,16 @@ struct OutputBuffer(Movable):
 
     def write_int(mut self, value: Int, width: Int = 0, left: Bool = False):
         """Writes `value` in decimal, padded with spaces to `width`."""
+        if value >= 0 and not left:
+            # Two digits per step, straight into the buffer.
+            var at = len(self.buf)
+            var need = at + max(width, 20)
+            if self.buf.capacity() < need:
+                self.buf.reserve(max(need, 2 * self.buf.capacity()))
+            self.buf.resize(unsafe_uninit_length=at + put_padded(self.buf.unsafe_ptr().unsafe_offset(at), value, width))
+            if len(self.buf) >= _FLUSH_AT and self.fd >= 0:
+                self.flush()
+            return
         var digits = InlineDigits(value)
         var pad = max(0, width - digits.count)
         if not left:

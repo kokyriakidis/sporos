@@ -62,6 +62,14 @@ def _seconds(start: Int) -> Float64:
     return Float64(perf_counter_ns() - start) / 1e9
 
 
+def _threads(args: List[String], i: Int) raises -> Int:
+    """The thread count after `-t`: at least 1."""
+    var threads = Int(_value(args, i))
+    if threads < 1:
+        raise Error(t"-t takes a thread count of at least 1, not {threads}")
+    return threads
+
+
 def run_mem(args: List[String]) raises:
     var mode = "mumreference"
     var min_len = 20
@@ -102,7 +110,7 @@ def run_mem(args: List[String]) raises:
             pass
         elif a == "-t" or a == "-threads":
             i += 1
-            threads = Int(_value(args, i))
+            threads = _threads(args, i)
         elif a == "-v":
             verbose = True
         elif a.startswith("-"):
@@ -674,7 +682,7 @@ def run_seeds(command: String, args: List[String]) raises:
             canonical = False
         elif a == "-t" or a == "-threads":
             i += 1
-            threads = Int(_value(args, i))
+            threads = _threads(args, i)
         elif a.startswith("-"):
             raise Error(t"unknown option {a}\n{USAGE}")
         else:
@@ -825,7 +833,8 @@ struct _SeedLookupTask[index_origin: ImmOrigin, read_origin: ImmOrigin, name_ori
             var read_room = reads.names[r].byte_length() + 1
             # Room for every line (two fields, three numbers, four more bytes)
             # and the 16-byte copies' overshoot.
-            var room = at + len(read_hits) * (read_room + ref_room + 3 * 10 + 4) + 16
+            # Per line: the two names, three numbers, a tab, a strand, a tab and a newline.
+            var room = at + len(read_hits) * (read_room + ref_room + 3 * 10 + 5) + 16
             if room > text.capacity():
                 text.reserve(max(room, 2 * text.capacity()))
             text.resize(unsafe_uninit_length=room)
@@ -916,7 +925,7 @@ def run_seed_index(args: List[String]) raises:
             max_occ = Int(_value(args, i))
         elif a == "-t" or a == "-threads":
             i += 1
-            threads = Int(_value(args, i))
+            threads = _threads(args, i)
         elif a == "-v":
             verbose = True
         elif a.startswith("-"):
@@ -999,7 +1008,7 @@ def run_index(args: List[String]) raises:
                 raise Error("-s takes 1 to 8")
         elif a == "-t" or a == "-threads":
             i += 1
-            threads = Int(_value(args, i))
+            threads = _threads(args, i)
         elif a == "-v":
             verbose = True
         elif a.startswith("-"):
@@ -1065,7 +1074,7 @@ def run_smem(args: List[String]) raises:
                 raise Error(t"--engine takes fm or mem, not {engine}")
         elif a == "-t" or a == "-threads":
             i += 1
-            threads = Int(_value(args, i))
+            threads = _threads(args, i)
         elif a == "-v":
             verbose = True
         elif a.startswith("-"):
@@ -1078,6 +1087,9 @@ def run_smem(args: List[String]) raises:
     var start = perf_counter_ns()
     var index_path = _fm_index_path(paths[0]) if engine != "mem" else String()
     var query = read_fasta(paths[1], threads)
+    for q in range(len(query)):
+        if query.lengths[q] >= Int(UInt32.MAX):
+            raise Error("query sequences must be shorter than 2^32 bases")
     if engine == "fm" or (engine == "auto" and (index_path or len(query) > 1)):
         var fm: FMIndex
         if index_path:

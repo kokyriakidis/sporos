@@ -103,6 +103,9 @@ check "smem finds the reverse piece" "$("$sporos" smem -l 100 ref.fa query.fa | 
 echo "errors"
 if "$sporos" minimizers -k 2>/dev/null; then check "missing option value is an error" 1 0; else check "missing option value is an error" 1 1; fi
 if "$sporos" mem -l 0 ref.fa query.fa >/dev/null 2>&1; then check "-l 0 is rejected" 1 0; else check "-l 0 is rejected" 1 1; fi
+for cmd in "mem" "smem" "seeds -k 19" "minimizers -k 21 -w 11"; do
+    if "$sporos" $cmd -t 0 ref.fa query.fa >/dev/null 2>&1; then check "$cmd -t 0 is rejected" 1 0; else check "$cmd -t 0 is rejected" 1 1; fi
+done
 
 if [ "$failures" -gt 0 ]; then
     echo "test_cli: $failures check(s) failed"

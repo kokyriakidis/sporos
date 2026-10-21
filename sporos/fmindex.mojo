@@ -33,7 +33,7 @@ run time.
 from std.bit import count_leading_zeros, count_trailing_zeros, pop_count
 from std.ffi import OwnedDLHandle
 from std.memory import Layout, bitcast, pack_bits, unsafe_memcpy
-from std.os import getenv
+from std.os import getenv, setenv as os_setenv
 from std.sys.info import CompilationTarget, size_of
 from std.sys.intrinsics import PrefetchOptions, prefetch
 
@@ -55,6 +55,8 @@ comptime _AHEAD = PrefetchOptions().for_read().high_locality()
 comptime _BATCH = 16
 """Queries searched together (state machines stepped round-robin)."""
 comptime _LOCATE_BATCH = 64
+comptime _ENCODE_AHEAD = 32
+"""Suffix array rows between a text prefetch and its use when encoding."""
 comptime _BUILD_BLOCKS = 1 << 13
 """BWT blocks per task when the index is built."""
 comptime _MAGIC = "SPOROSFM"
@@ -221,22 +223,16 @@ struct FMIndex(Movable):
             offset += len(s) + 1
         # ACGT runs of the forward strand, then the text: runs and separators,
         # then the reverse complement of all that but the last separator, then one.
+        if offset > Int(UInt32.MAX):
+            raise Error("FM-index references must be shorter than 2^32 bases in all")
         var half = 0
         for s in range(len(seqs)):
-            var seq = seqs[s]
-            var i = 0
-            while i < len(seq):
-                if _code(seq[i]) == _SEPARATOR:
-                    i += 1
-                    continue
-                var j = i
-                while j < len(seq) and _code(seq[j]) != _SEPARATOR:
-                    j += 1
+            var runs = _acgt_runs(seqs[s])
+            for r in range(0, len(runs), 2):
                 index.run_text.append(half)
                 index.run_seq.append(s)
-                index.run_ref.append(i)
-                half += j - i + 1
-                i = j
+                index.run_ref.append(runs[r])
+                half += runs[r + 1] - runs[r] + 1
         index.run_text.append(half)
         index.half = half
         var n = 2 * half
@@ -246,28 +242,28 @@ struct FMIndex(Movable):
         index._first = _aligned_first(index._blocks)
         index.sample_bits = sample_bits if sample_bits > 0 else (2 if n <= 1 << 30 else (3 if n <= 1 << 32 else 4))
         index.samples = _huge_zeros[DType.uint8](index._sample_count() * _SAMPLE_BYTES + 8)
+        index.packed = _huge_zeros[DType.uint64]((half >> 5) + 2)
         if n == 0:
             index._build_cache(threads)
             return index^
-        var text = List[UInt8](unsafe_uninit_length=n)
-        var at = 0
+        var text = List[UInt8](unsafe_uninit_length=n + 32)
+        var sources = List[Int](capacity=len(index.run_seq))
         for r in range(len(index.run_seq)):
-            var seq = seqs[index.run_seq[r]]
-            var length = index.run_text[r + 1] - index.run_text[r] - 1
-            for b in range(length):
-                text[at + b] = _code(seq[index.run_ref[r] + b]) + 1
-            at += length
-            text[at] = 0
-            at += 1
-        for g in range(half - 1):
-            var f = text[half - 2 - g]
-            text[half + g] = 0 if f == 0 else 5 - f
-        text[n - 1] = 0
-        index.packed = _huge_zeros[DType.uint64]((half >> 5) + 2)
-        for i in range(half):
-            var code = text[i]
-            if code != 0:
-                index.packed[i >> 5] |= UInt64(code - 1) << UInt64(2 * (i & 31))
+            sources.append(Int(seqs[index.run_seq[r]].unsafe_ptr()) + index.run_ref[r])
+        var chunks = (half + _FILL_CHUNK - 1) // _FILL_CHUNK
+        for phase in range(2):
+            var fill = _FillTask(
+                text.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+                index.packed.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+                index.run_text.unsafe_ptr().as_imm().unsafe_origin_cast[ImmUntrackedOrigin](),
+                sources.unsafe_ptr().as_imm().unsafe_origin_cast[ImmUntrackedOrigin](),
+                len(index.run_seq),
+                half,
+                phase,
+            )
+            parallel_for(fill, chunks, threads)
+        _ = len(sources)
+        _ = len(index.packed)
 
         var lib = _load_libsais()
         var separators = List[UInt64](length=(n + 63) >> 6, fill=0)
@@ -1141,6 +1137,136 @@ def _sort_hits(mut hits: List[SmemHit], first: Int):
         hits[j] = h
 
 
+def _acgt_runs(seq: Span[UInt8, _]) -> List[Int]:
+    """`[start0, end0, start1, end1, ...]`: the maximal ACGT runs of `seq`
+    (either case, U as T), 32 bases per step."""
+    comptime W = 32
+    var out = List[Int]()
+    var n = len(seq)
+    var src = seq.unsafe_ptr()
+    var inside = False
+    var i = 0
+    while i < n:
+        var take = min(W, n - i)
+        var bits: UInt32
+        if take == W:
+            var lower = src.unsafe_load[width=W](i) | 0x20
+            var valid = lower.eq(0x61) | lower.eq(0x63) | lower.eq(0x67) | lower.eq(0x74) | lower.eq(0x75)
+            bits = pack_bits[DType.uint32](valid)
+            if bits == (UInt32.MAX if inside else 0):
+                i += W
+                continue
+        else:
+            bits = 0
+            for j in range(take):
+                if _code(src[unsafe_offset=i + j]) != _SEPARATOR:
+                    bits |= UInt32(1) << UInt32(j)
+        for j in range(take):
+            var valid = (bits >> UInt32(j)) & 1 != 0
+            if valid != inside:
+                out.append(i + j)
+                inside = valid
+        i += take
+    if inside:
+        out.append(n)
+    return out^
+
+
+comptime _FILL_CHUNK = 1 << 20
+"""Forward-half text bases per task when the text is written."""
+
+
+struct _FillTask(ParallelTask):
+    """Writes one chunk of the text: in phase 0 the forward half (run bases
+    as codes 1-4, a 0 after each run), in phase 1 the reverse-complement
+    half and the two-bit copy of the forward half."""
+
+    var text: MutPointer[UInt8, MutUntrackedOrigin]
+    var packed: MutPointer[UInt64, MutUntrackedOrigin]
+    var run_text: ImmPointer[Int, ImmUntrackedOrigin]
+    var sources: ImmPointer[Int, ImmUntrackedOrigin]
+    var runs: Int
+    var half: Int
+    var phase: Int
+
+    def __init__(
+        out self,
+        text: MutPointer[UInt8, MutUntrackedOrigin],
+        packed: MutPointer[UInt64, MutUntrackedOrigin],
+        run_text: ImmPointer[Int, ImmUntrackedOrigin],
+        sources: ImmPointer[Int, ImmUntrackedOrigin],
+        runs: Int,
+        half: Int,
+        phase: Int,
+    ):
+        self.text = text
+        self.packed = packed
+        self.run_text = run_text
+        self.sources = sources
+        self.runs = runs
+        self.half = half
+        self.phase = phase
+
+    def run(self, index: Int):
+        comptime W = 32
+        var lo = index * _FILL_CHUNK
+        var hi = min(self.half, lo + _FILL_CHUNK)
+        if self.phase == 0:
+            # The run holding lo, then run by run.
+            var r = 0
+            var count = self.runs
+            while count > 1:
+                var step = count >> 1
+                r += step * Int(self.run_text[unsafe_offset=r + step] <= lo)
+                count -= step
+            var pos = lo
+            while pos < hi:
+                var start = self.run_text[unsafe_offset=r]
+                var end = self.run_text[unsafe_offset=r + 1] - 1  # its separator
+                var stop = min(hi, end)
+                var src = ImmPointer[UInt8, ImmUntrackedOrigin](
+                    unsafe_from_address=self.sources[unsafe_offset=r] + pos - start
+                )
+                var dst = self.text.unsafe_offset(pos)
+                var i = 0
+                while i + W <= stop - pos:
+                    var raw = src.unsafe_load[width=W](i)
+                    dst.unsafe_offset(i).unsafe_store((((raw >> 1) ^ (raw >> 2)) & 3) + 1)
+                    i += W
+                while i < stop - pos:
+                    dst[unsafe_offset=i] = _code(src[unsafe_offset=i]) + 1
+                    i += 1
+                pos = stop
+                if pos == end and pos < hi:
+                    self.text[unsafe_offset=pos] = 0
+                    pos += 1
+                    r += 1
+            return
+        # Phase 1: G[g] = complement of F[half - 2 - g] (separators stay 0),
+        # G[half - 1] = 0; and the two-bit words of F (separators as 0).
+        var half = self.half
+        var g = lo
+        while g < hi:
+            if g + W <= half - 1 and half - 33 - g >= 0:
+                var f = self.text.unsafe_offset(half - 33 - g).unsafe_load[width=W]().reversed()
+                var comp = f.eq(0).select(SIMD[DType.uint8, W](0), SIMD[DType.uint8, W](5) - f)
+                self.text.unsafe_offset(half + g).unsafe_store(comp)
+                g += W
+            else:
+                var f = self.text[unsafe_offset=half - 2 - g] if g < half - 1 else UInt8(0)
+                self.text[unsafe_offset=half + g] = 0 if f == 0 else 5 - f
+                g += 1
+        # Words fully inside [lo, hi); chunks are multiples of 32 bases.
+        for word in range(lo >> 5, (hi + 31) >> 5):
+            var base = word << 5
+            var f = self.text.unsafe_offset(base).unsafe_load[width=W]()
+            var codes = f.eq(0).select(SIMD[DType.uint8, W](0), f - 1)
+            var value = _pack32(codes)
+            if base + W > half:
+                value &= (UInt64(1) << UInt64(2 * (half - base))) - 1
+            self.packed[unsafe_offset=word] = value
+
+
 struct _EncodeTask[dtype: DType](ParallelTask):
     """Encodes one run of BWT blocks from the suffix array: symbols, the
     blocks' own counts (made cumulative afterwards), samples and separator
@@ -1185,11 +1311,15 @@ struct _EncodeTask[dtype: DType](ParallelTask):
             var hi = min(self.n, lo + 128)
             for row in range(lo, hi):
                 var s = Int(self.sa[unsafe_offset=row])
+                # The text is read at random suffix array positions: fetch ahead.
+                if row + _ENCODE_AHEAD < self.n:
+                    var ahead = Int(self.sa[unsafe_offset=row + _ENCODE_AHEAD])
+                    prefetch[_AHEAD](self.text.unsafe_offset(max(ahead - 1, 0)))
                 if row & ((1 << self.sample_bits) - 1) == 0:
                     # Byte stores: a wider one would reach the next task's samples.
                     var at = (row >> self.sample_bits) * _SAMPLE_BYTES
-                    for b in range(_SAMPLE_BYTES):
-                        self.samples[unsafe_offset=at + b] = UInt8((s >> (8 * b)) & 0xFF)
+                    for byte in range(_SAMPLE_BYTES):
+                        self.samples[unsafe_offset=at + byte] = UInt8((s >> (8 * byte)) & 0xFF)
                 var sym = 0 if s == 0 else Int(self.text[unsafe_offset=s - 1])
                 if sym == 0:
                     flag = True
@@ -1266,6 +1396,10 @@ struct _CacheTask[index_origin: ImmOrigin](ParallelTask):
 
 
 def _load_libsais() raises -> OwnedDLHandle:
+    # OpenMP threads that spin after each libsais call compete with sporos's
+    # own threads that run next: let them sleep (unless the user chose).
+    if not getenv("OMP_WAIT_POLICY"):
+        _ = os_setenv("OMP_WAIT_POLICY", "passive")
     comptime suffix = ".dylib" if CompilationTarget.is_macos() else ".so"
     var names: List[String] = [
         "@rpath/libsais.2.dylib" if CompilationTarget.is_macos() else "libsais.so.2",

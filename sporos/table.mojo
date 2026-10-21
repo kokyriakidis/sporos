@@ -37,6 +37,8 @@ trait AnchorSource(Deinitable):
         ...
 
 
+comptime _INSERTION_MAX = 64
+"""Buckets up to this size are insertion-sorted."""
 comptime _PART_BITS = 10
 """First-level radix: anchors are scattered to 2^_PART_BITS parts, small
 enough that each part's counting sort stays in L2 (best of 8-12 bits on
@@ -279,10 +281,19 @@ struct _PartSortTask(ParallelTask):
             offsets[unsafe_offset=b] = offsets[unsafe_offset=b - 1]
         offsets[unsafe_offset=0] = UInt32(lo)
         if self.sort_buckets:
-            # Buckets are small: insertion sort each by entry value.
+            # Buckets are small: insertion sort each by entry value. Large
+            # ones (a repeat's copies on both strands interleave, which is
+            # quadratic for insertion sort) take a full sort.
             for b in range(self.buckets_per_part):
                 var start = Int(offsets[unsafe_offset=b])
                 var end = Int(offsets[unsafe_offset=b + 1]) if b + 1 < self.buckets_per_part else hi
+                if end - start > _INSERTION_MAX:
+                    sort(
+                        Span[UInt64, MutUntrackedOrigin](
+                            unsafe_ptr=self.entries.unsafe_offset(start), length=end - start
+                        )
+                    )
+                    continue
                 for i in range(start + 1, end):
                     var v = self.entries[unsafe_offset=i]
                     var j = i

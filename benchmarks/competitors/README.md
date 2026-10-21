@@ -145,7 +145,7 @@ with its defaults for 150 bp reads and its own frequency cutoff.
 
 | | Mbp/s | hits per read | index build (1 / 8 threads) |
 |---|---|---|---|
-| sporos `lookup_batch`, k=19 w=12 | **133** | 27.7 | 0.37 / 0.07 s |
+| sporos `lookup_batch`, k=19 w=12 | **136** | 27.7 | 0.34 / 0.07 s |
 | sporos `lookup` (one read per call), k=19 w=12 | 47 | 27.7 | |
 | minimap2 `mm_sketch` + `mm_idx_get`, k=19 w=12 | 34.5 | 27.6 | 1.63 / 1.22 s |
 | sporos `lookup_batch`, k=21 w=11 | **130** | 29.0 | 0.39 / 0.07 s |
@@ -153,7 +153,7 @@ with its defaults for 150 bp reads and its own frequency cutoff.
 | strobealign `find_hits` (one hit per seed) | 14.5 | 51.0 | 1.78 / 1.34 s |
 | strobealign `find_hits` + every position | 13.1 | 97.2 | |
 
-- sporos `lookup_batch` on 8 threads: 552 Mbp/s.
+- sporos `lookup_batch` on 8 threads: 570 Mbp/s.
 - strobealign does more per seed (both orientations, partial-strobe lookups, rescue), so its row is a
   reference point rather than the same work.
 - minimap2 and strobealign build times include reading the FASTA; sporos's do not (about 0.03 s here).
