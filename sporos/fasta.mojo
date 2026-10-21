@@ -44,7 +44,10 @@ struct FastaRecords(Movable, Sized):
         return Span(self.data)[self.starts[i] : self.starts[i] + self.lengths[i]]
 
     def total_length(self) -> Int:
-        return len(self.data)
+        var total = 0
+        for length in self.lengths:
+            total += length
+        return total
 
 
 @inline(.always)

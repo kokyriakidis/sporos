@@ -4,7 +4,7 @@ Anchors come from an `AnchorSource` as (hash, entry) pairs, chunk by chunk.
 Bucket `b` holds the entries whose hash has `b` as its top bits, in
 `entries[offsets[b] : offsets[b + 1]]`. Construction is a deterministic
 two-level radix sort: chunks count and fill their anchors in parallel, scatter
-them to 256 parts by the bucket's top bits, then each part is counting-sorted
+them to 1024 parts by the bucket's top bits, then each part is counting-sorted
 by bucket in place. Entries keep their source order within a bucket unless
 `sort_buckets` asks for them sorted by value.
 """
@@ -22,8 +22,8 @@ trait AnchorSource(Deinitable):
     def chunks(self) -> Int:
         ...
 
-    def count(self, chunk: Int) -> Int:
-        """Anchors chunk `chunk` will write."""
+    def capacity(self, chunk: Int) -> Int:
+        """At least as many as the anchors chunk `chunk` writes."""
         ...
 
     def fill(
@@ -31,10 +31,16 @@ trait AnchorSource(Deinitable):
         chunk: Int,
         hashes: MutPointer[UInt64, MutUntrackedOrigin],
         entries: MutPointer[UInt64, MutUntrackedOrigin],
-    ):
-        """Writes the chunk's `count(chunk)` anchors."""
+    ) -> Int:
+        """Writes the chunk's anchors (at most `capacity(chunk)`) and returns
+        how many."""
         ...
 
+
+comptime _PART_BITS = 10
+"""First-level radix: anchors are scattered to 2^_PART_BITS parts, small
+enough that each part's counting sort stays in L2 (best of 8-12 bits on
+hg38 chr1)."""
 
 comptime ENTRY_PADDING = 8
 """Readable (garbage) entries past the end, for whole-vector bucket scans."""
@@ -61,24 +67,33 @@ struct HashTable(Movable, Sized):
         so the build holds 12 bytes per anchor beyond the table itself."""
         var chunks = source.chunks()
         var src = Pointer(to=source).unsafe_origin_cast[ImmUntrackedOrigin]()
+        # Count every chunk's anchors by the top _PART_BITS bits of their hash.
+        comptime max_parts = 1 << _PART_BITS
+        var histogram_alloc = alloc(Layout[Int](length=chunks * max_parts))
+        var histogram = histogram_alloc.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+        var count_task = _PartCountTask[S](src, histogram, max_parts, UInt64(64 - _PART_BITS))
+        parallel_for(count_task, chunks, threads)
         var total = 0
-        for c in range(chunks):
-            total += source.count(c)
+        for cell in range(chunks * max_parts):
+            total += histogram[unsafe_offset=cell]
 
         var bits = 1
         while (1 << bits) * bucket_load < max(1, total):
             bits += 1
         self.shift = UInt64(64 - bits)
         var num_buckets = 1 << bits
-        var part_bits = min(8, bits)
+        var part_bits = min(_PART_BITS, bits)
         var parts = 1 << part_bits
         var part_shift = UInt64(64 - part_bits)
-
-        # Count every chunk's anchors per part.
-        var histogram_alloc = alloc(Layout[Int](length=chunks * parts))
-        var histogram = histogram_alloc.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
-        var count_task = _PartCountTask[S](src, histogram, parts, part_shift)
-        parallel_for(count_task, chunks, threads)
+        if parts < max_parts:
+            # A tiny table: fold the counts into its fewer parts, in place.
+            var fold = max_parts // parts
+            for c in range(chunks):
+                for p in range(parts):
+                    var sum = 0
+                    for q in range(p * fold, (p + 1) * fold):
+                        sum += histogram[unsafe_offset=c * max_parts + q]
+                    histogram[unsafe_offset=c * parts + p] = sum
         # Part-major start of every (chunk, part) cell, in place.
         var starts_alloc = alloc(Layout[Int](length=parts + 1))
         var part_starts = starts_alloc.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
@@ -128,14 +143,16 @@ struct _ChunkAnchors(Movable):
     var values: List[UInt64]
 
     def __init__[S: AnchorSource](out self, source: S, chunk: Int):
-        var count = source.count(chunk)
-        self.hashes = List[UInt64](unsafe_uninit_length=count)
-        self.values = List[UInt64](unsafe_uninit_length=count)
-        source.fill(
+        var room = source.capacity(chunk)
+        self.hashes = List[UInt64](unsafe_uninit_length=room)
+        self.values = List[UInt64](unsafe_uninit_length=room)
+        var count = source.fill(
             chunk,
             self.hashes.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
             self.values.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
         )
+        self.hashes.resize(unsafe_uninit_length=count)
+        self.values.resize(unsafe_uninit_length=count)
 
 
 struct _PartCountTask[S: AnchorSource](ParallelTask):

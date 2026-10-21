@@ -10,9 +10,11 @@
 (MUMmer's `-n`, accepted and implied).
 """
 
+from std.ffi import external_call
 from std.math import ceildiv
 from std.memory import unsafe_memcpy
 from std.sys import argv, stderr
+from std.sys.info import CompilationTarget
 from std.time import perf_counter_ns
 
 from sporos.batch import SeedBatch, minimizers_batch, syncmers_batch
@@ -37,7 +39,19 @@ comptime USAGE = """usage:
 
 def _log(verbose: Bool, message: String):
     if verbose:
-        print(message, file=stderr)
+        print(message, _peak_memory(), file=stderr)
+
+
+def _peak_memory() -> String:
+    """`[peak N MB]`: the process's peak resident memory (getrusage)."""
+    # struct rusage: two timevals, then ru_maxrss (KB on Linux, bytes on macOS).
+    var usage = List[Int64](length=18, fill=0)
+    if external_call["getrusage", Int32](Int32(0), usage.unsafe_ptr()) != 0:
+        return String()
+    var peak = Int(usage[4])
+    comptime if CompilationTarget.is_macos():
+        peak //= 1024
+    return String(t"[peak {peak // 1024} MB]")
 
 
 def _seconds(start: Int) -> Float64:
@@ -105,10 +119,22 @@ def run_mem(args: List[String]) raises:
     for r in range(len(reference)):
         ref_seqs.append(reference.seq(r))
     var rtext = SeqText(ref_seqs)
+    # Matching reads the packed text; output needs only the names.
+    reference.data = List[UInt8]()
     _log(verbose, String(t"  text: {_seconds(start)} s"))
     for q in range(len(query)):
         if len(query.seq(q)) >= Int(UInt32.MAX):
             raise Error("query sequences must be shorter than 2^32 bases")
+    # One query record (a genome): pack it now and drop its raw bytes before
+    # the index is built.
+    var packed = List[SeqText]()
+    if len(query) == 1:
+        var qseqs = List[Span[UInt8, origin_of(query.data)]]()
+        qseqs.append(query.seq(0))
+        packed.append(SeqText(qseqs))
+        if reverse:
+            packed.append(SeqText(qseqs, reverse_complement=True))
+        query.data = List[UInt8]()
     var params = MemParams.choose(min_len, len(rtext), query.total_length())
     if anchor_k > 0 or ref_step > 0 or query_step > 0:
         # Tuning overrides: anchor length and coprime sampling steps.
@@ -161,15 +187,21 @@ def run_mem(args: List[String]) raises:
         _log(verbose, String(t"matches: {_seconds(query_start)} s ({total} reported)"))
         return
     for q in range(len(query)):
-        var qseqs = List[Span[UInt8, origin_of(query.data)]]()
-        qseqs.append(query.seq(q))
-        var qtext = SeqText(qseqs)
+        # The record's strands: packed above for a single record.
+        var texts = packed^
+        packed = List[SeqText]()
+        if len(texts) == 0:
+            var qseqs = List[Span[UInt8, origin_of(query.data)]]()
+            qseqs.append(query.seq(q))
+            texts.append(SeqText(qseqs))
+            if reverse:
+                texts.append(SeqText(qseqs, reverse_complement=True))
         if forward:
             total += _report(
                 out,
                 index,
                 rtext,
-                qtext,
+                texts[0],
                 query.names[q],
                 False,
                 mode,
@@ -179,12 +211,11 @@ def run_mem(args: List[String]) raises:
                 threads,
             )
         if reverse:
-            var rc = SeqText(qseqs, reverse_complement=True)
             total += _report(
                 out,
                 index,
                 rtext,
-                rc,
+                texts[len(texts) - 1],
                 query.names[q],
                 True,
                 mode,

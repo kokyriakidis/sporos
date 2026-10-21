@@ -9,6 +9,7 @@ matches extend 32 bases per comparison.
 """
 
 from std.memory import bitcast
+from std.sys.intrinsics import PrefetchOptions, prefetch
 
 comptime _PAD_WORDS = 4
 """All-masked words before and after the text (128 bases each side)."""
@@ -65,6 +66,17 @@ struct SeqText(Movable, Sized):
     def mask(self, i: Int) -> UInt64:
         """The never-match mask of the same 32 bases as `window(i)`."""
         return _window(self.masks.unsafe_ptr(), i)
+
+    @inline(.always)
+    def prefetch(self, i: Int):
+        """Prefetches the words and masks that windows at `i - 32 .. i + 32`
+        read (a match extended both ways from `i`)."""
+        comptime ahead = PrefetchOptions().for_read().high_locality()
+        var w = (i - 32 + _PAD_WORDS * _BASES) >> 5
+        prefetch[ahead](self.words.unsafe_ptr().unsafe_offset(w))
+        prefetch[ahead](self.words.unsafe_ptr().unsafe_offset(w + 3))
+        prefetch[ahead](self.masks.unsafe_ptr().unsafe_offset(w))
+        prefetch[ahead](self.masks.unsafe_ptr().unsafe_offset(w + 3))
 
     def sequence_of(self, offset: Int) -> Int:
         """Index of the sequence containing text offset `offset`."""

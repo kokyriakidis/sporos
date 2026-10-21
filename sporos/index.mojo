@@ -189,7 +189,7 @@ struct _SelectedKmers[origin: ImmOrigin](AnchorSource):
     def chunks(self) -> Int:
         return max(1, ceildiv(self.count_all, _CHUNK))
 
-    def count(self, chunk: Int) -> Int:
+    def capacity(self, chunk: Int) -> Int:
         return max(0, min(_CHUNK, self.count_all - chunk * _CHUNK))
 
     def fill(
@@ -197,15 +197,16 @@ struct _SelectedKmers[origin: ImmOrigin](AnchorSource):
         chunk: Int,
         hashes: MutPointer[UInt64, MutUntrackedOrigin],
         entries: MutPointer[UInt64, MutUntrackedOrigin],
-    ):
+    ) -> Int:
         var mask = kmer_mask(self.k)
         var lo = chunk * _CHUNK
-        for i in range(lo, lo + self.count(chunk)):
+        for i in range(lo, lo + self.capacity(chunk)):
             var pos = Int(self.positions[unsafe_offset=i])
             var form = canonical(self.text[].window(pos) & mask, self.k)
             var h = kmer_hash(form[0], self.k)
             hashes[unsafe_offset=i - lo] = h
             entries[unsafe_offset=i - lo] = (fingerprint(h, self.k) << 33) | (UInt64(Int(form[1])) << 32) | UInt64(pos)
+        return self.capacity(chunk)
 
 
 struct SeedIndex(Movable):

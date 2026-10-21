@@ -171,21 +171,17 @@ struct _SampledAnchors(AnchorSource):
     def chunks(self) -> Int:
         return max(1, ceildiv(max(0, self.n - self.k + 1), _BUILD_CHUNK))
 
-    def count(self, chunk: Int) -> Int:
+    def capacity(self, chunk: Int) -> Int:
         var first = chunk * _BUILD_CHUNK
         var last = min(self.n - self.k + 1, first + _BUILD_CHUNK)
-        var mask = _kmer_mask(self.k)
-        var count = 0
-        for start in range(_next_multiple(first, self.step), last, self.step):
-            count += Int(self.text[].mask(start) & mask == 0)
-        return count
+        return max(0, ceildiv(last - _next_multiple(first, self.step), self.step))
 
     def fill(
         self,
         chunk: Int,
         hashes: MutPointer[UInt64, MutUntrackedOrigin],
         entries: MutPointer[UInt64, MutUntrackedOrigin],
-    ):
+    ) -> Int:
         var first = chunk * _BUILD_CHUNK
         var last = min(self.n - self.k + 1, first + _BUILD_CHUNK)
         var mask = _kmer_mask(self.k)
@@ -198,6 +194,7 @@ struct _SampledAnchors(AnchorSource):
             hashes[unsafe_offset=slot] = h
             entries[unsafe_offset=slot] = (h << 32) | UInt64(start)
             slot += 1
+        return slot
 
 
 struct MemIndex(Movable):
@@ -240,6 +237,9 @@ struct MemIndex(Movable):
         var hashes = Array[UInt64, _RING](fill=0)
         var lows = Array[UInt32, _RING](fill=0)
         var highs = Array[UInt32, _RING](fill=0)
+        # Candidates (fingerprint matches) wait _LAG more for their prefetched
+        # reference text before being extended.
+        var cands = _Candidates()
         var n = 0
         for j in range(_next_multiple(begin, qstep), min(end, len(query) - k + 1), qstep):
             if query.mask(j) & mask != 0:
@@ -252,12 +252,14 @@ struct MemIndex(Movable):
             if n >= _LAG:
                 self._bounds(n - _LAG, hashes, lows, highs)
             if n >= 2 * _LAG:
-                self._match((n - 2 * _LAG) & (_RING - 1), positions, hashes, lows, highs, reference, query, out)
+                self._match((n - 2 * _LAG) & (_RING - 1), positions, hashes, lows, highs, reference, query, cands, out)
             n += 1
         for m in range(max(0, n - _LAG), n):
             self._bounds(m, hashes, lows, highs)
         for m in range(max(0, n - 2 * _LAG), n):
-            self._match(m & (_RING - 1), positions, hashes, lows, highs, reference, query, out)
+            self._match(m & (_RING - 1), positions, hashes, lows, highs, reference, query, cands, out)
+        while cands.tail < cands.head:
+            self._extend(cands, reference, query, out)
 
     @inline(.always)
     def _bounds(
@@ -287,11 +289,9 @@ struct MemIndex(Movable):
         highs: Array[UInt32, _RING],
         reference: SeqText,
         query: SeqText,
+        mut cands: _Candidates,
         mut out: List[Mem],
     ):
-        var k = self.params.k
-        var period = self.params.ref_step * self.params.query_step
-        var min_len = self.params.min_len
         var ent = self.table.entries.unsafe_ptr()
         var j = positions[slot]
         var fp = hashes[slot] << 32
@@ -313,16 +313,56 @@ struct MemIndex(Movable):
             if (entry ^ fp) >> 32 != 0:
                 continue
             var r = Int(entry & 0xFFFFFFFF)
-            # Anchors of one MEM sit `period` apart on its diagonal, so this
-            # anchor is the MEM's first iff the match does not reach `period`
-            # bases to the left: stop looking there.
-            var left = match_backward(reference, r, query, j, period)
-            if left >= period:
-                continue
-            var right = match_forward(reference, r, query, j)
-            if right < k or left + right < min_len:
-                continue
-            out.append(Mem(UInt32(r - left), UInt32(j - left), UInt32(left + right)))
+            reference.prefetch(r)
+            if cands.head - cands.tail == _CANDS:
+                self._extend(cands, reference, query, out)
+            cands.push(j, r)
+            if cands.head - cands.tail > _LAG:
+                self._extend(cands, reference, query, out)
+
+    @inline(.always)
+    def _extend(self, mut cands: _Candidates, reference: SeqText, query: SeqText, mut out: List[Mem]):
+        """Extends the oldest candidate, reporting it if it starts a MEM."""
+        var k = self.params.k
+        var period = self.params.ref_step * self.params.query_step
+        var j = cands.queries[cands.tail & (_CANDS - 1)]
+        var r = cands.refs[cands.tail & (_CANDS - 1)]
+        cands.tail += 1
+        # Anchors of one MEM sit `period` apart on its diagonal, so this
+        # anchor is the MEM's first iff the match does not reach `period`
+        # bases to the left: stop looking there.
+        var left = match_backward(reference, r, query, j, period)
+        if left >= period:
+            return
+        var right = match_forward(reference, r, query, j)
+        if right < k or left + right < self.params.min_len:
+            return
+        out.append(Mem(UInt32(r - left), UInt32(j - left), UInt32(left + right)))
+
+
+comptime _CANDS = 64
+"""Candidate ring size (a power of two above _LAG)."""
+
+
+struct _Candidates(Movable):
+    """A ring of (query, reference) anchor pairs awaiting extension."""
+
+    var queries: Array[Int, _CANDS]
+    var refs: Array[Int, _CANDS]
+    var head: Int
+    var tail: Int
+
+    def __init__(out self):
+        self.queries = Array[Int, _CANDS](fill=0)
+        self.refs = Array[Int, _CANDS](fill=0)
+        self.head = 0
+        self.tail = 0
+
+    @inline(.always)
+    def push(mut self, j: Int, r: Int):
+        self.queries[self.head & (_CANDS - 1)] = j
+        self.refs[self.head & (_CANDS - 1)] = r
+        self.head += 1
 
 
 struct _FindTask(ParallelTask):
@@ -351,7 +391,58 @@ struct _FindTask(ParallelTask):
         var end = min(len(self.query[]), begin + self.chunk)
         ref results = self.results[unsafe_offset=index]
         self.index[].find(self.reference[], self.query[], begin, end, results)
-        sort(Span(results))
+        sort_mems(results)
+
+
+comptime _RADIX_BITS = 11
+
+
+def sort_mems(mut mems: List[Mem]):
+    """Sorts MEMs by (query, reference) position, which identifies each MEM:
+    an LSD radix sort on `(query - lowest) << 32 | reference`, skipping the
+    digits every key shares."""
+    var n = len(mems)
+    if n < 64:
+        sort(Span(mems))
+        return
+    var low = Int(mems[0].query_pos)
+    var high = low
+    for m in mems:
+        low = min(low, Int(m.query_pos))
+        high = max(high, Int(m.query_pos))
+    var key_bits = 32 + (64 - Int(count_leading_zeros(UInt64(high - low) | 1)))
+    var base = UInt64(low)
+    comptime digits = 1 << _RADIX_BITS
+    var counts = List[Int](length=digits, fill=0)
+    var other = List[Mem](unsafe_uninit_length=n)
+    for shift in range(0, key_bits, _RADIX_BITS):
+        for d in range(digits):
+            counts[d] = 0
+        var src = mems.unsafe_ptr()
+        for i in range(n):
+            counts[_digit(src[unsafe_offset=i], base, shift)] += 1
+        if counts[_digit(src[unsafe_offset=0], base, shift)] == n:
+            continue  # every key has this digit
+        var at = 0
+        for d in range(digits):
+            var c = counts[d]
+            counts[d] = at
+            at += c
+        var dst = other.unsafe_ptr()
+        for i in range(n):
+            var m = src[unsafe_offset=i]
+            var d = _digit(m, base, shift)
+            dst[unsafe_offset=counts[d]] = m
+            counts[d] += 1
+        var sorted = other^
+        other = mems^
+        mems = sorted^
+
+
+@inline(.always)
+def _digit(m: Mem, base: UInt64, shift: Int) -> Int:
+    var key = ((UInt64(m.query_pos) - base) << 32) | UInt64(m.ref_pos)
+    return Int((key >> UInt64(shift)) & ((1 << _RADIX_BITS) - 1))
 
 
 def find_mems(index: MemIndex, reference: SeqText, query: SeqText, threads: Int = 1) -> List[Mem]:
