@@ -25,7 +25,7 @@ a command-line tool, a C library and a Python package.
   - Minimizers and syncmers run 1.7–2.3x faster than simd-minimizers on one thread, and up to 1.5x faster on ten.
   - Seed-index lookups of reads run 3.9x faster than minimap2's (1.4x one read per call) and 9x faster
     than strobealign's.
-  - MEMs between hg38 and CHM13 chr1 run 2.1–2.4x faster than copMEM2 on one thread and 10–14x faster with
+  - MEMs between hg38 and CHM13 chr1 run 2.0–2.4x faster than copMEM2 on one thread and 10–14x faster with
     10 threads.
   - MUMs run 4–20x faster than MUMmer.
   - SMEMs of reads run 4.8x faster than minibwa and 15x faster than `bwa fastmap` on one thread, from an
@@ -44,7 +44,7 @@ a command-line tool, a C library and a Python package.
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/benchmarks-dark.svg">
-    <img alt="Bar charts, lower is better. MEMs on hg38 vs CHM13 chr1 at L=50 on one thread: sporos 19.5 s, copMEM2 46.9 s, MUMmer4 159 s. With 10 threads: sporos 3.3 s, copMEM2 46.5 s. MUMs on the same pair: sporos 21.6 s, MUMmer4 87.5 s. SMEMs of 1 M 150 bp reads against hg38 chr21 at L=19 on one thread: sporos 1.85 s, minibwa 8.85 s, bwa fastmap 27.3 s. Canonical minimizers on CHM13 chr1, k=21, w=11, one thread: sporos 1.05 ns per base, simd-minimizers 2.13, minimap2 17.1." src="docs/benchmarks-light.svg" width="820">
+    <img alt="Bar charts, lower is better. MEMs on hg38 vs CHM13 chr1 at L=50 on one thread: sporos 19.5 s, copMEM2 46.5 s, MUMmer4 160 s. With 10 threads: sporos 3.3 s, copMEM2 46.4 s. MUMs on the same pair: sporos 21.6 s, MUMmer4 87.1 s. SMEMs of 1 M 150 bp reads against hg38 chr21 at L=19 on one thread: sporos 1.85 s, minibwa 8.85 s, bwa fastmap 27.3 s. Canonical minimizers on CHM13 chr1, k=21, w=11, one thread: sporos 1.05 ns per base, simd-minimizers 2.13, minimap2 17.1." src="docs/benchmarks-light.svg" width="820">
   </picture>
 </p>
 
@@ -365,14 +365,14 @@ Competitor rows come from that suite; sporos rows are from the current code.
 
 | MEMs (1 / 10 threads) | sporos | copMEM2 `-mf` | MUMmer4 (1 thread) |
 |---|---|---|---|
-| hg38 vs CHM13 chr1, L=100 | **5.5 s / 1.1 s** | 11.4 s / 11.1 s | 132 s |
-| hg38 vs CHM13 chr1, L=50 (65.6 M MEMs) | **19.5 s / 3.3 s** | 46.9 s / 46.5 s | 159 s |
-| hg38 vs chimp chr21, L=50 | **0.71 s / 0.22 s** | 1.96 s / 1.95 s | 17.4 s |
+| hg38 vs CHM13 chr1, L=100 | **5.5 s / 1.1 s** | 10.8 s / 10.8 s | 126 s |
+| hg38 vs CHM13 chr1, L=50 (65.6 M MEMs) | **19.5 s / 3.3 s** | 46.5 s / 46.4 s | 160 s |
+| hg38 vs chimp chr21, L=50 | **0.71 s / 0.22 s** | 1.97 s / 1.96 s | 17.5 s |
 
 | MUMs, `-mum` | sporos (1 / 10 threads) | MUMmer4 (1 thread) |
 |---|---|---|
-| hg38 vs CHM13 chr1, L=100 | **5.6 s / 1.2 s** | 93.8 s |
-| hg38 vs CHM13 chr1, L=50 | **21.6 s / 4.1 s** | 87.5 s |
+| hg38 vs CHM13 chr1, L=100 | **5.6 s / 1.2 s** | 87.0 s |
+| hg38 vs CHM13 chr1, L=50 | **21.6 s / 4.1 s** | 87.1 s |
 | hg38 vs chimp chr21, L=50 | **0.73 s / 0.23 s** | 14.6 s |
 
 | SMEMs vs hg38 chr21, L=19 (1 thread) | sporos (1 / 10 threads) | minibwa `fastmap -b 64` | `bwa fastmap` |

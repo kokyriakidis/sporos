@@ -75,11 +75,7 @@ CHM13 chr1 is also the input for the seed benchmarks.
   because hash functions differ.
 - **CLI**: `sporos minimizers -k 21 -w 11 -t T chm13_chr1.fa > /dev/null`, end to end.
 
-## Results (xaros, 2026-10-20; seeds and lookups re-run 2026-10-21)
-
-The MEM and MUM rows below predate later sporos speedups (single-threaded chr1 MEMs at L=50 now take
-19.5 s, MUMs 21.6 s); the competitors' rows stand. Current sporos numbers are in the main
-[README](../../README.md#benchmarks).
+## Results (xaros, 2026-10-21)
 
 **Machine**: Intel Core i9-7900X (10 cores, SMT off so 10 hardware threads, AVX-512), 91 GB RAM, Ubuntu, kernel 7.0.0-38,
 gcc 15.2.0. Shared desktop box: it idles at about 0.5-1 busy CPU, and at 11:46 and 12:25 a separate
@@ -107,12 +103,12 @@ chr1 L=50 `bwa fastmap`). 1-minute load average when the scripts started: 0.96 (
   chr1 L=50), `-t 10` equals `-t 1` everywhere, and sporos `-maxmatch` equals copMEM2 (default and `-mf`,
   1 and 10 threads) in all 24 comparisons: 60/60 PASS. mumemto's forward-strand MUMs are a near-subset of
   MUMmer `-mum` (it also requires uniqueness against the reverse strands): 21887 of 21942 on ecoli L=50.
-- **MEMs vs MUMmer**: 12.5-25x faster single-threaded on ecoli/chr21, 1.6x (`-mum` L=50) to 14.7x
-  (`-maxmatch` L=100) on chr1; sporos' 10 threads add another 1.6-4.8x (MUMmer has no working threads).
-- **MEMs vs copMEM2** (the strongest competitor): single-threaded 1.8-3.2x on chr21, 6.8-20x on ecoli
-  (copMEM2 spends 0.5-1 s of system time on its fixed 1-2 GB tables), but only **1.3x on chr1**. copMEM2's
-  `-t 10` gives no speedup on any pair (presumably because each query is a single record), so at 10 threads
-  sporos leads 4.1-6.2x on chr1.
+- **MEMs vs MUMmer**: 18.7-43x faster single-threaded on ecoli/chr21, 4.0x (`-mum` L=50) to 22.9x
+  (`-maxmatch` L=100) on chr1; sporos' 10 threads add another 1.7-5.3x (MUMmer has no working threads).
+- **MEMs vs copMEM2** (the strongest competitor): single-threaded 2.7-5.5x on chr21, 9.9-32x on ecoli
+  (copMEM2 spends 0.5-1 s of system time on its fixed 1-2 GB tables), and 2.0-2.3x on chr1. copMEM2's
+  `-t 10` gives no speedup on any pair (each query is a single record), so at 10 threads sporos leads
+  9.6-12.3x on chr1.
 - **Minimizers/syncmers** (re-run 2026-10-21): one thread, sporos (16 lanes) is 1.7-2.3x faster than
   simd-minimizers on random and chr1 input, and 8 lanes (AVX2 width) 1.3-1.7x faster on chr1; with 10
   threads sporos leads 1.04-1.47x. `mm_sketch` is 15-18x slower than sporos.
@@ -124,19 +120,19 @@ chr1 L=50 `bwa fastmap`). 1-minute load average when the scripts started: 0.96 (
   threads, simd-minimizers 9.5-10.4x. (Its harness keeps each thread's positions in a private vector and
   only counts them; sporos returns one merged, ordered position list.) Until 2026-10-21 simd-minimizers
   won here; the ordered-output chain changed that.
-- **`-mum` / `-mumreference` on repeat-dense input.** On chr1 L=50 (65.6 M MEMs, vs 7.5 M at L=100)
-  sporos `-mum` takes 56 s single-threaded vs MUMmer's 87 s (only 1.6x) and 32 s with 10
-  threads (1.7x scaling); `-mumreference` 13 s at 10 threads vs 7.6 s for `-maxmatch`, which also writes
-  280x more lines. Filtering all MEMs down to MUMs, not MEM finding, looks like the cost there.
-- **Memory on chr1**: sporos 5.6 GB at L=50 (MUMmer 6.2 GB, copMEM2 2.8 GB, `-mf` 1.8 GB); 2.3 GB at
-  L=100 (copMEM2 `-mf` 1.7 GB). On ecoli/chr21 sporos uses less than MUMmer at L=100 and far less than
-  copMEM2.
-- **Threads on small inputs**: sporos `-t 10` gains only ~2x on chr21 (0.47 vs 1.08 s at L=50); input
-  reading and other fixed costs dominate at that size.
+- **`-mum` against MUMmer on repeat-dense input: the smallest margin.** On chr1 L=50, where 65.6 M MEMs
+  filter down to 232,880 MUMs, sporos `-mum` takes 21.6 s single-threaded against MUMmer's 87.1 s (4.0x;
+  MUMmer's `-mum` skips the work of finding every MEM), 4.1 s with 10 threads.
+- **Memory on chr1 at L=50**: sporos peaks at 3.1-3.6 GB (MUMmer 6.2 GB, copMEM2 2.8 GB, `-mf` 1.8 GB).
+  At L=100 it needs 1.2 GB, less than copMEM2 `-mf` (1.7 GB); on ecoli/chr21 it uses less than MUMmer and
+  far less than copMEM2.
+- **Threads on small inputs**: sporos `-t 10` gains 3.1x on chr21 at L=50 (0.72 vs 0.23 s) and 1.7-1.8x
+  on E. coli; input reading and other fixed costs dominate at that size.
 - Other notes: MUMmer 4.0.1's `-threads` needs `-k > 1`, which aborts; mumemto takes 13 s on E. coli,
-  165-169 s on chr21 and did not finish chr1 within 300 s (DNF; killed); `ropebwt3 mem -t 10` and copMEM2
-  `-t 10` do not speed up a single query record; `bwa fastmap` (SMEMs) is ~1.5x slower than sporos
-  `-maxmatch -t 1` on chr1 L=50 but needs a 215 s index build first.
+  166-168 s on chr21 and did not finish chr1 within 300 s (DNF; killed); `ropebwt3 mem -t 10` and copMEM2
+  `-t 10` do not speed up a single query record; `bwa fastmap` (SMEMs) is 2.6x slower than sporos
+  `-maxmatch -t 1` on chr1 L=50 and needs a 216 s index build first (sporos's own SMEMs of reads come
+  from its FM-index; see the main README).
 
 The `sporos -t 10` vs `-t 1` ratios and all ratios in the tables compare at equal thread counts.
 
@@ -171,103 +167,103 @@ with its defaults for 150 bp reads and its own frequency cutoff.
 
 | tool | T | -maxmatch | -mum | -mumreference | other | max RSS MB |
 |---|---:|---:|---:|---:|---|---:|
-| sporos | 1 | 0.13 (0.08u) | 0.13 (0.08u) | 0.13 (0.07u) |  | 88 |
-| sporos | 10 | 0.06 (0.08u) | 0.07 (0.09u) | 0.07 (0.08u) |  | 88 |
-| mummer | 1 | 1.97 (1.93u) = 15.2x sporos | 1.70 (1.66u) = 13.1x sporos | 1.69 (1.66u) = 13.0x sporos |  | 72 |
-| copmem2 | 1 | 1.67 (0.74u) = 12.8x sporos |  |  |  | 2095 |
-| copmem2 -mf | 1 | 0.88 (0.43u) = 6.8x sporos |  |  |  | 1071 |
-| copmem2 | 10 | 1.67 (0.74u) = 27.8x sporos |  |  |  | 2095 |
-| copmem2 -mf | 10 | 0.89 (0.43u) = 14.8x sporos |  |  |  | 1071 |
-| mumemto | 1 |  |  |  | mum (both strands): 13.19 (12.94u) | 348 |
-| bwa fastmap | 1 |  |  |  | SMEM (fwd+rc): 1.29 (1.27u) | 15 |
+| sporos | 1 | 0.09 (0.07u) | 0.09 (0.07u) | 0.09 (0.07u) |  | 59 |
+| sporos | 10 | 0.05 (0.09u) | 0.05 (0.10u) | 0.05 (0.09u) |  | 85 |
+| mummer | 1 | 1.96 (1.91u) = 21.8x sporos | 1.69 (1.65u) = 18.8x sporos | 1.68 (1.65u) = 18.7x sporos |  | 72 |
+| copmem2 | 1 | 1.68 (0.74u) = 18.7x sporos |  |  |  | 2094 |
+| copmem2 -mf | 1 | 0.89 (0.43u) = 9.9x sporos |  |  |  | 1070 |
+| copmem2 | 10 | 1.68 (0.72u) = 33.6x sporos |  |  |  | 2094 |
+| copmem2 -mf | 10 | 0.89 (0.43u) = 17.8x sporos |  |  |  | 1071 |
+| mumemto | 1 |  |  |  | mum (both strands): 13.17 (12.92u) | 348 |
+| bwa fastmap | 1 |  |  |  | SMEM (fwd+rc): 1.29 (1.26u) | 15 |
 | ropebwt3 mem | 1 |  |  |  | SMEM (fwd+rc, no pos): 2.12 (2.11u) | 22 |
-| ropebwt3 mem | 10 |  |  |  | SMEM (fwd+rc, no pos): 2.12 (2.10u) | 22 |
+| ropebwt3 mem | 10 |  |  |  | SMEM (fwd+rc, no pos): 2.12 (2.11u) | 22 |
 
 **ecoli, L=100** (best wall s; user s; max RSS MB)
 
 | tool | T | -maxmatch | -mum | -mumreference | other | max RSS MB |
 |---|---:|---:|---:|---:|---|---:|
-| sporos | 1 | 0.08 (0.05u) | 0.08 (0.05u) | 0.08 (0.04u) |  | 61 |
-| sporos | 10 | 0.05 (0.05u) | 0.05 (0.05u) | 0.05 (0.05u) |  | 61 |
-| mummer | 1 | 1.90 (1.86u) = 23.8x sporos | 1.70 (1.66u) = 21.2x sporos | 1.67 (1.63u) = 20.9x sporos |  | 72 |
-| copmem2 | 1 | 1.58 (0.66u) = 19.8x sporos |  |  |  | 2092 |
-| copmem2 -mf | 1 | 0.81 (0.34u) = 10.1x sporos |  |  |  | 1068 |
-| copmem2 | 10 | 1.58 (0.66u) = 31.6x sporos |  |  |  | 2092 |
-| copmem2 -mf | 10 | 0.82 (0.35u) = 16.4x sporos |  |  |  | 1068 |
-| mumemto | 1 |  |  |  | mum (both strands): 13.02 (12.77u) | 348 |
+| sporos | 1 | 0.05 (0.04u) | 0.05 (0.04u) | 0.05 (0.03u) |  | 41 |
+| sporos | 10 | 0.03 (0.04u) | 0.03 (0.05u) | 0.03 (0.05u) |  | 53 |
+| mummer | 1 | 1.93 (1.89u) = 38.6x sporos | 1.67 (1.63u) = 33.4x sporos | 1.68 (1.64u) = 33.6x sporos |  | 72 |
+| copmem2 | 1 | 1.61 (0.70u) = 32.2x sporos |  |  |  | 2092 |
+| copmem2 -mf | 1 | 0.82 (0.37u) = 16.4x sporos |  |  |  | 1068 |
+| copmem2 | 10 | 1.60 (0.69u) = 53.3x sporos |  |  |  | 2092 |
+| copmem2 -mf | 10 | 0.82 (0.35u) = 27.3x sporos |  |  |  | 1068 |
+| mumemto | 1 |  |  |  | mum (both strands): 12.98 (12.72u) | 348 |
 | bwa fastmap | 1 |  |  |  | SMEM (fwd+rc): 1.27 (1.24u) | 15 |
 | ropebwt3 mem | 1 |  |  |  | SMEM (fwd+rc, no pos): 1.65 (1.64u) | 21 |
-| ropebwt3 mem | 10 |  |  |  | SMEM (fwd+rc, no pos): 1.64 (1.63u) | 21 |
+| ropebwt3 mem | 10 |  |  |  | SMEM (fwd+rc, no pos): 1.65 (1.64u) | 21 |
 
-Index builds: bwa index -t1 1.76 s (49 MB); ropebwt3 build -t1 0.78 s (51 MB); ropebwt3 build -t10 0.56 s (51 MB)
+Index builds: bwa index -t1 1.73 s (49 MB); ropebwt3 build -t1 0.77 s (51 MB); ropebwt3 build -t10 0.55 s (51 MB)
 
 **chr21, L=50** (best wall s; user s; max RSS MB)
 
 | tool | T | -maxmatch | -mum | -mumreference | other | max RSS MB |
 |---|---:|---:|---:|---:|---|---:|
-| sporos | 1 | 1.08 (0.73u) | 1.17 (0.80u) | 1.10 (0.73u) |  | 522 |
-| sporos | 10 | 0.47 (0.83u) | 0.57 (0.90u) | 0.50 (0.83u) |  | 522 |
-| mummer | 1 | 17.42 (17.03u) = 16.1x sporos | 14.60 (14.19u) = 12.5x sporos | 14.56 (14.15u) = 13.2x sporos |  | 610 |
-| copmem2 | 1 | 2.75 (1.74u) = 2.5x sporos |  |  |  | 2202 |
-| copmem2 -mf | 1 | 1.96 (1.42u) = 1.8x sporos |  |  |  | 1169 |
-| copmem2 | 10 | 2.75 (1.77u) = 5.9x sporos |  |  |  | 2203 |
-| copmem2 -mf | 10 | 1.95 (1.41u) = 4.1x sporos |  |  |  | 1169 |
-| mumemto | 1 |  |  |  | mum (both strands): 169.45 (166.86u) | 3130 |
-| bwa fastmap | 1 |  |  |  | SMEM (fwd+rc): 11.55 (11.45u) | 101 |
-| ropebwt3 mem | 1 |  |  |  | SMEM (fwd+rc, no pos): 25.04 (24.96u) | 130 |
-| ropebwt3 mem | 10 |  |  |  | SMEM (fwd+rc, no pos): 25.07 (24.97u) | 130 |
+| sporos | 1 | 0.72 (0.62u) | 0.74 (0.65u) | 0.71 (0.61u) |  | 232 |
+| sporos | 10 | 0.23 (0.94u) | 0.24 (1.02u) | 0.23 (0.92u) |  | 301 |
+| mummer | 1 | 17.45 (17.04u) = 24.2x sporos | 14.64 (14.24u) = 19.8x sporos | 14.56 (14.17u) = 20.5x sporos |  | 610 |
+| copmem2 | 1 | 2.76 (1.71u) = 3.8x sporos |  |  |  | 2203 |
+| copmem2 -mf | 1 | 1.97 (1.42u) = 2.7x sporos |  |  |  | 1169 |
+| copmem2 | 10 | 2.75 (1.72u) = 12.0x sporos |  |  |  | 2203 |
+| copmem2 -mf | 10 | 1.96 (1.42u) = 8.5x sporos |  |  |  | 1169 |
+| mumemto | 1 |  |  |  | mum (both strands): 168.32 (165.61u) | 3130 |
+| bwa fastmap | 1 |  |  |  | SMEM (fwd+rc): 11.49 (11.36u) | 101 |
+| ropebwt3 mem | 1 |  |  |  | SMEM (fwd+rc, no pos): 24.99 (24.90u) | 130 |
+| ropebwt3 mem | 10 |  |  |  | SMEM (fwd+rc, no pos): 25.00 (24.92u) | 130 |
 
 **chr21, L=100** (best wall s; user s; max RSS MB)
 
 | tool | T | -maxmatch | -mum | -mumreference | other | max RSS MB |
 |---|---:|---:|---:|---:|---|---:|
-| sporos | 1 | 0.66 (0.40u) | 0.68 (0.40u) | 0.67 (0.40u) |  | 328 |
-| sporos | 10 | 0.40 (0.45u) | 0.42 (0.49u) | 0.41 (0.47u) |  | 329 |
-| mummer | 1 | 16.52 (16.14u) = 25.0x sporos | 14.55 (14.18u) = 21.4x sporos | 14.56 (14.16u) = 21.7x sporos |  | 610 |
-| copmem2 | 1 | 2.08 (1.13u) = 3.2x sporos |  |  |  | 2159 |
-| copmem2 -mf | 1 | 1.27 (0.78u) = 1.9x sporos |  |  |  | 1132 |
-| copmem2 | 10 | 2.06 (1.11u) = 5.1x sporos |  |  |  | 2158 |
-| copmem2 -mf | 10 | 1.26 (0.75u) = 3.1x sporos |  |  |  | 1132 |
-| mumemto | 1 |  |  |  | mum (both strands): 165.38 (163.14u) | 3130 |
-| bwa fastmap | 1 |  |  |  | SMEM (fwd+rc): 11.00 (10.91u) | 101 |
-| ropebwt3 mem | 1 |  |  |  | SMEM (fwd+rc, no pos): 17.87 (17.80u) | 118 |
-| ropebwt3 mem | 10 |  |  |  | SMEM (fwd+rc, no pos): 17.87 (17.80u) | 118 |
+| sporos | 1 | 0.38 (0.30u) | 0.38 (0.31u) | 0.38 (0.30u) |  | 148 |
+| sporos | 10 | 0.16 (0.45u) | 0.16 (0.49u) | 0.16 (0.46u) |  | 168 |
+| mummer | 1 | 16.45 (16.03u) = 43.3x sporos | 14.55 (14.14u) = 38.3x sporos | 14.53 (14.12u) = 38.2x sporos |  | 610 |
+| copmem2 | 1 | 2.08 (1.08u) = 5.5x sporos |  |  |  | 2158 |
+| copmem2 -mf | 1 | 1.27 (0.75u) = 3.3x sporos |  |  |  | 1132 |
+| copmem2 | 10 | 2.08 (1.09u) = 13.0x sporos |  |  |  | 2158 |
+| copmem2 -mf | 10 | 1.27 (0.76u) = 7.9x sporos |  |  |  | 1132 |
+| mumemto | 1 |  |  |  | mum (both strands): 165.57 (163.26u) | 3130 |
+| bwa fastmap | 1 |  |  |  | SMEM (fwd+rc): 11.01 (10.91u) | 101 |
+| ropebwt3 mem | 1 |  |  |  | SMEM (fwd+rc, no pos): 17.83 (17.76u) | 118 |
+| ropebwt3 mem | 10 |  |  |  | SMEM (fwd+rc, no pos): 17.83 (17.75u) | 118 |
 
-Index builds: bwa index -t1 33.35 s (74 MB); ropebwt3 build -t1 8.29 s (493 MB); ropebwt3 build -t10 6.59 s (493 MB)
+Index builds: bwa index -t1 33.50 s (74 MB); ropebwt3 build -t1 8.32 s (493 MB); ropebwt3 build -t10 6.58 s (493 MB)
 
 **chr1, L=50** (best wall s; user s; max RSS MB)
 
 | tool | T | -maxmatch | -mum | -mumreference | other | max RSS MB |
 |---|---:|---:|---:|---:|---|---:|
-| sporos | 1 | 36.77 (32.25u) | 56.10 (52.87u) | 37.69 (34.41u) |  | 5557 |
-| sporos | 10 | 7.64 (34.92u) | 32.17 (56.18u) | 13.02 (37.14u) |  | 5218 |
-| mummer | 1 | 159.21 (153.81u) = 4.3x sporos | 87.49 (85.61u) = 1.6x sporos | 87.86 (86.05u) = 2.3x sporos |  | 6246 |
-| copmem2 | 1 | 47.07 (45.06u) = 1.3x sporos |  |  |  | 2794 |
-| copmem2 -mf | 1 | 46.91 (45.36u) = 1.3x sporos |  |  |  | 1758 |
-| copmem2 | 10 | 47.12 (45.08u) = 6.2x sporos |  |  |  | 2794 |
-| copmem2 -mf | 10 | 46.51 (44.99u) = 6.1x sporos |  |  |  | 1758 |
-| mumemto | 1 |  |  |  | mum (both strands): DNF (killed at 300 s) |  |
-| bwa fastmap | 1 |  |  |  | SMEM (fwd+rc): 53.47 (53.02u) | 596 |
-| ropebwt3 mem | 1 |  |  |  | SMEM (fwd+rc, no pos): 184.05 (183.57u) | 771 |
-| ropebwt3 mem | 10 |  |  |  | SMEM (fwd+rc, no pos): 188.89 (188.39u) | 771 |
+| sporos | 1 | 20.05 (17.76u) | 21.55 (19.16u) | 18.70 (16.58u) |  | 3082 |
+| sporos | 10 | 3.81 (19.80u) | 4.14 (24.26u) | 3.38 (18.83u) |  | 3586 |
+| mummer | 1 | 159.59 (154.05u) = 8.0x sporos | 87.10 (85.15u) = 4.0x sporos | 87.27 (85.36u) = 4.7x sporos |  | 6246 |
+| copmem2 | 1 | 47.10 (45.03u) = 2.3x sporos |  |  |  | 2794 |
+| copmem2 -mf | 1 | 46.49 (44.96u) = 2.3x sporos |  |  |  | 1758 |
+| copmem2 | 10 | 46.93 (44.97u) = 12.3x sporos |  |  |  | 2794 |
+| copmem2 -mf | 10 | 46.39 (44.84u) = 12.2x sporos |  |  |  | 1758 |
+| mumemto | 1 |  |  |  | mum (both strands): DNF (timeout 300 s) |  |
+| bwa fastmap | 1 |  |  |  | SMEM (fwd+rc): 52.02 (51.58u) | 596 |
+| ropebwt3 mem | 1 |  |  |  | SMEM (fwd+rc, no pos): 182.68 (182.21u) | 771 |
+| ropebwt3 mem | 10 |  |  |  | SMEM (fwd+rc, no pos): 182.89 (182.41u) | 771 |
 
 **chr1, L=100** (best wall s; user s; max RSS MB)
 
 | tool | T | -maxmatch | -mum | -mumreference | other | max RSS MB |
 |---|---:|---:|---:|---:|---|---:|
-| sporos | 1 | 8.95 (7.25u) | 10.48 (8.91u) | 8.96 (7.39u) |  | 2291 |
-| sporos | 10 | 2.72 (9.37u) | 4.75 (10.87u) | 3.25 (9.74u) |  | 2291 |
-| mummer | 1 | 131.76 (129.41u) = 14.7x sporos | 93.84 (91.92u) = 9.0x sporos | 87.56 (85.64u) = 9.8x sporos |  | 3123 |
-| copmem2 | 1 | 11.95 (10.50u) = 1.3x sporos |  |  |  | 2723 |
-| copmem2 -mf | 1 | 11.43 (10.46u) = 1.3x sporos |  |  |  | 1674 |
-| copmem2 | 10 | 11.30 (9.83u) = 4.2x sporos |  |  |  | 2723 |
-| copmem2 -mf | 10 | 11.05 (10.02u) = 4.1x sporos |  |  |  | 1674 |
-| mumemto | 1 |  |  |  | mum (both strands): DNF (skipped: L=50 run passed 300 s) |  |
-| bwa fastmap | 1 |  |  |  | SMEM (fwd+rc): 52.92 (52.51u) | 596 |
-| ropebwt3 mem | 1 |  |  |  | SMEM (fwd+rc, no pos): 185.78 (185.32u) | 749 |
-| ropebwt3 mem | 10 |  |  |  | SMEM (fwd+rc, no pos): 192.65 (192.23u) | 749 |
+| sporos | 1 | 5.50 (4.93u) | 5.61 (5.11u) | 5.34 (4.82u) |  | 1171 |
+| sporos | 10 | 1.13 (6.12u) | 1.21 (6.68u) | 1.08 (6.05u) |  | 1196 |
+| mummer | 1 | 126.13 (123.85u) = 22.9x sporos | 87.03 (85.15u) = 15.5x sporos | 87.64 (85.76u) = 16.4x sporos |  | 3123 |
+| copmem2 | 1 | 10.94 (9.38u) = 2.0x sporos |  |  |  | 2723 |
+| copmem2 -mf | 1 | 10.82 (9.79u) = 2.0x sporos |  |  |  | 1674 |
+| copmem2 | 10 | 10.89 (9.41u) = 9.6x sporos |  |  |  | 2723 |
+| copmem2 -mf | 10 | 10.83 (9.80u) = 9.6x sporos |  |  |  | 1674 |
+| mumemto | 1 |  |  |  | mum (both strands): DNF (timeout 300 s) |  |
+| bwa fastmap | 1 |  |  |  | SMEM (fwd+rc): 51.50 (51.06u) | 596 |
+| ropebwt3 mem | 1 |  |  |  | SMEM (fwd+rc, no pos): 179.26 (178.79u) | 749 |
+| ropebwt3 mem | 10 |  |  |  | SMEM (fwd+rc, no pos): 179.01 (178.56u) | 749 |
 
-Index builds: bwa index -t1 214.53 s (359 MB); ropebwt3 build -t1 50.82 s (2614 MB); ropebwt3 build -t10 41.27 s (2614 MB)
+Index builds: bwa index -t1 215.81 s (359 MB); ropebwt3 build -t1 50.65 s (2614 MB); ropebwt3 build -t10 41.14 s (2614 MB)
 
 ### Correctness checks
 
