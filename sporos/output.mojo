@@ -108,20 +108,37 @@ struct InlineDigits(TrivialRegisterPassable):
             self.count += 1
 
 
+comptime _PAIRS = "00010203040506070809101112131415161718192021222324252627282930313233343536373839404142434445464748495051525354555657585960616263646566676869707172737475767778798081828384858687888990919293949596979899"
+"""The decimal digit pairs 00 to 99, for writing two digits per step."""
+
+
 @inline(.always)
 def put_padded(dst: MutPointer[UInt8, _], value: Int, width: Int) -> Int:
     """Writes non-negative `value` right-aligned in `width` columns (wider
     when it needs more digits); returns the bytes written."""
     var digits = 1
-    var v = value
-    while v >= 10:
-        v //= 10
+    var bound = 10
+    while value >= bound and digits < 19:
         digits += 1
+        bound *= 10
     var n = max(width, digits)
     for i in range(n - digits):
         dst[unsafe_offset=i] = UInt8(ord(" "))
-    v = value
-    for i in reversed(range(n - digits, n)):
-        dst[unsafe_offset=i] = UInt8(ord("0") + v % 10)
-        v //= 10
+    var table = _PAIRS.unsafe_ptr()
+    var v = value
+    var at = n
+    while v >= 100:
+        var q = v // 100
+        var r = 2 * (v - 100 * q)
+        at -= 2
+        dst[unsafe_offset=at] = table[unsafe_offset=r]
+        dst[unsafe_offset=at + 1] = table[unsafe_offset=r + 1]
+        v = q
+    if v >= 10:
+        at -= 2
+        dst[unsafe_offset=at] = table[unsafe_offset=2 * v]
+        dst[unsafe_offset=at + 1] = table[unsafe_offset=2 * v + 1]
+    else:
+        at -= 1
+        dst[unsafe_offset=at] = UInt8(ord("0") + v)
     return n

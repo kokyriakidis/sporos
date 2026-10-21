@@ -22,7 +22,7 @@ from sporos.fasta import FastaRecords, read_fasta
 from sporos.index import ALL_KMERS, MINIMIZER_SEEDS, SYNCMER_SEEDS, SeedIndex
 from sporos.mems import Mem, MemIndex, MemParams, filter_mums, find_mems
 from sporos.minimizers import minimizer_positions
-from sporos.output import OutputBuffer, put_padded
+from sporos.output import OutputBuffer, _PAIRS, put_padded
 from sporos.parallel import ParallelTask, default_threads, parallel_for
 from sporos.syncmers import syncmer_positions
 from sporos.text import SeqText
@@ -463,40 +463,80 @@ struct _SeedFormatTask[seeds: ImmOrigin, names: ImmOrigin, out_origin: MutOrigin
     var positions: ImmPointer[List[UInt32], Self.seeds]
     var name: ImmPointer[String, Self.names]
     var texts: MutPointer[List[UInt8], Self.out_origin]
-    var slices: Int
+    var first: Int
+    var per: Int
 
     def __init__(
         out self,
         positions: ImmPointer[List[UInt32], Self.seeds],
         name: ImmPointer[String, Self.names],
         texts: MutPointer[List[UInt8], Self.out_origin],
-        slices: Int,
+        first: Int,
+        per: Int,
     ):
         self.positions = positions
         self.name = name
         self.texts = texts
-        self.slices = slices
+        self.first = first
+        self.per = per
 
     def run(self, index: Int):
         ref positions = self.positions[]
-        var per = ceildiv(len(positions), self.slices)
-        var lo = index * per
-        var hi = min(len(positions), lo + per)
-        var name = self.name[].as_bytes()
+        var lo = (self.first + index) * self.per
+        var hi = min(len(positions), lo + self.per)
         ref text = self.texts[unsafe_offset=index]
-        text.resize(unsafe_uninit_length=max(0, hi - lo) * (len(name) + 12))
+        if lo >= hi:
+            text.resize(unsafe_uninit_length=0)
+            return
+        # The line prefix ("name<TAB>") padded for 16-byte copies; the buffer
+        # keeps 16 bytes of slack for the last copy's overshoot.
+        var name = self.name[].as_bytes()
+        var prefix_len = len(name) + 1
+        var prefix = List[UInt8](length=prefix_len + 16, fill=0)
+        unsafe_memcpy(dest=prefix.unsafe_ptr(), src=name.unsafe_ptr(), count=len(name))
+        prefix[len(name)] = UInt8(ord("\t"))
+        text.resize(unsafe_uninit_length=(hi - lo) * (prefix_len + 21) + 16)
         var p = text.unsafe_ptr()
+        # A position prints as its high digits (value // 10000, kept as text and
+        # rebuilt only when it changes) and four low digits from the pair table.
+        var high_text = List[UInt8](length=32, fill=0)
+        var h = high_text.unsafe_ptr()
+        var table = _PAIRS.unsafe_ptr()
+        var high = -1
+        var high_width = 0
         var at = 0
         for i in range(lo, hi):
-            for b in range(len(name)):
-                p[unsafe_offset=at + b] = name[b]
-            at += len(name)
-            p[unsafe_offset=at] = UInt8(ord("\t"))
-            at += 1
-            at += put_padded(p.unsafe_offset(at), Int(positions[i]), 0)
+            var value = Int(positions[i])
+            var q = prefix.unsafe_ptr()
+            var copied = 0
+            while copied < prefix_len:
+                p.unsafe_offset(at + copied).unsafe_store(q.unsafe_offset(copied).unsafe_load[width=16]())
+                copied += 16
+            at += prefix_len
+            if value < 10000:
+                at += put_padded(p.unsafe_offset(at), value, 0)
+            else:
+                var top = value // 10000
+                var low = value - 10000 * top
+                if top != high:
+                    high = top
+                    high_width = put_padded(h, top, 0)
+                p.unsafe_offset(at).unsafe_store(h.unsafe_load[width=16]())
+                at += high_width
+                var upper = low // 100
+                var lower = low - 100 * upper
+                p[unsafe_offset=at] = table[unsafe_offset=2 * upper]
+                p[unsafe_offset=at + 1] = table[unsafe_offset=2 * upper + 1]
+                p[unsafe_offset=at + 2] = table[unsafe_offset=2 * lower]
+                p[unsafe_offset=at + 3] = table[unsafe_offset=2 * lower + 1]
+                at += 4
             p[unsafe_offset=at] = UInt8(ord("\n"))
             at += 1
         text.resize(unsafe_uninit_length=at)
+
+
+comptime _FORMAT_SLICE = 1 << 16
+"""Positions per formatting task."""
 
 
 def _value(args: List[String], i: Int) raises -> String:
@@ -571,6 +611,8 @@ def run_seeds(command: String, args: List[String]) raises:
             batch = syncmers_batch(spans, k, s, canonical, None, threads, open_offsets=open_offsets)
     var seeds = 0
     var out = OutputBuffer()
+    var round = max(1, threads * 4)
+    var texts = List[List[UInt8]](length=round, fill=List[UInt8]())
     for r in range(len(records)):
         var seq = records.seq(r)
         var positions: List[UInt32]
@@ -583,17 +625,21 @@ def run_seeds(command: String, args: List[String]) raises:
         seeds += len(positions)
         if count_only:
             continue
-        var slices = max(1, min(threads * 4, len(positions) // 100_000))
-        var texts = List[List[UInt8]](length=slices, fill=List[UInt8]())
-        var task = _SeedFormatTask(
-            Pointer(to=positions).as_imm(),
-            Pointer(to=records.names[r]).as_imm(),
-            texts.unsafe_ptr(),
-            slices,
-        )
-        parallel_for(task, slices, threads)
-        for text in texts:
-            out.write_bytes(Span(text))
+        # Rounds of slices formatted in parallel into reused buffers, each
+        # round written before the next: little formatted text is held.
+        var slices = ceildiv(len(positions), _FORMAT_SLICE)
+        for first in range(0, slices, round):
+            var count = min(round, slices - first)
+            var task = _SeedFormatTask(
+                Pointer(to=positions).as_imm(),
+                Pointer(to=records.names[r]).as_imm(),
+                texts.unsafe_ptr(),
+                first,
+                _FORMAT_SLICE,
+            )
+            parallel_for(task, count, threads)
+            for t in range(count):
+                out.write_bytes(Span(texts[t]))
     if count_only:
         out.write(String(t"{records.total_length()} bases\t{seeds} {command}\n"))
         print(

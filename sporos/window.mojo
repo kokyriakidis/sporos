@@ -740,7 +740,7 @@ def _scan[
     return out^
 
 
-comptime _SEGMENT = 1 << 18
+comptime _SEGMENT = 1 << 16
 """Windows per segment of a multithreaded scan (its output stays in L2)."""
 
 
@@ -802,13 +802,15 @@ struct _ChainTask[mode: Int, canonical: Bool, ascii: Bool, small: Bool](Parallel
             # A minimizer spanning the boundary is the previous segment's.
             var first = 1 if len(buffer) > 0 and Int(buffer[0]) == last else 0
             var count = len(buffer) - first
+            if len(buffer) > 0:
+                last = Int(buffer[len(buffer) - 1])
+            # Publish before copying, so the next segments' copies run alongside.
+            self.published[unsafe_offset=2 * i + 1].store(Int64(last))
+            self.published[unsafe_offset=2 * i].store(Int64(at + count))
             if count > 0:
                 unsafe_memcpy(
                     dest=self.out.unsafe_offset(at), src=buffer.unsafe_ptr().unsafe_offset(first), count=count
                 )
-                last = Int(buffer[len(buffer) - 1])
-            self.published[unsafe_offset=2 * i + 1].store(Int64(last))
-            self.published[unsafe_offset=2 * i].store(Int64(at + count))
 
 
 def scan_reads(
