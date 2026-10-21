@@ -12,3 +12,10 @@ mem: 91 GB
 kernel: 7.0.0-38-generic
 date: 2026-10-20T11:13:46-07:00
 uptime:  11:13:46 up 16 days,  2:19,  7 users,  load average: 1.73, 1.02, 0.62
+== run_seeds.sh
+host: XAROS
+cpu: Intel(R) Core(TM) i9-7900X CPU @ 3.30GHz (10 threads)
+mem: 91 GB
+kernel: 7.0.0-38-generic
+date: 2026-10-21T10:07:24-07:00
+uptime:  10:07:24 up 17 days,  1:13,  4 users,  load average: 1.39, 0.55, 0.71

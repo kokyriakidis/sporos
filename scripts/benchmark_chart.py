@@ -36,7 +36,7 @@ PANELS = [
     (
         "Canonical minimizers, CHM13 chr1, k = 21, w = 11",
         "1 thread, nanoseconds per base",
-        [("sporos", 1.11), ("simd-minimizers", 2.17), ("minimap2", 17.1)],
+        [("sporos", 1.05), ("simd-minimizers", 2.13), ("minimap2", 17.1)],
         " ns",
     ),
 ]

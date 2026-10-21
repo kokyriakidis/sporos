@@ -75,7 +75,11 @@ CHM13 chr1 is also the input for the seed benchmarks.
   because hash functions differ.
 - **CLI**: `sporos minimizers -k 21 -w 11 -t T chm13_chr1.fa > /dev/null`, end to end.
 
-## Results (xaros, 2026-10-20)
+## Results (xaros, 2026-10-20; seeds and lookups re-run 2026-10-21)
+
+The MEM and MUM rows below predate later sporos speedups (single-threaded chr1 MEMs at L=50 now take
+19.5 s, MUMs 21.6 s); the competitors' rows stand. Current sporos numbers are in the main
+[README](../../README.md#benchmarks).
 
 **Machine**: Intel Core i9-7900X (10 cores, SMT off so 10 hardware threads, AVX-512), 91 GB RAM, Ubuntu, kernel 7.0.0-38,
 gcc 15.2.0. Shared desktop box: it idles at about 0.5-1 busy CPU, and at 11:46 and 12:25 a separate
@@ -109,17 +113,17 @@ chr1 L=50 `bwa fastmap`). 1-minute load average when the scripts started: 0.96 (
   (copMEM2 spends 0.5-1 s of system time on its fixed 1-2 GB tables), but only **1.3x on chr1**. copMEM2's
   `-t 10` gives no speedup on any pair (presumably because each query is a single record), so at 10 threads
   sporos leads 4.1-6.2x on chr1.
-- **Minimizers/syncmers, one thread**: sporos (16 lanes) 1.3-2.4x faster than simd-minimizers on random
-  and chr1 input; 8 lanes (AVX2 width) is still 1.07-1.5x faster on chr1. `mm_sketch` is 11-15x slower
-  than sporos.
+- **Minimizers/syncmers** (re-run 2026-10-21): one thread, sporos (16 lanes) is 1.7-2.3x faster than
+  simd-minimizers on random and chr1 input, and 8 lanes (AVX2 width) 1.3-1.7x faster on chr1; with 10
+  threads sporos leads 1.04-1.47x. `mm_sketch` is 15-18x slower than sporos.
 
 ### Where competitors win or sporos is weak
 
-- **Multi-threaded seeds: simd-minimizers wins.** On chr1 with 10 threads simd-minimizers' chunked harness
-  reaches 0.155-0.246 ns/bp vs sporos' 0.216-0.346 ns/bp (sporos 1.07-1.8x slower). sporos scales only
-  3.2-4.8x from 1 to 10 threads; simd-minimizers 9.6-10.7x. (The harness keeps each thread's positions
-  in a private vector and only counts them; sporos returns one merged position list, so part of the gap
-  may be the merge.)
+- **Multi-threaded seeds: the closest race.** On chr1 with 10 threads sporos leads by only 4% on forward
+  (w=11) minimizers (0.182 vs 0.188 ns/bp), 1.2-1.5x elsewhere. sporos scales 5.8-7.5x from 1 to 10
+  threads, simd-minimizers 9.5-10.4x. (Its harness keeps each thread's positions in a private vector and
+  only counts them; sporos returns one merged, ordered position list.) Until 2026-10-21 simd-minimizers
+  won here; the ordered-output chain changed that.
 - **`-mum` / `-mumreference` on repeat-dense input.** On chr1 L=50 (65.6 M MEMs, vs 7.5 M at L=100)
   sporos `-mum` takes 56 s single-threaded vs MUMmer's 87 s (only 1.6x) and 32 s with 10
   threads (1.7x scaling); `-mumreference` 13 s at 10 threads vs 7.6 s for `-maxmatch`, which also writes
@@ -342,53 +346,53 @@ Index builds: bwa index -t1 214.53 s (359 MB); ropebwt3 build -t1 50.82 s (2614 
 
 | mode | k | w | sporos (lanes=8) | sporos (lanes=16) | simd-minimizers | minimap2 mm_sketch |
 |---|---:|---:|---:|---:|---:|---:|
-| fwd | 21 | 11 | 1.4664 | 1.0267 | 1.8580 |  |
-| can | 21 | 11 | 1.8390 | 1.6242 | 2.1350 | 18.2670 |
-| closed-fwd | 21 | 11 | 1.5012 | 1.1997 | 2.0530 |  |
-| closed-can | 21 | 11 | 1.8411 | 1.1359 | 2.5390 |  |
-| fwd | 31 | 19 | 1.3558 | 0.9007 | 1.6350 |  |
-| can | 31 | 19 | 1.6650 | 1.0595 | 1.8940 |  |
-| closed-fwd | 31 | 19 | 1.3512 | 1.0324 | 1.8210 |  |
-| closed-can | 31 | 19 | 1.6771 | 0.9830 | 2.3150 |  |
-| open-fwd | 16 | 5 |  |  | 1.9830 |  |
-| open-can | 15 | 5 |  |  | 2.5070 |  |
-| can | 28 | 19 |  |  |  | 15.9270 |
+| fwd | 21 | 11 | 1.3480 | 0.9505 | 1.7910 |  |
+| can | 21 | 11 | 1.4355 | 1.0248 | 2.2000 | 18.2650 |
+| closed-fwd | 21 | 11 | 1.5353 | 1.1569 | 1.9990 |  |
+| closed-can | 21 | 11 | 1.5047 | 1.1582 | 2.5770 |  |
+| fwd | 31 | 19 | 1.2507 | 0.8448 | 1.6510 |  |
+| can | 31 | 19 | 1.3285 | 0.9225 | 1.9670 |  |
+| closed-fwd | 31 | 19 | 1.4186 | 1.0040 | 1.8740 |  |
+| closed-can | 31 | 19 | 1.3914 | 1.0130 | 2.3370 |  |
+| open-fwd | 16 | 5 | 1.3829 | 1.0656 | 2.0360 |  |
+| open-can | 15 | 5 |  |  | 2.5320 |  |
+| can | 28 | 19 |  |  |  | 15.9120 |
 
 **chm13_chr1, 1 thread** (ns/bp, lower is better)
 
 | mode | k | w | sporos (lanes=8) | sporos (lanes=16) | simd-minimizers | minimap2 mm_sketch |
 |---|---:|---:|---:|---:|---:|---:|
-| fwd | 21 | 11 | 1.6215 | 1.1792 | 1.8140 |  |
-| can | 21 | 11 | 1.5859 | 1.1143 | 2.1700 | 17.0690 |
-| closed-fwd | 21 | 11 | 1.5092 | 1.0898 | 2.0020 |  |
-| closed-can | 21 | 11 | 1.6797 | 1.2505 | 2.5750 |  |
-| fwd | 31 | 19 | 1.5251 | 1.0449 | 1.6390 |  |
-| can | 31 | 19 | 1.4505 | 0.9753 | 1.9320 |  |
-| closed-fwd | 31 | 19 | 1.3995 | 0.9761 | 1.8550 |  |
-| closed-can | 31 | 19 | 1.5165 | 1.0858 | 2.3400 |  |
-| open-fwd | 16 | 5 |  |  | 1.9830 |  |
-| open-can | 15 | 5 |  |  | 2.5140 |  |
-| can | 28 | 19 |  |  |  | 15.2640 |
+| fwd | 21 | 11 | 1.3286 | 1.0513 | 1.7900 |  |
+| can | 21 | 11 | 1.4303 | 1.0463 | 2.1260 | 17.0560 |
+| closed-fwd | 21 | 11 | 1.3928 | 1.1521 | 1.9870 |  |
+| closed-can | 21 | 11 | 1.5185 | 1.1644 | 2.5490 |  |
+| fwd | 31 | 19 | 1.2240 | 0.9353 | 1.6250 |  |
+| can | 31 | 19 | 1.3218 | 0.9328 | 1.9380 |  |
+| closed-fwd | 31 | 19 | 1.2671 | 0.9984 | 1.8380 |  |
+| closed-can | 31 | 19 | 1.4134 | 1.0243 | 2.3520 |  |
+| open-fwd | 16 | 5 |  |  | 1.9750 |  |
+| open-can | 15 | 5 |  |  | 2.5340 |  |
+| can | 28 | 19 |  |  |  | 15.2630 |
 
 **chm13_chr1, 10 threads** (ns/bp, lower is better)
 
 | mode | k | w | sporos (lanes=16) | simd-minimizers | minimap2 mm_sketch |
 |---|---:|---:|---:|---:|---:|
-| fwd | 21 | 11 | 0.3328 | 0.1890 |  |
-| can | 21 | 11 | 0.3241 | 0.2040 | 1.9640 |
-| closed-fwd | 21 | 11 | 0.3366 | 0.1950 |  |
-| closed-can | 21 | 11 | 0.3459 | 0.2460 |  |
-| fwd | 31 | 19 | 0.2169 | 0.1550 |  |
-| can | 31 | 19 | 0.2221 | 0.1880 |  |
-| closed-fwd | 31 | 19 | 0.2164 | 0.1740 |  |
-| closed-can | 31 | 19 | 0.2410 | 0.2250 |  |
-| open-fwd | 16 | 5 |  | 0.1940 |  |
-| open-can | 15 | 5 |  | 0.2570 |  |
-| can | 28 | 19 |  |  | 1.9050 |
+| fwd | 21 | 11 | 0.1816 | 0.1880 |  |
+| can | 21 | 11 | 0.1730 | 0.2130 | 1.9850 |
+| closed-fwd | 21 | 11 | 0.1745 | 0.2060 |  |
+| closed-can | 21 | 11 | 0.1773 | 0.2550 |  |
+| fwd | 31 | 19 | 0.1254 | 0.1590 |  |
+| can | 31 | 19 | 0.1383 | 0.1920 |  |
+| closed-fwd | 31 | 19 | 0.1350 | 0.1780 |  |
+| closed-can | 31 | 19 | 0.1547 | 0.2270 |  |
+| open-fwd | 16 | 5 |  | 0.2000 |  |
+| open-can | 15 | 5 |  | 0.2480 |  |
+| can | 28 | 19 |  |  | 1.9350 |
 
 **sporos minimizers CLI, CHM13 chr1** (`-k 21 -w 11`, output to /dev/null)
 
 | threads | wall s | user s | max RSS MB |
 |---:|---:|---:|---:|
-| 1 | 2.57 | 1.52 | 1145 |
-| 10 | 1.20 | 1.61 | 1086 |
+| 1 | 0.90 | 0.64 | 569 |
+| 10 | 0.27 | 1.00 | 488 |

@@ -22,7 +22,7 @@ sporos finds the seeds that sequence aligners and comparative-genomics tools are
 a command-line tool, a C library and a Python package.
 
 - ⚡ **Fast.**
-  - Minimizers and syncmers run 1.3–2.4x faster than simd-minimizers on one thread.
+  - Minimizers and syncmers run 1.7–2.3x faster than simd-minimizers on one thread, and up to 1.5x faster on ten.
   - Seed-index lookups of reads run 3.9x faster than minimap2's (1.4x one read per call) and 9x faster
     than strobealign's.
   - MEMs between hg38 and CHM13 chr1 run 2.1–2.4x faster than copMEM2 on one thread and 10–14x faster with
@@ -44,7 +44,7 @@ a command-line tool, a C library and a Python package.
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/benchmarks-dark.svg">
-    <img alt="Bar charts, lower is better. MEMs on hg38 vs CHM13 chr1 at L=50 on one thread: sporos 19.5 s, copMEM2 46.9 s, MUMmer4 159 s. With 10 threads: sporos 3.3 s, copMEM2 46.5 s. MUMs on the same pair: sporos 21.6 s, MUMmer4 87.5 s. SMEMs of 1 M 150 bp reads against hg38 chr21 at L=19 on one thread: sporos 1.85 s, minibwa 8.85 s, bwa fastmap 27.3 s. Canonical minimizers on CHM13 chr1, k=21, w=11, one thread: sporos 1.11 ns per base, simd-minimizers 2.17, minimap2 17.1." src="docs/benchmarks-light.svg" width="820">
+    <img alt="Bar charts, lower is better. MEMs on hg38 vs CHM13 chr1 at L=50 on one thread: sporos 19.5 s, copMEM2 46.9 s, MUMmer4 159 s. With 10 threads: sporos 3.3 s, copMEM2 46.5 s. MUMs on the same pair: sporos 21.6 s, MUMmer4 87.5 s. SMEMs of 1 M 150 bp reads against hg38 chr21 at L=19 on one thread: sporos 1.85 s, minibwa 8.85 s, bwa fastmap 27.3 s. Canonical minimizers on CHM13 chr1, k=21, w=11, one thread: sporos 1.05 ns per base, simd-minimizers 2.13, minimap2 17.1." src="docs/benchmarks-light.svg" width="820">
   </picture>
 </p>
 
@@ -383,12 +383,12 @@ Competitor rows come from that suite; sporos rows are from the current code.
 
 | Seeds, CHM13 chr1, ns/bp (forward / canonical) | sporos | simd-minimizers 3.0 | minimap2 `mm_sketch` |
 |---|---|---|---|
-| minimizers k=21 w=11, 1 thread | **1.18 / 1.11** | 1.81 / 2.17 | — / 17.1 |
-| minimizers k=31 w=19, 1 thread | **1.04 / 0.98** | 1.64 / 1.93 | |
-| closed syncmers k=31 s=21, 1 thread | **1.09 / 1.25** | 2.00 / 2.58 | |
-| minimizers k=21 w=11, 10 threads | **0.17 / 0.18** | 0.19 / 0.20 | — / 1.96 |
-| minimizers k=31 w=19, 10 threads | **0.13 / 0.13** | 0.16 / 0.19 | |
-| closed syncmers k=31 s=21, 10 threads | **0.17 / 0.18** | 0.20 / 0.25 | |
+| minimizers k=21 w=11, 1 thread | **1.05 / 1.05** | 1.79 / 2.13 | — / 17.1 |
+| minimizers k=31 w=19, 1 thread | **0.94 / 0.93** | 1.63 / 1.94 | |
+| closed syncmers k=31 s=21, 1 thread | **1.15 / 1.16** | 1.99 / 2.55 | |
+| minimizers k=21 w=11, 10 threads | **0.18 / 0.17** | 0.19 / 0.21 | — / 1.99 |
+| minimizers k=31 w=19, 10 threads | **0.13 / 0.14** | 0.16 / 0.19 | |
+| closed syncmers k=31 s=21, 10 threads | **0.17 / 0.18** | 0.21 / 0.26 | |
 
 - **Seed-index lookups** (hg38 chr21 index, k=19, w=12, occurrence cap 20, 1 M simulated 150 bp reads, every
   hit returned):
@@ -508,7 +508,9 @@ Competitor rows come from that suite; sporos rows are from the current code.
 | `python3 scripts/benchmark_chart.py` | redraws the chart above from its numbers |
 | `bash benchmarks/competitors/run_*.sh` | runs the competitor suite (see its README) |
 
-Pass `-D SPOROS_LANES=8` to `mojo build` to force AVX2-width lanes. Coding agents should read
+Release builds (`build-cli`, `build-c`, `build-python`, the benchmarks) pass `-D ASSERT=none`, dropping the
+standard library's bounds checks (4-9% faster); the test builds keep them. Pass `-D SPOROS_LANES=8` to
+`mojo build` to force AVX2-width lanes. Coding agents should read
 [`CLAUDE.md`](CLAUDE.md): the Modular Mojo skills are vendored in `.claude/skills` and take precedence over
 pretrained Mojo habits.
 

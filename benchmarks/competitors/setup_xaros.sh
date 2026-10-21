@@ -81,9 +81,9 @@ cp "$HERE/harness/smbench/src/main.rs" "$BENCH/mybench/smbench/src/main.rs"
 # --- sporos -------------------------------------------------------------------
 (cd "$REPO" && "$PIXI" run -q build-cli && "$PIXI" run -q build-bench-seeds)
 (cd "$REPO" && for lanes in 8 16; do
-  "$PIXI" run -q mojo build -D SPOROS_LANES=$lanes -I . -I tests -I benchmarks \
+  "$PIXI" run -q mojo build -D ASSERT=none -D SPOROS_LANES=$lanes -I . -I tests -I benchmarks \
     benchmarks/bench_seeds.mojo -o build/bench_seeds_$lanes
-  "$PIXI" run -q mojo build -D SPOROS_LANES=$lanes -I . -I benchmarks \
+  "$PIXI" run -q mojo build -D ASSERT=none -D SPOROS_LANES=$lanes -I . -I benchmarks \
     benchmarks/competitors/bench_seeds_fasta.mojo -o build/bench_seeds_fasta_$lanes
 done)
 # Snapshot the binaries so later rebuilds of the checkout don't change a run midway.
