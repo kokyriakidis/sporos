@@ -24,6 +24,7 @@ and each survivor is appended to its lane, then lanes are concatenated.
 
 from std.bit import count_trailing_zeros, rotate_bits_left, rotate_bits_right
 from std.atomic import Atomic
+from std.ffi import external_call
 from std.math import ceildiv
 from std.memory import Layout, alloc, bitcast, dealloc, pack_bits, unsafe_memcpy
 from std.math import iota
@@ -740,6 +741,9 @@ def _scan[
     return out^
 
 
+comptime _SPINS = 256
+"""Polls of a predecessor's progress before a waiting worker yields."""
+
 comptime _SEGMENT = 1 << 16
 """Windows per segment of a multithreaded scan (its output stays in L2)."""
 
@@ -793,11 +797,17 @@ struct _ChainTask[mode: Int, canonical: Bool, ascii: Bool, small: Bool](Parallel
             var at = 0
             var last = -1
             if i > 0:
+                var spins = 0
                 while True:
                     var end = self.published[unsafe_offset=2 * (i - 1)].load()
                     if end >= 0:
                         at = Int(end)
                         break
+                    # Yield after a short spin: with more threads than free
+                    # CPUs, the worker we wait for may need this one.
+                    spins += 1
+                    if spins >= _SPINS:
+                        _ = external_call["sched_yield", Int32]()
                 last = Int(self.published[unsafe_offset=2 * (i - 1) + 1].load())
             # A minimizer spanning the boundary is the previous segment's.
             var first = 1 if len(buffer) > 0 and Int(buffer[0]) == last else 0

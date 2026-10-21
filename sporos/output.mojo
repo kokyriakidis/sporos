@@ -124,7 +124,7 @@ def put_padded(dst: MutPointer[UInt8, _], value: Int, width: Int) -> Int:
     var n = max(width, digits)
     for i in range(n - digits):
         dst[unsafe_offset=i] = UInt8(ord(" "))
-    var table = _PAIRS.unsafe_ptr()
+    var table = _PAIRS.as_bytes().unsafe_ptr()
     var v = value
     var at = n
     while v >= 100:

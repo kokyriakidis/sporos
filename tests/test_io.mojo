@@ -87,5 +87,33 @@ def test_bgzf_then_gzip_members() raises:
         assert_true(_is(r, 0, "ACGT") and _is(r, 1, "GGCC"))
 
 
+
+def test_parallel_parse_matches_serial() raises:
+    # Over 16 MB, so read_fasta parses (and reads) on several threads.
+    var path = String("build/test_io_big.fa")
+    with open(path, "w") as f:
+        var line = String("ACGTNacgtRYACGTACGTTTGACCAGTAGGCATACGATCGATCCGATAGCTAGCTTAGCAGT")
+        for r in range(400):
+            f.write(">seq", r, " description ", r * 7, "\n" if r % 3 != 0 else "\r\n")
+            if r % 50 == 7:
+                continue  # an empty record
+            for i in range(800 + (r * 37) % 500):
+                f.write(line, "\r\n" if (r + i) % 5 == 0 else "\n")
+                if i % 97 == 0:
+                    f.write("\n")  # a blank line
+    var serial = read_fasta(path, 1)
+    var parallel = read_fasta(path, 4)
+    assert_true(len(serial.data) > 1 << 24)
+    assert_equal(len(parallel), len(serial))
+    assert_equal(len(parallel.data), len(serial.data))
+    for r in range(len(serial)):
+        assert_true(parallel.names[r] == serial.names[r])
+        assert_equal(parallel.starts[r], serial.starts[r])
+        assert_equal(parallel.lengths[r], serial.lengths[r])
+    for i in range(len(serial.data)):
+        if parallel.data[i] != serial.data[i]:
+            raise Error(String(t"byte {i} differs"))
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

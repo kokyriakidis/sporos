@@ -131,7 +131,8 @@ def run_mem(args: List[String]) raises:
     if len(query) == 1:
         var qseqs = List[Span[UInt8, origin_of(query.data)]]()
         qseqs.append(query.seq(0))
-        packed.append(SeqText(qseqs))
+        if forward:
+            packed.append(SeqText(qseqs))
         if reverse:
             packed.append(SeqText(qseqs, reverse_complement=True))
         query.data = List[UInt8]()
@@ -193,7 +194,8 @@ def run_mem(args: List[String]) raises:
         if len(texts) == 0:
             var qseqs = List[Span[UInt8, origin_of(query.data)]]()
             qseqs.append(query.seq(q))
-            texts.append(SeqText(qseqs))
+            if forward:
+                texts.append(SeqText(qseqs))
             if reverse:
                 texts.append(SeqText(qseqs, reverse_complement=True))
         if forward:
@@ -501,7 +503,7 @@ struct _SeedFormatTask[seeds: ImmOrigin, names: ImmOrigin, out_origin: MutOrigin
         # rebuilt only when it changes) and four low digits from the pair table.
         var high_text = List[UInt8](length=32, fill=0)
         var h = high_text.unsafe_ptr()
-        var table = _PAIRS.unsafe_ptr()
+        var table = _PAIRS.as_bytes().unsafe_ptr()
         var high = -1
         var high_width = 0
         var at = 0

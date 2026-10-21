@@ -568,6 +568,8 @@ def filter_mums(mems: List[Mem], query: SeqText, unique_in_query: Bool = True, t
     come from one `find_mems` call (sorted by query offset); so is the result.
     """
     var keep = List[Bool](length=len(mems), fill=True)
+    # Threads pay off only for many MEMs; per-read calls stay serial.
+    var workers = threads if len(mems) >= _PARALLEL_MEMS else 1
     var lo = 0
     while lo < len(mems):
         var seq = query.sequence_of(Int(mems[lo].query_pos))
@@ -582,28 +584,28 @@ def filter_mums(mems: List[Mem], query: SeqText, unique_in_query: Bool = True, t
         var fill = _GroupFillTask(
             mems.unsafe_ptr().unsafe_offset(lo), starts.unsafe_ptr(), lengths.unsafe_ptr(), count, by_ref=False
         )
-        parallel_for(fill, _REF_ORDER_TASKS, threads)
-        _mark_contained(starts, 0, lengths, keep.unsafe_ptr().unsafe_offset(lo), threads)
+        parallel_for(fill, _REF_ORDER_TASKS, workers)
+        _mark_contained(starts, 0, lengths, keep.unsafe_ptr().unsafe_offset(lo), workers)
         if unique_in_query:
             # Reference intervals, in reference order: start << 32 | member.
             var keys = _GroupFillTask(
                 mems.unsafe_ptr().unsafe_offset(lo), starts.unsafe_ptr(), lengths.unsafe_ptr(), count, by_ref=True
             )
-            parallel_for(keys, _REF_ORDER_TASKS, threads)
+            parallel_for(keys, _REF_ORDER_TASKS, workers)
             # Order by start only: the sweep groups equal starts in any order.
-            parallel_sort(starts, threads, low_bits=32)
+            parallel_sort(starts, workers, low_bits=32)
             # Gather lengths, sweep, scatter the verdicts: the random accesses
             # run in parallel, the sweep over contiguous arrays.
             var flags = List[Bool](length=count, fill=True)
             var gather = _RefOrderTask(
                 mems.unsafe_ptr().unsafe_offset(lo), starts.unsafe_ptr().as_imm(), lengths.unsafe_ptr(), count
             )
-            parallel_for(gather, _REF_ORDER_TASKS, threads)
-            _mark_contained(starts, 32, lengths, flags.unsafe_ptr(), threads)
+            parallel_for(gather, _REF_ORDER_TASKS, workers)
+            _mark_contained(starts, 32, lengths, flags.unsafe_ptr(), workers)
             var scatter = _ClearTask(
                 starts.unsafe_ptr().as_imm(), flags.unsafe_ptr().as_imm(), keep.unsafe_ptr().unsafe_offset(lo), count
             )
-            parallel_for(scatter, _REF_ORDER_TASKS, threads)
+            parallel_for(scatter, _REF_ORDER_TASKS, workers)
         lo = hi
     # Collect the survivors: count per block, then copy into place.
     var kept = List[Int](length=_REF_ORDER_TASKS + 1, fill=0)
@@ -614,7 +616,7 @@ def filter_mums(mems: List[Mem], query: SeqText, unique_in_query: Bool = True, t
         Optional[MutPointer[Mem, MutUntrackedOrigin]](None),
         len(mems),
     )
-    parallel_for(counting, _REF_ORDER_TASKS, threads)
+    parallel_for(counting, _REF_ORDER_TASKS, workers)
     for b in range(_REF_ORDER_TASKS):
         kept[b + 1] += kept[b]
     var out = List[Mem](unsafe_uninit_length=kept[_REF_ORDER_TASKS])
@@ -625,7 +627,7 @@ def filter_mums(mems: List[Mem], query: SeqText, unique_in_query: Bool = True, t
         Optional(out.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()),
         len(mems),
     )
-    parallel_for(copying, _REF_ORDER_TASKS, threads)
+    parallel_for(copying, _REF_ORDER_TASKS, workers)
     _ = len(out)
     return out^
 
@@ -709,6 +711,8 @@ struct _CollectTask[mems_origin: ImmOrigin, keep_origin: ImmOrigin, kept_origin:
 
 
 comptime _REF_ORDER_TASKS = 64
+comptime _PARALLEL_MEMS = 1 << 16
+"""MEMs below which MUM filtering runs on one thread."""
 
 
 struct _RefOrderTask[mems_origin: ImmOrigin, order_origin: ImmOrigin, out_origin: MutOrigin](ParallelTask):

@@ -172,6 +172,8 @@ def read_fasta(path: String, threads: Int = 1) raises -> FastaRecords:
             return parse_fastq(Span(bytes))
         if c != _NEWLINE and c != _RETURN and c != _SPACE:
             break
+    if threads > 1 and len(bytes) >= _PARALLEL_PARSE:
+        return _parse_fasta_parallel(bytes^, threads)
     return parse_fasta_in_place(bytes^)
 
 
@@ -225,7 +227,7 @@ def parse_fasta_in_place(var bytes: List[UInt8]) raises -> FastaRecords:
 
 def read_file(path: String, threads: Int = 1) raises -> List[UInt8]:
     """The file's (or pipe's) bytes, inflated if they are gzipped."""
-    var raw = _read_raw(path)
+    var raw = _read_raw(path, threads)
     if len(raw) >= 2 and raw[0] == 0x1F and raw[1] == 0x8B:
         var libdeflate = _load_libdeflate()
         if libdeflate:
@@ -236,15 +238,26 @@ def read_file(path: String, threads: Int = 1) raises -> List[UInt8]:
     return raw^
 
 
-def _read_raw(path: String) raises -> List[UInt8]:
+def _read_raw(path: String, threads: Int = 1) raises -> List[UInt8]:
     """Every byte of `path` up to end of file. The size `stat` reports is
     only a first guess (pipes report 0). A single read() call cannot return
-    2 GiB or more on macOS, so reads go in blocks."""
+    2 GiB or more on macOS, so reads go in blocks. Large files are read by
+    `threads` threads, each into its own slice of the buffer."""
     var guess = max(0, Int(stat(path).st_size))
     var out = List[UInt8](unsafe_uninit_length=max(guess, 1 << 16))
     var probe = List[UInt8](unsafe_uninit_length=1 << 16)
     var done = 0
+    if threads > 1 and guess >= _PARALLEL_READ:
+        var slices = min(threads, ceildiv(guess, _PARALLEL_READ // 2))
+        var failed = List[Int](length=1, fill=0)
+        var task = _ReadTask(path, out.unsafe_ptr(), guess, slices, failed.unsafe_ptr())
+        parallel_for(task, slices, threads)
+        if failed[0] != 0:
+            raise Error(t"cannot read {path}")
+        done = guess
     with open(path, "r") as f:
+        if done > 0:
+            _ = f.seek(done)
         while True:
             if done == len(out):
                 # Full: probe for more before growing (a regular file ends here).
@@ -266,6 +279,178 @@ def _read_raw(path: String) raises -> List[UInt8]:
             done += Int(got)
     out.resize(unsafe_uninit_length=done)
     return out^
+
+
+comptime _PARALLEL_READ = 1 << 26
+"""Files at least this large are read by several threads."""
+comptime _PARALLEL_PARSE = 1 << 24
+"""FASTA at least this large is parsed by several threads."""
+
+
+struct _ReadTask[out_origin: MutOrigin](ParallelTask):
+    """Reads slice `index` of a file into its place in the buffer."""
+
+    var path: String
+    var out: MutPointer[UInt8, Self.out_origin]
+    var size: Int
+    var slices: Int
+    var failed: MutPointer[Int, MutUntrackedOrigin]
+
+    def __init__(
+        out self,
+        path: String,
+        out_ptr: MutPointer[UInt8, Self.out_origin],
+        size: Int,
+        slices: Int,
+        failed: MutPointer[Int, _],
+    ):
+        self.path = path.copy()
+        self.out = out_ptr
+        self.size = size
+        self.slices = slices
+        self.failed = failed.unsafe_origin_cast[MutUntrackedOrigin]()
+
+    def run(self, index: Int):
+        var per = ceildiv(self.size, self.slices)
+        var lo = index * per
+        var hi = min(self.size, lo + per)
+        try:
+            with open(self.path, "r") as f:
+                _ = f.seek(lo)
+                var done = lo
+                while done < hi:
+                    var room = min(1 << 30, hi - done)
+                    var got = f.read(Span(unsafe_ptr=self.out.unsafe_offset(done), length=room))
+                    if got <= 0:
+                        self.failed[] = 1
+                        return
+                    done += Int(got)
+        except:
+            self.failed[] = 1
+
+
+def _parse_fasta_parallel(var bytes: List[UInt8], threads: Int) raises -> FastaRecords:
+    """`parse_fasta_in_place` on several threads, with the same result:
+    chunks split at line starts count their sequence bytes and note their
+    headers, then copy their sequence bytes to their place in a new buffer."""
+    var n = len(bytes)
+    var src = bytes.unsafe_ptr()
+    var first = 0
+    while first < n and (
+        src[unsafe_offset=first] == _NEWLINE
+        or src[unsafe_offset=first] == _RETURN
+        or src[unsafe_offset=first] == _SPACE
+    ):
+        first += 1
+    if first < n and src[unsafe_offset=first] != _HEADER:
+        raise Error("FASTA input must start with a '>' header line")
+    var chunks = threads * 4
+    var bounds = List[Int](length=chunks + 1, fill=n)
+    bounds[0] = first
+    for c in range(1, chunks):
+        var at = max(bounds[c - 1], first + (n - first) * c // chunks)
+        if at > first:
+            at = min(n, _line_end(src, at - 1, n) + 1)  # the next line start
+        bounds[c] = at
+    var counts = List[Int](length=chunks + 1, fill=0)
+    var headers = List[List[Int]](length=chunks, fill=List[Int]())
+    var count_task = _ParseTask(
+        src.as_imm(),
+        bounds.unsafe_ptr().as_imm(),
+        counts.unsafe_ptr(),
+        headers.unsafe_ptr(),
+        Optional[MutPointer[UInt8, MutUntrackedOrigin]](None),
+    )
+    parallel_for(count_task, chunks, threads)
+    for c in range(chunks):
+        counts[c + 1] += counts[c]
+    var data = List[UInt8](unsafe_uninit_length=counts[chunks])
+    var copy_task = _ParseTask(
+        src.as_imm(),
+        bounds.unsafe_ptr().as_imm(),
+        counts.unsafe_ptr(),
+        headers.unsafe_ptr(),
+        Optional(data.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()),
+    )
+    parallel_for(copy_task, chunks, threads)
+    # Headers, in order: (output offset within the chunk, name start, name end).
+    var records = FastaRecords()
+    for c in range(chunks):
+        ref found = headers[c]
+        for h in range(0, len(found), 3):
+            records.names.append(String(StringSlice(unsafe_from_utf8=Span(bytes)[found[h + 1] : found[h + 2]])))
+            records.starts.append(counts[c] + found[h])
+    for r in range(len(records.starts)):
+        var end = records.starts[r + 1] if r + 1 < len(records.starts) else len(data)
+        records.lengths.append(end - records.starts[r])
+    records.data = data^
+    _ = len(bounds)
+    return records^
+
+
+struct _ParseTask[src_origin: ImmOrigin, bounds_origin: ImmOrigin, counts_origin: MutOrigin, headers_origin: MutOrigin](
+    ParallelTask
+):
+    """One chunk of `_parse_fasta_parallel`: counts its sequence bytes into
+    `counts[index + 1]` and notes its headers (no `out`), or copies its
+    sequence bytes to `out` from `counts[index]`."""
+
+    var src: ImmPointer[UInt8, Self.src_origin]
+    var bounds: ImmPointer[Int, Self.bounds_origin]
+    var counts: MutPointer[Int, Self.counts_origin]
+    var headers: MutPointer[List[Int], Self.headers_origin]
+    var out: Optional[MutPointer[UInt8, MutUntrackedOrigin]]
+
+    def __init__(
+        out self,
+        src: ImmPointer[UInt8, Self.src_origin],
+        bounds: ImmPointer[Int, Self.bounds_origin],
+        counts: MutPointer[Int, Self.counts_origin],
+        headers: MutPointer[List[Int], Self.headers_origin],
+        out_ptr: Optional[MutPointer[UInt8, MutUntrackedOrigin]],
+    ):
+        self.src = src
+        self.bounds = bounds
+        self.counts = counts
+        self.headers = headers
+        self.out = out_ptr
+
+    def run(self, index: Int):
+        var lo = self.bounds[unsafe_offset=index]
+        var hi = self.bounds[unsafe_offset=index + 1]
+        var n = self.bounds[unsafe_offset=index + 1]
+        var at = self.counts[unsafe_offset=index] if self.out else 0
+        var start = at
+        ref found = self.headers[unsafe_offset=index]
+        var i = lo
+        while i < hi:
+            var j = _line_end(self.src, i, n)
+            if self.src[unsafe_offset=i] == _HEADER:
+                if not self.out:
+                    var k = i + 1
+                    while (
+                        k < j
+                        and self.src[unsafe_offset=k] != _SPACE
+                        and self.src[unsafe_offset=k] != _TAB
+                        and self.src[unsafe_offset=k] != _RETURN
+                    ):
+                        k += 1
+                    found.append(at - start)
+                    found.append(i + 1)
+                    found.append(k)
+            else:
+                var end = j
+                if end > i and self.src[unsafe_offset=end - 1] == _RETURN:
+                    end -= 1
+                if end > i:
+                    if self.out:
+                        unsafe_memcpy(
+                            dest=self.out.value().unsafe_offset(at), src=self.src.unsafe_offset(i), count=end - i
+                        )
+                    at += end - i
+            i = j + 1
+        if not self.out:
+            self.counts[unsafe_offset=index + 1] = at
 
 
 def _load_libdeflate() -> Optional[OwnedDLHandle]:
