@@ -537,6 +537,73 @@ struct _SeedFormatTask[seeds: ImmOrigin, names: ImmOrigin, out_origin: MutOrigin
         text.resize(unsafe_uninit_length=at)
 
 
+comptime _BATCH_FORMAT_READS = 1 << 12
+"""Reads per batch-formatting task."""
+
+
+struct _BatchFormatTask[
+    batch_origin: ImmOrigin, names_origin: ImmOrigin, bounds_origin: ImmOrigin, out_origin: MutOrigin
+](ParallelTask):
+    """Formats reads `[bounds[first + index], bounds[first + index + 1])` of
+    a batch as `name<TAB>position` lines."""
+
+    var batch: ImmPointer[SeedBatch, Self.batch_origin]
+    var names: ImmPointer[List[String], Self.names_origin]
+    var bounds: ImmPointer[List[Int], Self.bounds_origin]
+    var texts: MutPointer[List[UInt8], Self.out_origin]
+    var first: Int
+
+    def __init__(
+        out self,
+        batch: ImmPointer[SeedBatch, Self.batch_origin],
+        names: ImmPointer[List[String], Self.names_origin],
+        bounds: ImmPointer[List[Int], Self.bounds_origin],
+        texts: MutPointer[List[UInt8], Self.out_origin],
+        first: Int,
+    ):
+        self.batch = batch
+        self.names = names
+        self.bounds = bounds
+        self.texts = texts
+        self.first = first
+
+    def run(self, index: Int):
+        ref batch = self.batch[]
+        ref names = self.names[]
+        var lo = self.bounds[][self.first + index]
+        var hi = self.bounds[][self.first + index + 1]
+        ref text = self.texts[unsafe_offset=index]
+        text.resize(unsafe_uninit_length=0)
+        var prefix = List[UInt8]()
+        var at = 0
+        for r in range(lo, hi):
+            var seeds = batch.seeds(r)
+            if len(seeds) == 0:
+                continue
+            # "name<TAB>", padded for 16-byte copies.
+            var name = names[r].as_bytes()
+            var prefix_len = len(name) + 1
+            prefix.resize(unsafe_uninit_length=ceildiv(prefix_len, 16) * 16)
+            unsafe_memcpy(dest=prefix.unsafe_ptr(), src=name.unsafe_ptr(), count=len(name))
+            prefix[len(name)] = UInt8(ord("\t"))
+            var room = at + len(seeds) * (prefix_len + 11) + 16
+            if room > text.capacity():
+                text.reserve(max(room, 2 * text.capacity()))
+            text.resize(unsafe_uninit_length=room)
+            var p = text.unsafe_ptr()
+            var q = prefix.unsafe_ptr()
+            for position in seeds:
+                var copied = 0
+                while copied < prefix_len:
+                    p.unsafe_offset(at + copied).unsafe_store(q.unsafe_offset(copied).unsafe_load[width=16]())
+                    copied += 16
+                at += prefix_len
+                at += put_padded(p.unsafe_offset(at), Int(position), 0)
+                p[unsafe_offset=at] = UInt8(ord("\n"))
+                at += 1
+        text.resize(unsafe_uninit_length=at)
+
+
 comptime _FORMAT_SLICE = 1 << 16
 """Positions per formatting task."""
 
@@ -615,12 +682,36 @@ def run_seeds(command: String, args: List[String]) raises:
     var out = OutputBuffer()
     var round = max(1, threads * 4)
     var texts = List[List[UInt8]](length=round, fill=List[UInt8]())
-    for r in range(len(records)):
+    if batched:
+        # Many reads: format runs of reads straight from the batch, in
+        # parallel rounds.
+        seeds = len(batch.positions)
+        if not count_only:
+            # Tasks of up to _BATCH_FORMAT_READS reads or _FORMAT_SLICE positions.
+            var bounds: List[Int] = [0]
+            for r in range(len(records)):
+                var start = bounds[len(bounds) - 1]
+                if r + 1 - start >= _BATCH_FORMAT_READS or batch.offsets[r + 1] - batch.offsets[start] >= _FORMAT_SLICE:
+                    bounds.append(r + 1)
+            if bounds[len(bounds) - 1] != len(records):
+                bounds.append(len(records))
+            var tasks = len(bounds) - 1
+            for first in range(0, tasks, round):
+                var count = min(round, tasks - first)
+                var task = _BatchFormatTask(
+                    Pointer(to=batch).as_imm(),
+                    Pointer(to=records.names).as_imm(),
+                    Pointer(to=bounds).as_imm(),
+                    texts.unsafe_ptr(),
+                    first,
+                )
+                parallel_for(task, count, threads)
+                for t in range(count):
+                    out.write_bytes(Span(texts[t]))
+    for r in range(len(records) if not batched else 0):
         var seq = records.seq(r)
         var positions: List[UInt32]
-        if batched:
-            positions = List[UInt32](batch.seeds(r))
-        elif command == "minimizers":
+        if command == "minimizers":
             positions = minimizer_positions(seq, k, w, canonical, threads)
         else:
             positions = syncmer_positions(seq, k, s, canonical, None, threads, open_offsets=open_offsets)
