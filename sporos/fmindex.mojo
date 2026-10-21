@@ -21,8 +21,8 @@ are searched together as state machines stepped round-robin, each step
 prefetching the blocks the next one reads, so the cache misses of different
 queries overlap. The first `k` bases of each backward search come from a
 cache of every k-mer's interval. Once a match is unique, its one occurrence
-is located (suffix array samples, five bytes each, every 8 rows, or 16 for
-references over 2^32 rows) and the match is extended by comparing bases
+is located (suffix array samples, five bytes each, every 4, 8 or 16 rows
+as the reference grows) and the match is extended by comparing bases
 against a two-bit copy of the reference instead of base by base in the
 index. Hits of repeated SMEMs are located in batches.
 
@@ -52,7 +52,7 @@ comptime _MAX_CACHE_K = 12
 comptime _SEPARATOR = 4
 """The BWT symbol of a separator, and the query code of a base that never matches."""
 comptime _AHEAD = PrefetchOptions().for_read().high_locality()
-comptime _BATCH = 64
+comptime _BATCH = 16
 """Queries searched together (state machines stepped round-robin)."""
 comptime _LOCATE_BATCH = 64
 comptime _BUILD_BLOCKS = 1 << 13
@@ -203,8 +203,8 @@ struct FMIndex(Movable):
         mut: Bool, //, origin: Origin[mut=mut]
     ](seqs: List[Span[UInt8, origin]], names: List[String], threads: Int = 1, sample_bits: Int = 0) raises -> FMIndex:
         """Indexes `seqs` (named `names`) with up to `threads` threads, with a
-        suffix array sample every 2^`sample_bits` rows (0: 8 rows, or 16 for
-        references of over 2^31 bases)."""
+        suffix array sample every 2^`sample_bits` rows (0: every 4 rows up to
+        2^29 bases, 8 up to 2^31, then 16)."""
         var index = FMIndex()
         index.names = names.copy()
         var offset = 0
@@ -237,7 +237,7 @@ struct FMIndex(Movable):
         var nblocks = (n >> 7) + 1
         index._blocks = _huge_zeros[DType.uint64](nblocks * 8 + 8)
         index._first = _aligned_first(index._blocks)
-        index.sample_bits = sample_bits if sample_bits > 0 else (3 if n <= 1 << 32 else 4)
+        index.sample_bits = sample_bits if sample_bits > 0 else (2 if n <= 1 << 30 else (3 if n <= 1 << 32 else 4))
         index.samples = _huge_zeros[DType.uint8](index._sample_count() * _SAMPLE_BYTES + 8)
         if n == 0:
             index._build_cache(threads)
@@ -380,15 +380,15 @@ struct FMIndex(Movable):
         var p = self._block_ptr().unsafe_offset((k >> 7) << 3)
         var word = p.unsafe_load[width=4]()
         var off = k & 127
-        var high = off >= 64
         var r = off & 63
-        var base = word & _COUNT_MASK
-        if high:
-            base += (word >> 56) & 0x7F
-        var w = 6 if high else 4
-        var full = r >= 32
-        var a = p[unsafe_offset=w] & (UInt64.MAX if full else (UInt64(1) << UInt64(2 * r)) - 1)
-        var b = p[unsafe_offset=w + 1] & (((UInt64(1) << UInt64(2 * (r & 31))) - 1) if full else UInt64(0))
+        var high = UInt64(0) - UInt64(off >> 6)
+        var base = (word & _COUNT_MASK) + ((word >> 56) & (0x7F & high))
+        var w = 4 + ((off >> 5) & 2)
+        # Branch-free masks of the first r symbols across the two words.
+        var low = (UInt64(1) << UInt64((2 * r) & 63)) - 1
+        var full = UInt64(0) - UInt64(r >> 5)
+        var a = p[unsafe_offset=w] & (low | full)
+        var b = p[unsafe_offset=w + 1] & (low & full)
         var hi = pop_count(a & _ODD) + pop_count(b & _ODD)
         var lo = pop_count(a & _EVEN) + pop_count(b & _EVEN)
         var both = pop_count(a & (a >> 1) & _EVEN) + pop_count(b & (b >> 1) & _EVEN)
@@ -403,19 +403,18 @@ struct FMIndex(Movable):
     def _rank1(self, p: ImmPointer[UInt64, _], k: Int, c: Int) -> Int:
         """Occurrences of base `c` in rows `[0, k)`; `p` is k's block."""
         var off = k & 127
-        var high = off >= 64
         var r = off & 63
+        var high = UInt64(0) - UInt64(off >> 6)
         var count = p[unsafe_offset=c]
-        var base = count & _COUNT_MASK
-        if high:
-            base += (count >> 56) & 0x7F
-        var w = 6 if high else 4
-        var full = r >= 32
+        var base = (count & _COUNT_MASK) + ((count >> 56) & (0x7F & high))
+        var w = 4 + ((off >> 5) & 2)
+        var low = (UInt64(1) << UInt64((2 * r) & 63)) - 1
+        var full = UInt64(0) - UInt64(r >> 5)
         var pattern = UInt64(c) * _EVEN
         var x = p[unsafe_offset=w] ^ pattern
         var y = p[unsafe_offset=w + 1] ^ pattern
-        var a = ~(x | (x >> 1)) & _EVEN & (UInt64.MAX if full else (UInt64(1) << UInt64(2 * r)) - 1)
-        var b = ~(y | (y >> 1)) & _EVEN & (((UInt64(1) << UInt64(2 * (r & 31))) - 1) if full else UInt64(0))
+        var a = ~(x | (x >> 1)) & _EVEN & (low | full)
+        var b = ~(y | (y >> 1)) & _EVEN & (low & full)
         var n = Int(base + pop_count(a) + pop_count(b))
         if c == 0 and p[] & _SEPARATOR_FLAG != 0:
             n -= self._separators_in((k >> 6) << 6, k)
@@ -481,15 +480,49 @@ struct FMIndex(Movable):
             if sym != c or (c == 0 and p[] & _SEPARATOR_FLAG != 0 and self._separator_index(k) >= 0):
                 return Interval(0, 0, 0)
             return Interval(Int(self.starts[c]) + self._rank1(p, k, c), ik.rc, 1)
-        var tk = self.rank4(ik.lo)
-        var tl = self.rank4(ik.lo + ik.size)
-        var sizes = tl - tk
+        var k = self._rank_le(ik.lo, c)
+        var l = self._rank_le(ik.lo + ik.size, c)
         # Suffixes of the reverse complement are ordered by their next base:
         # separator first, then T, G, C, A (complements of the bases before).
-        var ends = Int64(ik.size) - sizes.reduce_add()
+        # Those before c's complement are the ones preceded by a separator or
+        # by a base above c: all but those preceded by bases up to c.
+        return Interval(Int(self.starts[c]) + k[0], ik.rc + ik.size - (l[1] - k[1]), l[0] - k[0])
+
+    @inline(.always)
+    def _rank_le(self, k: Int, c: Int) -> Tuple[Int, Int]:
+        """Occurrences in rows `[0, k)` of base `c`, and of bases up to `c`."""
+        var p = self._block_ptr().unsafe_offset((k >> 7) << 3)
+        var word = p.unsafe_load[width=4]()
+        var off = k & 127
+        var r = off & 63
+        var high = UInt64(0) - UInt64(off >> 6)
+        var counts = (word & _COUNT_MASK) + ((word >> 56) & (0x7F & high))
         var lanes = SIMD[DType.int64, 4](0, 1, 2, 3)
-        var after = lanes.gt(Int64(c)).select(sizes, SIMD[DType.int64, 4](0)).reduce_add()
-        return Interval(Int(self.starts[c] + tk[c]), ik.rc + Int(ends + after), Int(sizes[c]))
+        var up_to = Int(lanes.le(Int64(c)).select(counts, SIMD[DType.uint64, 4](0)).reduce_add())
+        var w = 4 + ((off >> 5) & 2)
+        var low = (UInt64(1) << UInt64((2 * r) & 63)) - 1
+        var full = UInt64(0) - UInt64(r >> 5)
+        # Bit 2i of `ch`/`cl` is c's high/low bit, matched per symbol.
+        var ch = UInt64(0) - UInt64(c >> 1)
+        var cl = UInt64(0) - UInt64(c & 1)
+        var eq = 0
+        var above = 0
+        comptime for half in range(2):
+            var x = p[unsafe_offset=w + half] & ((low | full) if half == 0 else (low & full))
+            var h = (x >> 1) & _EVEN
+            var l = x & _EVEN
+            var mask = (low | full) if half == 0 else (low & full)
+            eq += Int(pop_count(~((h ^ ch) | (l ^ cl)) & _EVEN & mask))
+            above += Int(pop_count(((h & ~ch) | (~(h ^ ch) & l & ~cl)) & _EVEN))
+        var rank = Int(counts[c]) + eq
+        var le = up_to + r - above
+        if word[0] & _SEPARATOR_FLAG != 0:
+            # Separators are stored as A: counted by both, wrongly.
+            var seps = self._separators_in((k >> 6) << 6, k)
+            le -= seps
+            if c == 0:
+                rank -= seps
+        return (rank, le)
 
     @inline(.always)
     def forward(self, ik: Interval, c: Int) -> Interval:
@@ -589,14 +622,13 @@ struct FMIndex(Movable):
     def _run_of(self, f: Int) -> Int:
         """The run holding forward-half text offset `f`."""
         var runs = self.run_text.unsafe_ptr()
+        # Branch-free: halve the candidate range around `lo` each round.
         var lo = 0
-        var hi = len(self.run_seq) - 1
-        while lo < hi:
-            var mid = (lo + hi + 1) >> 1
-            if runs[unsafe_offset=mid] <= f:
-                lo = mid
-            else:
-                hi = mid - 1
+        var n = len(self.run_seq)
+        while n > 1:
+            var half = n >> 1
+            lo += half * Int(runs[unsafe_offset=lo + half] <= f)
+            n -= half
         return lo
 
     # ------------------------------------------------------------- locate
@@ -735,7 +767,7 @@ struct FMIndex(Movable):
         while len(active) > 0:
             if j >= len(active):
                 j = 0
-            if self._step(active[j], codes, min_len, locate, found):
+            if self._step(active.unsafe_ptr()[unsafe_offset=j], codes, min_len, locate, found):
                 if next < nq:
                     active[j] = _Search.start(next, bounds)
                     next += 1
@@ -807,12 +839,12 @@ struct FMIndex(Movable):
             var want = s.i - s.x + 1
             var n: Int
             if t < self.half:
-                var first = self.run_text[self._run_of(t)]
+                var first = self.run_text.unsafe_ptr()[unsafe_offset=self._run_of(t)]
                 n = self._match_left(q, s.i, want, s.begin, t - 1, first, False)
                 t -= n
             else:
                 var f = 2 * self.half - 1 - t - m
-                var end = self.run_text[self._run_of(f) + 1] - 1
+                var end = self.run_text.unsafe_ptr()[unsafe_offset=self._run_of(f) + 1] - 1
                 n = self._match_left(q, s.i, want, s.begin, f + m, end, True)
                 t -= n
             s.i -= n
@@ -829,13 +861,13 @@ struct FMIndex(Movable):
             var t = s.row
             var m = s.i - s.x
             if t < self.half:
-                var end = self.run_text[self._run_of(t) + 1] - 1
+                var end = self.run_text.unsafe_ptr()[unsafe_offset=self._run_of(t) + 1] - 1
                 s.i += self._match_right(q, s.i, s.length - s.i, t + m, end, False)
             else:
                 # On the reverse strand: the match is the reverse complement
                 # of forward bases [f, f + m), which extends leftwards.
                 var f = 2 * self.half - 1 - t - m
-                var first = self.run_text[self._run_of(f)]
+                var first = self.run_text.unsafe_ptr()[unsafe_offset=self._run_of(f)]
                 s.i += self._match_right(q, s.i, s.length - s.i, f - 1, first, True)
             found.append(_Found(s.query, s.x, s.i, 0, 1, t))
             if s.i == s.length:
@@ -1070,6 +1102,15 @@ def encode_bases(seq: Span[UInt8, _], dest: MutPointer[UInt8, _]):
         var code = ((raw >> 1) ^ (raw >> 2)) & 3
         dest.unsafe_offset(i).unsafe_store(valid.select(code, SIMD[DType.uint8, W](_SEPARATOR)))
         i += W
+    if i < n and n >= W:
+        # The tail as the last full window, overlapping bases already done.
+        i = n - W
+        var raw = src.unsafe_load[width=W](i)
+        var lower = raw | 0x20
+        var valid = lower.eq(0x61) | lower.eq(0x63) | lower.eq(0x67) | lower.eq(0x74) | lower.eq(0x75)
+        var code = ((raw >> 1) ^ (raw >> 2)) & 3
+        dest.unsafe_offset(i).unsafe_store(valid.select(code, SIMD[DType.uint8, W](_SEPARATOR)))
+        return
     while i < n:
         dest[unsafe_offset=i] = _code(src[unsafe_offset=i])
         i += 1

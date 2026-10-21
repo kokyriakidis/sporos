@@ -36,7 +36,7 @@ comptime USAGE = """usage:
   sporos mem [-mum | -mumreference | -maxmatch] [-l L] [-b | -r] [-F] [-n] [-t threads] [-v]
              [-K anchor_k] [-k1 ref_step] [-k2 query_step] <reference.fa> <query.fa>
   sporos smem [-l L] [-w W] [--engine fm|mem] [-t threads] [-v] <reference.fa | index.sfm> <query.fa>
-  sporos index [-t threads] [-v] <reference.fa> [index.sfm]
+  sporos index [-s sample_bits] [-t threads] [-v] <reference.fa> [index.sfm]
   sporos minimizers -k K -w W [--forward] [--count] [-t threads] <seqs.fa>
   sporos syncmers -k K -s S [--open T[,T...]] [--forward] [--count] [-t threads] <seqs.fa>"""
 
@@ -982,14 +982,22 @@ def run_seed_index(args: List[String]) raises:
 
 def run_index(args: List[String]) raises:
     """Builds the FM-index `sporos smem` uses for reads, by default beside the
-    reference as `<reference>.sfm`."""
+    reference as `<reference>.sfm`. `-s` samples the suffix array every
+    2^s rows (default 2 up to 2^29 bases, 3 up to 2^31, then 4): smaller is
+    faster, larger is smaller."""
     var threads = default_threads()
     var verbose = False
+    var sample_bits = 0
     var paths = List[String]()
     var i = 0
     while i < len(args):
         var a = args[i]
-        if a == "-t" or a == "-threads":
+        if a == "-s":
+            i += 1
+            sample_bits = Int(_value(args, i))
+            if sample_bits < 1 or sample_bits > 8:
+                raise Error("-s takes 1 to 8")
+        elif a == "-t" or a == "-threads":
             i += 1
             threads = Int(_value(args, i))
         elif a == "-v":
@@ -1006,18 +1014,18 @@ def run_index(args: List[String]) raises:
     var reference = read_fasta(paths[0], threads)
     _log(verbose, String(t"read reference: {_seconds(start)} s"))
     start = perf_counter_ns()
-    var fm = _build_fm(reference, threads)
+    var fm = _build_fm(reference, threads, sample_bits)
     _log(verbose, String(t"index: {_seconds(start)} s ({fm.rows} rows)"))
     start = perf_counter_ns()
     fm.save(out)
     _log(verbose, String(t"wrote {out}: {_seconds(start)} s"))
 
 
-def _build_fm(reference: FastaRecords, threads: Int) raises -> FMIndex:
+def _build_fm(reference: FastaRecords, threads: Int, sample_bits: Int = 0) raises -> FMIndex:
     var seqs = List[Span[UInt8, origin_of(reference.data)]]()
     for r in range(len(reference)):
         seqs.append(reference.seq(r))
-    return FMIndex.build(seqs, reference.names, threads)
+    return FMIndex.build(seqs, reference.names, threads, sample_bits)
 
 
 def _fm_index_path(reference: String) -> String:
