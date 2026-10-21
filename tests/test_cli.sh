@@ -87,6 +87,15 @@ for len in 20 40; do
     check "smem -l $len: 4 threads = 1" "$(digest "$sporos" smem -l $len -t 1 ref.fa query.fa)" "$(digest "$sporos" smem -l $len -t 4 ref.fa query.fa)"
     check "smem -l $len, reads: 4 threads = 1" "$(digest "$sporos" smem -l $len -t 1 ref.fa reads.fq)" "$(digest "$sporos" smem -l $len -t 4 ref.fa reads.fq)"
 done
+# The FM-index engine (reads) and the MEM engine find the same SMEMs; a saved index gives the same.
+for len in 15 30; do
+    fm=$(digest "$sporos" smem --engine fm -l $len -t 3 ref.fa reads.fq)
+    check "smem -l $len, reads: FM engine = MEM engine" "$fm" "$(digest "$sporos" smem --engine mem -l $len -t 3 ref.fa reads.fq)"
+    check "smem -l $len, query: FM engine = MEM engine" "$(digest "$sporos" smem --engine fm -l $len ref.fa query.fa)" \
+        "$(digest "$sporos" smem --engine mem -l $len ref.fa query.fa)"
+    "$sporos" index -t 2 ref.fa saved.sfm
+    check "smem -l $len, reads: saved index = built" "$fm" "$(digest "$sporos" smem -l $len -t 2 saved.sfm reads.fq)"
+done
 # The planted pieces: ref1[1000:9000] forward at query 0, and ref2[5000:12000] reverse-complemented.
 check "smem finds the forward piece" "$("$sporos" smem -l 100 ref.fa query.fa | awk -F'\t' '$1 == "EM" && $2 == 0 {print $3, $4, $5}')" "8000 1 ref1:+1001"
 check "smem finds the reverse piece" "$("$sporos" smem -l 100 ref.fa query.fa | awk -F'\t' '$1 == "EM" && $2 == 8500 {print $3, $4, $5}')" "15500 1 ref2:-5001"

@@ -38,6 +38,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/liblzma-5.8.3-hb03c661_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/libmpdec-4.0.0-hb03c661_2.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/libpython-3.14.8-hd51c5da_102_cp314.conda
+      - conda: https://conda.anaconda.org/conda-forge/linux-64/libsais-2.12.0-hebe6cf0_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/libsodium-1.0.22-hebe6cf0_3.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/libsqlite-3.54.1-h0737f62_100.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/libstdcxx-16.2.0-h934c35e_7.conda
@@ -91,6 +92,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/liblzma-5.8.3-he30d5cf_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libmpdec-4.0.0-he30d5cf_2.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libpython-3.14.8-h150030a_102_cp314.conda
+      - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libsais-2.12.0-h29ee22c_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libsodium-1.0.22-h29ee22c_3.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libsqlite-3.54.1-hd26f1b6_100.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libstdcxx-16.2.0-hef695bb_7.conda
@@ -159,9 +161,11 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/liblzma-5.8.3-h8088a28_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libmpdec-4.0.0-h84a0fba_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libpython-3.14.8-h281bc5c_102_cp314.conda
+      - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libsais-2.12.0-hbd4f65f_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libsodium-1.0.22-h74c22ad_3.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libsqlite-3.54.1-h34a968b_100.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libzlib-1.3.2-h8088a28_3.conda
+      - conda: https://conda.anaconda.org/conda-forge/osx-arm64/llvm-openmp-23.1.3-hdb3d66b_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/ncurses-6.6-he64c551_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/openssl-3.6.5-h55eecbc_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/python-3.14.8-h0ae1c2c_102_cp314.conda
@@ -366,6 +370,20 @@ packages:
     - libpython >=3.14,<4.0a0
   size: 10537117
   timestamp: 1791827266877
+- conda: https://conda.anaconda.org/conda-forge/linux-64/libsais-2.12.0-hebe6cf0_0.conda
+  sha256: 77a261220dd593501fc57561129e2b7c82ce87b3eff1c485ba63105e930c7cc7
+  md5: a59fcba11130448cad4a471af4ab471e
+  depends:
+  - libgcc >=15
+  - __glibc >=2.17,<3.0.a0
+  - _openmp_mutex >=4.5
+  license: Apache-2.0
+  license_family: Apache
+  run_exports:
+    weak:
+    - libsais >=2.12.0,<3.0a0
+  size: 309052
+  timestamp: 1792472313273
 - conda: https://conda.anaconda.org/conda-forge/linux-64/libsodium-1.0.22-hebe6cf0_3.conda
   sha256: 2f73c05a1ad07e5a2cb43f0b3759cb04505f0c8bef30b43c9db0caa50218bfd8
   md5: 2d14868d78e969226e4ba07444c0dd25
@@ -768,6 +786,19 @@ packages:
     - libpython >=3.14,<4.0a0
   size: 9708936
   timestamp: 1791827056200
+- conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libsais-2.12.0-h29ee22c_0.conda
+  sha256: 368caea2a4f7013ce6fa4d04843ab1cfc41eb997a3e92196c3e6f0e35eed75b7
+  md5: 1529bfd7e6e1887ae40279faa075fe2d
+  depends:
+  - libgcc >=15
+  - _openmp_mutex >=4.5
+  license: Apache-2.0
+  license_family: Apache
+  run_exports:
+    weak:
+    - libsais >=2.12.0,<3.0a0
+  size: 340657
+  timestamp: 1792472305587
 - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/libsodium-1.0.22-h29ee22c_3.conda
   sha256: dcf1668e4d73b779c835a05154f16511fb9ab093507da7ba2d5656937ddc08d6
   md5: 73ebc1c03a0bced1a222c8d10869ec6e
@@ -1315,6 +1346,19 @@ packages:
     - libpython >=3.14,<4.0a0
   size: 1890587
   timestamp: 1791826523560
+- conda: https://conda.anaconda.org/conda-forge/osx-arm64/libsais-2.12.0-hbd4f65f_0.conda
+  sha256: 6c7d4aa379b0f00d5b271036709594137a3adbbcde9eae09a4104636eb7069e3
+  md5: abf0d997f2b97b2b83efe442c6a4278b
+  depends:
+  - __osx >=11.0
+  - llvm-openmp >=21.1.8
+  license: Apache-2.0
+  license_family: Apache
+  run_exports:
+    weak:
+    - libsais >=2.12.0,<3.0a0
+  size: 259995
+  timestamp: 1792472319539
 - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libsodium-1.0.22-h74c22ad_3.conda
   sha256: 0fb001d9b28dc19096388beadaed3af98100f4260707ecb9c177fae68b0e9ece
   md5: b237804d151d3d05d4d7fd9052c5664b
@@ -1354,6 +1398,21 @@ packages:
     - libzlib >=1.3.2,<2.0a0
   size: 47822
   timestamp: 1785277049190
+- conda: https://conda.anaconda.org/conda-forge/osx-arm64/llvm-openmp-23.1.3-hdb3d66b_1.conda
+  sha256: eec66f3d0a0c428411e22a59c4726069ccef81a46864876b6e270c8c254d4045
+  md5: 5b7efd98534e6722de8d223b8654185b
+  depends:
+  - __osx >=11.0
+  constrains:
+  - intel-openmp <0.0a0
+  - openmp 23.1.3|23.1.3.*
+  license: Apache-2.0 WITH LLVM-exception
+  license_family: APACHE
+  run_exports:
+    strong:
+    - llvm-openmp >=23.1.3
+  size: 287944
+  timestamp: 1791950643503
 - conda: https://conda.anaconda.org/conda-forge/osx-arm64/ncurses-6.6-he64c551_1.conda
   sha256: 7024a48c8c0d0114ed4ab53c76bf9275d50e91ba7cea367a9aead638d3c29c68
   md5: 3dfa0d0316dc246cd44937a557de4501

@@ -12,6 +12,7 @@ license-file = "LICENSE"
 [dependencies]
 mojo = ">=1.2.0.dev2026102005,<2"
 libdeflate = ">=1.26,<2"
+libsais = ">=2.12,<3"
 
 # scripts/bundle.sh points the bundled Linux libraries at each other.
 [target.linux-64.dependencies]
@@ -29,8 +30,9 @@ build-test-mems = { cmd = "mojo build -I . -I tests tests/test_mems.mojo -o buil
 build-test-index = { cmd = "mojo build -I . -I tests tests/test_index.mojo -o build/test_index", depends-on = ["prepare"] }
 build-test-batch = { cmd = "mojo build -I . -I tests tests/test_batch.mojo -o build/test_batch", depends-on = ["prepare"] }
 build-test-io = { cmd = "mojo build -I . -I tests tests/test_io.mojo -o build/test_io", depends-on = ["prepare"] }
+build-test-fmindex = { cmd = "mojo build -I . -I tests tests/test_fmindex.mojo -o build/test_fmindex", depends-on = ["prepare"] }
 # Every kernel held to a brute-force oracle (tests/reference.mojo).
-test = { cmd = "./build/test_io && ./build/test_seeds && ./build/test_batch && ./build/test_mems && ./build/test_index", depends-on = ["build-test-io", "build-test-seeds", "build-test-batch", "build-test-mems", "build-test-index"] }
+test = { cmd = "./build/test_io && ./build/test_seeds && ./build/test_batch && ./build/test_mems && ./build/test_index && ./build/test_fmindex", depends-on = ["build-test-io", "build-test-seeds", "build-test-batch", "build-test-mems", "build-test-index", "build-test-fmindex"] }
 build-bench-seeds = { cmd = "mojo build -I . -I tests -I benchmarks benchmarks/bench_seeds.mojo -o build/bench_seeds", depends-on = ["prepare"] }
 # Single-thread minimizer/syncmer throughput on random DNA: `pixi run bench-seeds [length]`.
 bench-seeds = { cmd = "./build/bench_seeds", depends-on = ["build-bench-seeds"] }
