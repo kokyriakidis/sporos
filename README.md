@@ -315,3 +315,7 @@ lines.
 Pass `-D SPOROS_LANES=8` to `mojo build` to force AVX2-width lanes. Coding agents should read
 [`CLAUDE.md`](CLAUDE.md): the Modular Mojo skills are vendored in `.claude/skills` and take precedence over
 pretrained Mojo habits.
+
+## License
+
+[MIT](LICENSE).

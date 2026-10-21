@@ -5,6 +5,8 @@ description = "Fast DNA seeding in Mojo: minimizers, syncmers, MEMs and MUMs"
 name = "sporos"
 platforms = ["linux-64", "linux-aarch64", "osx-arm64"]
 version = "0.1.0"
+license = "MIT"
+license-file = "LICENSE"
 
 # Latest Mojo (nightly channel): the vendored Modular skills track the latest compiler.
 [dependencies]
