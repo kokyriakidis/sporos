@@ -20,21 +20,34 @@ the correctness checks (60/60 match sets equal to MUMmer and copMEM2) are in
 
 | MEMs, best wall s (1 thread / 10 threads) | sporos | copMEM2 `-mf` | MUMmer4 |
 |---|---|---|---|
-| hg38 chr21 vs chimp chr21, L=50 | **1.08 / 0.47** | 1.96 / 1.95 | 17.4 |
-| hg38 chr1 vs CHM13 chr1, L=100 | **8.95 / 2.72** | 11.4 / 11.1 | 132 |
-| hg38 chr1 vs CHM13 chr1, L=50 | **36.8 / 7.6** | 46.9 / 46.5 | 159 |
+| hg38 chr21 vs chimp chr21, L=50 | **0.81 / 0.24** | 1.96 / 1.95 | 17.4 |
+| hg38 chr1 vs CHM13 chr1, L=100 | **6.0 / 1.4** | 11.4 / 11.1 | 132 |
+| hg38 chr1 vs CHM13 chr1, L=50 | **22.5 / 3.9** | 46.9 / 46.5 | 159 |
+
+| MUMs (`-mum`), best wall s (1 / 10 threads) | sporos | MUMmer4 |
+|---|---|---|
+| hg38 chr21 vs chimp chr21, L=50 | **0.82 / 0.26** | 14.6 |
+| hg38 chr1 vs CHM13 chr1, L=100 | **6.0 / 1.5** | 93.8 |
+| hg38 chr1 vs CHM13 chr1, L=50 | **23.2 / 4.8** | 87.5 |
+
+Seeds with 10 threads (CHM13 chr1, ns/bp; sporos returns one merged position list, simd-minimizers'
+harness only counts each thread's positions):
+
+| 10 threads | sporos | simd-minimizers |
+|---|---|---|
+| minimizers k=21 w=11, forward / canonical | **0.18** / 0.21 | 0.19 / 0.20 |
+| minimizers k=31 w=19, forward / canonical | **0.14 / 0.16** | 0.16 / 0.19 |
+| closed syncmers k=31 s=21, forward / canonical | 0.20 / **0.23** | 0.20 / 0.25 |
+
+`sporos minimizers -k 21 -w 11` on CHM13 chr1 end to end (read FASTA, write 41 M lines): 1.65 s on one
+thread, 0.44 s on ten.
 
 Seed-index lookups (`SeedIndex.lookup_batch`, hg38 chr21 index, k=19 w=12, occurrence cap 20, simulated
-reads): 117 Mbp/s per thread and 560 Mbp/s on 8 threads for read minimizers on 150 bp reads, and 37 Mbp/s per
+reads): 133 Mbp/s per thread and 560 Mbp/s on 8 threads for read minimizers on 150 bp reads, and 36 Mbp/s per
 thread for every read k-mer (GraphAligner's mode). `sporos seeds` on 1 M 150 bp reads takes 1.2 s end to end
 with 10 threads, including index build and 27 M output lines.
 
-MUMs on repeat-dense input (hg38 chr1 vs CHM13 chr1, L=50, 65.6 M MEMs filtered to 233 K): `-mum` takes
-37.1 s on one thread and 7.6 s on ten, against MUMmer's 87.5 s; `-mumreference` 29.1 s and 6.1 s.
-
-Known gap: with 10 threads on CHM13 chr1, sporos returns merged minimizers at 0.26 ns/bp (k=21) and
-0.18 ns/bp (k=31), while simd-minimizers' chunked harness, which only counts each thread's positions, takes
-0.19-0.20 and 0.16-0.19.
+Competitor numbers are from the suite's run on the same machine (sporos's own rows above are newer).
 
 ## Design
 
