@@ -339,8 +339,24 @@ struct SeedIndex(Movable):
         if bounds[len(bounds) - 1] != len(reads):
             bounds.append(len(reads))
         var tasks = len(bounds) - 1
-        var results = List[List[SeedHit]](length=tasks, fill=List[SeedHit]())
         var counts = List[Int](length=len(reads), fill=0)
+        if threads <= 1 or tasks <= 1:
+            # One thread: append straight into one list, no concatenation.
+            var hits = List[SeedHit]()
+            for t in range(tasks):
+                try:
+                    self._lookup_reads(
+                        reads.unsafe_ptr().unsafe_offset(bounds[t]),
+                        bounds[t + 1] - bounds[t],
+                        all_kmers,
+                        max_occurrences,
+                        hits,
+                        counts.unsafe_ptr().unsafe_offset(bounds[t]),
+                    )
+                except e:
+                    abort(String(t"seed lookup failed: {e}"))
+            return SeedHits(hits^, _prefix_sums(counts))
+        var results = List[List[SeedHit]](length=tasks, fill=List[SeedHit]())
         if tasks > 0:
             var task = _LookupTask[origin](
                 Pointer(to=self).unsafe_origin_cast[ImmUntrackedOrigin](),
@@ -352,10 +368,7 @@ struct SeedIndex(Movable):
                 counts.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
             )
             parallel_for(task, tasks, threads)
-        var offsets = List[Int](capacity=len(reads) + 1)
-        offsets.append(0)
-        for c in counts:
-            offsets.append(offsets[len(offsets) - 1] + c)
+        var offsets = _prefix_sums(counts)
         var hits = List[SeedHit](capacity=offsets[len(offsets) - 1])
         for r in results:
             hits.extend(Span(r))
@@ -478,6 +491,15 @@ struct SeedIndex(Movable):
             var ref_reverse = Bool((entry >> 32) & 1)
             hits.append(SeedHit(probe.qpos, UInt32(pos), UInt32(occurrences), ref_reverse != probe.reverse))
         counts[unsafe_offset=probe.read] += len(hits) - before
+
+
+def _prefix_sums(counts: List[Int]) -> List[Int]:
+    """`[0, c0, c0 + c1, ...]`: each read's first hit."""
+    var offsets = List[Int](capacity=len(counts) + 1)
+    offsets.append(0)
+    for c in counts:
+        offsets.append(offsets[len(offsets) - 1] + c)
+    return offsets^
 
 
 @fieldwise_init

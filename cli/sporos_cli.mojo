@@ -658,7 +658,8 @@ struct _SeedLookupTask[index_origin: ImmOrigin, read_origin: ImmOrigin, name_ori
     var reads: ImmPointer[FastaRecords, Self.read_origin]
     var ref_names: ImmPointer[List[String], Self.name_origin]
     var texts: MutPointer[List[UInt8], Self.out_origin]
-    var slices: Int
+    var bounds: ImmPointer[Int, ImmUntrackedOrigin]
+    var first: Int
     var all_kmers: Bool
     var max_occ: Int
 
@@ -668,7 +669,8 @@ struct _SeedLookupTask[index_origin: ImmOrigin, read_origin: ImmOrigin, name_ori
         reads: ImmPointer[FastaRecords, Self.read_origin],
         ref_names: ImmPointer[List[String], Self.name_origin],
         texts: MutPointer[List[UInt8], Self.out_origin],
-        slices: Int,
+        bounds: ImmPointer[Int, ImmUntrackedOrigin],
+        first: Int,
         all_kmers: Bool,
         max_occ: Int,
     ):
@@ -676,49 +678,52 @@ struct _SeedLookupTask[index_origin: ImmOrigin, read_origin: ImmOrigin, name_ori
         self.reads = reads
         self.ref_names = ref_names
         self.texts = texts
-        self.slices = slices
+        self.bounds = bounds
+        self.first = first
         self.all_kmers = all_kmers
         self.max_occ = max_occ
 
     def run(self, index: Int):
         ref reads = self.reads[]
         ref seed_index = self.index[]
-        var per = ceildiv(len(reads), self.slices)
-        var lo = index * per
-        var hi = min(len(reads), lo + per)
+        var lo = self.bounds[unsafe_offset=self.first + index]
+        var hi = self.bounds[unsafe_offset=self.first + index + 1]
         ref text = self.texts[unsafe_offset=index]
-        var spans = List[Span[UInt8, origin_of(reads.data)]](capacity=max(0, hi - lo))
+        text.resize(unsafe_uninit_length=0)
+        if lo >= hi:
+            return
+        var spans = List[Span[UInt8, origin_of(reads.data)]](capacity=hi - lo)
         for r in range(lo, hi):
             spans.append(reads.seq(r))
         var hits = seed_index.lookup_batch(spans, self.all_kmers, self.max_occ)
-        var ref_name_room = 0
+        # Name fields ("name<TAB>") padded for 16-byte copies.
+        var ref_fields = List[List[UInt8]]()
+        var ref_room = 0
         for name in self.ref_names[]:
-            ref_name_room = max(ref_name_room, name.byte_length())
+            ref_fields.append(_padded_field(name))
+            ref_room = max(ref_room, name.byte_length() + 1)
         var at = 0
         for r in range(lo, hi):
-            var read_name = reads.names[r].as_bytes()
             var read_hits = hits.of(r - lo)
-            # Room for every line: two names, three numbers, six separators.
-            var room = at + len(read_hits) * (len(read_name) + ref_name_room + 3 * 10 + 6)
+            if len(read_hits) == 0:
+                continue
+            var read_field = _padded_field(reads.names[r])
+            var read_room = reads.names[r].byte_length() + 1
+            # Room for every line (two fields, three numbers, four more bytes)
+            # and the 16-byte copies' overshoot.
+            var room = at + len(read_hits) * (read_room + ref_room + 3 * 10 + 4) + 16
             if room > text.capacity():
                 text.reserve(max(room, 2 * text.capacity()))
             text.resize(unsafe_uninit_length=room)
             var p = text.unsafe_ptr()
             for h in read_hits:
                 var ref_pos = Int(h.ref_pos)
-                var seq = seed_index.text.sequence_of(ref_pos)
-                var ref_name = self.ref_names[][seq].as_bytes()
-                unsafe_memcpy(dest=p.unsafe_offset(at), src=read_name.unsafe_ptr(), count=len(read_name))
-                at += len(read_name)
-                p[unsafe_offset=at] = UInt8(ord("\t"))
-                at += 1
+                var seq = seed_index.text.sequence_of(ref_pos) if len(ref_fields) > 1 else 0
+                at += _put_field(p.unsafe_offset(at), read_field, read_room)
                 at += put_padded(p.unsafe_offset(at), Int(h.query_pos), 0)
                 p[unsafe_offset=at] = UInt8(ord("\t"))
                 at += 1
-                unsafe_memcpy(dest=p.unsafe_offset(at), src=ref_name.unsafe_ptr(), count=len(ref_name))
-                at += len(ref_name)
-                p[unsafe_offset=at] = UInt8(ord("\t"))
-                at += 1
+                at += _put_field(p.unsafe_offset(at), ref_fields[seq], self.ref_names[][seq].byte_length() + 1)
                 at += put_padded(p.unsafe_offset(at), ref_pos - seed_index.text.starts[seq], 0)
                 p[unsafe_offset=at] = UInt8(ord("\t"))
                 p[unsafe_offset=at + 1] = UInt8(ord("-")) if h.reverse else UInt8(ord("+"))
@@ -728,6 +733,32 @@ struct _SeedLookupTask[index_origin: ImmOrigin, read_origin: ImmOrigin, name_ori
                 p[unsafe_offset=at] = UInt8(ord("\n"))
                 at += 1
         text.resize(unsafe_uninit_length=at)
+
+
+comptime _SEED_SLICE = 1 << 12
+comptime _SEED_SLICE_BASES = 1 << 18
+"""A seed-lookup task's reads: up to this many reads or bases."""
+
+
+def _padded_field(name: String) -> List[UInt8]:
+    """`name<TAB>`, zero-padded to a multiple of 16 bytes for `_put_field`."""
+    var bytes = name.as_bytes()
+    var field = List[UInt8](length=ceildiv(len(bytes) + 1, 16) * 16, fill=0)
+    unsafe_memcpy(dest=field.unsafe_ptr(), src=bytes.unsafe_ptr(), count=len(bytes))
+    field[len(bytes)] = UInt8(ord("\t"))
+    return field^
+
+
+@inline(.always)
+def _put_field(dst: MutPointer[UInt8, _], field: List[UInt8], length: Int) -> Int:
+    """Copies a `_padded_field` in 16-byte stores (up to 15 bytes past
+    `length` are scratch); returns `length`."""
+    var src = field.unsafe_ptr()
+    var copied = 0
+    while copied < length:
+        dst.unsafe_offset(copied).unsafe_store(src.unsafe_offset(copied).unsafe_load[width=16]())
+        copied += 16
+    return length
 
 
 def run_seed_index(args: List[String]) raises:
@@ -800,25 +831,39 @@ def run_seed_index(args: List[String]) raises:
         max_occ = index.occurrence_cutoff(keep)
     _log(verbose, String(t"index: {_seconds(start)} s ({len(index.table)} seeds, max occurrences {max_occ})"))
     start = perf_counter_ns()
-    var slices = max(1, min(threads * 8, len(reads)))
-    var texts = List[List[UInt8]](length=slices, fill=List[UInt8]())
-    var task = _SeedLookupTask(
-        Pointer(to=index).as_imm(),
-        Pointer(to=reads).as_imm(),
-        Pointer(to=reference.names).as_imm(),
-        texts.unsafe_ptr(),
-        slices,
-        all_kmers,
-        max_occ,
-    )
-    parallel_for(task, slices, threads)
-    _log(verbose, String(t"lookups: {_seconds(start)} s"))
-    start = perf_counter_ns()
+    # Rounds of read slices looked up and formatted in parallel into reused
+    # buffers, each round written before the next.
+    var bounds: List[Int] = [0]
+    var bases = 0
+    for r in range(len(reads)):
+        bases += reads.lengths[r]
+        if bases >= _SEED_SLICE_BASES or r + 1 - bounds[len(bounds) - 1] >= _SEED_SLICE:
+            bounds.append(r + 1)
+            bases = 0
+    if bounds[len(bounds) - 1] != len(reads):
+        bounds.append(len(reads))
+    var slices = len(bounds) - 1
+    var round = max(1, threads * 4)
+    var texts = List[List[UInt8]](length=round, fill=List[UInt8]())
     var out = OutputBuffer()
-    for text in texts:
-        out.write_bytes(Span(text))
+    for first in range(0, slices, round):
+        var count = min(round, slices - first)
+        var task = _SeedLookupTask(
+            Pointer(to=index).as_imm(),
+            Pointer(to=reads).as_imm(),
+            Pointer(to=reference.names).as_imm(),
+            texts.unsafe_ptr(),
+            bounds.unsafe_ptr().as_imm().unsafe_origin_cast[ImmUntrackedOrigin](),
+            first,
+            all_kmers,
+            max_occ,
+        )
+        parallel_for(task, count, threads)
+        for t in range(count):
+            out.write_bytes(Span(texts[t]))
     out.flush()
-    _log(verbose, String(t"output: {_seconds(start)} s"))
+    _ = len(bounds)  # read by the tasks through an untracked pointer
+    _log(verbose, String(t"lookups and output: {_seconds(start)} s"))
 
 
 def main() raises:
