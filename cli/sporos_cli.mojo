@@ -1287,7 +1287,7 @@ struct _FmSmemTask[
         var codes = List[UInt8](unsafe_uninit_length=starts[len(starts) - 1] + 32)
         for q in range(lo, hi):
             encode_bases(query.seq(q), codes.unsafe_ptr().unsafe_offset(starts[q - lo]))
-        var found = fm.find_smems(codes, starts, self.min_len, self.max_hits, self.min_occ, self.max_occ)
+        var found = fm.smems_encoded(codes, starts, self.min_len, self.max_hits, self.min_occ, self.max_occ)
         var out = OutputBuffer(fd=-1)
         for q in range(lo, hi):
             out.write("SQ\t")
