@@ -47,6 +47,9 @@ jobs:
       - name: Command line
         run: pixi run test-cli
 
+      - name: SMEMs against their definition (plain string search)
+        run: pixi run test-smem-oracle
+
       - name: C API
         run: pixi run test-c
 

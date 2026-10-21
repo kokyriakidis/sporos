@@ -141,6 +141,26 @@ def test_fm_smems_repeats() raises:
     _check(reference, cuts, _reads(reference, 300, 6), 3, True)
 
 
+def test_fm_wide_suffix_array() raises:
+    # The 64-bit suffix array path (references past 2^30 bases) writes the same index.
+    var reference = random_dna(40_000, 31, 0.001)
+    var spans = List[Span[UInt8, origin_of(reference)]]()
+    spans.append(Span(reference)[:25_000])
+    spans.append(Span(reference)[25_000:])
+    var names: List[String] = ["a", "b"]
+    for bits in [2, 4]:
+        FMIndex.build(spans, names, 3, bits).save("build/test_fm_narrow.sfm")
+        FMIndex.build(spans, names, 3, bits, wide_suffix_array=True).save("build/test_fm_wide.sfm")
+        with open("build/test_fm_narrow.sfm", "r") as f:
+            var narrow = f.read_bytes()
+            with open("build/test_fm_wide.sfm", "r") as g:
+                var wide = g.read_bytes()
+                assert_equal(len(narrow), len(wide))
+                for i in range(len(narrow)):
+                    if narrow[i] != wide[i]:
+                        raise Error(String(t"sample_bits={bits}: indexes differ at byte {i}"))
+
+
 def test_fm_smems_no_bases() raises:
     # A reference with no ACGT at all: nothing matches.
     var reference = List[UInt8](length=50, fill=UInt8(ord("N")))

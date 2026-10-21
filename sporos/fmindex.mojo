@@ -201,10 +201,17 @@ struct FMIndex(Movable):
     @staticmethod
     def build[
         mut: Bool, //, origin: Origin[mut=mut]
-    ](seqs: List[Span[UInt8, origin]], names: List[String], threads: Int = 1, sample_bits: Int = 0) raises -> FMIndex:
+    ](
+        seqs: List[Span[UInt8, origin]],
+        names: List[String],
+        threads: Int = 1,
+        sample_bits: Int = 0,
+        wide_suffix_array: Bool = False,
+    ) raises -> FMIndex:
         """Indexes `seqs` (named `names`) with up to `threads` threads, with a
         suffix array sample every 2^`sample_bits` rows (0: every 4 rows up to
-        2^29 bases, 8 up to 2^31, then 16)."""
+        2^29 bases, 8 up to 2^31, then 16). `wide_suffix_array` builds with
+        64-bit suffix array values even when 32 bits suffice (for tests)."""
         var index = FMIndex()
         index.names = names.copy()
         var offset = 0
@@ -264,7 +271,7 @@ struct FMIndex(Movable):
 
         var lib = _load_libsais()
         var separators = List[UInt64](length=(n + 63) >> 6, fill=0)
-        if n < Int(Int32.MAX):
+        if n < Int(Int32.MAX) and not wide_suffix_array:
             var sa = List[Int32](unsafe_uninit_length=n)
             var status: Int32
             if threads > 1:

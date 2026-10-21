@@ -40,6 +40,8 @@ bench-seeds = { cmd = "./build/bench_seeds", depends-on = ["build-bench-seeds"] 
 build-cli = { cmd = "mojo build -I . cli/sporos_cli.mojo -o build/sporos", depends-on = ["prepare"] }
 # Command-line checks on generated data (thread counts, gzip, pipes, known answers).
 test-cli = { cmd = "bash tests/test_cli.sh", depends-on = ["build-cli"] }
+# `sporos smem` (both engines, several samplings) against SMEMs found by plain string search on hard inputs.
+test-smem-oracle = { cmd = "mkdir -p build/smem_oracle && python3 tests/smem_oracle.py build/sporos build/smem_oracle", depends-on = ["build-cli"] }
 build-bench-reads = { cmd = "mojo build -I . -I tests -I benchmarks benchmarks/bench_reads.mojo -o build/bench_reads", depends-on = ["prepare"] }
 # Per-call overhead on read-sized sequences: `pixi run bench-reads`.
 bench-reads = { cmd = "./build/bench_reads", depends-on = ["build-bench-reads"] }
