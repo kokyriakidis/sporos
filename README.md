@@ -26,19 +26,23 @@ a command-line tool, a C library and a Python package.
   - MEMs between hg38 and CHM13 chr1 run 2–2.3x faster than copMEM2 on one thread and 10–14x faster with
     10 threads.
   - MUMs run 4–18x faster than MUMmer.
+  - SMEMs of reads run 4.6x faster than minibwa and 14x faster than `bwa fastmap` on one thread, from an
+    FM-index that builds faster than minibwa's.
 - 🎯 **Exact.**
   - Every kernel is checked against a brute-force oracle.
   - `sporos mem` reproduces MUMmer's `mummer` output: identical match sets, and `-mum` and `-mumreference`
     identical byte for byte.
+  - `sporos smem` gives minibwa's SMEMs, except that matches never run through the reference's `N`s (minibwa
+    and BWA replace them with random bases).
   - Results never depend on the thread count.
 - 🧰 **Practical.**
   - Reads FASTA and FASTQ (plain, gzip or BGZF) from files or pipes.
-  - Multithreaded end to end, with no dependencies beyond the Mojo runtime and libdeflate.
+  - Multithreaded end to end, with no dependencies beyond the Mojo runtime, libdeflate and libsais.
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/benchmarks-dark.svg">
-    <img alt="Bar charts, lower is better. MEMs on hg38 vs CHM13 chr1 at L=50 on one thread: sporos 20.7 s, copMEM2 46.9 s, MUMmer4 159 s. With 10 threads: sporos 3.4 s, copMEM2 46.5 s. MUMs on the same pair: sporos 23.3 s, MUMmer4 87.5 s. Canonical minimizers on CHM13 chr1, k=21, w=11, one thread: sporos 1.11 ns per base, simd-minimizers 2.17, minimap2 17.1." src="docs/benchmarks-light.svg" width="820">
+    <img alt="Bar charts, lower is better. MEMs on hg38 vs CHM13 chr1 at L=50 on one thread: sporos 20.7 s, copMEM2 46.9 s, MUMmer4 159 s. With 10 threads: sporos 3.4 s, copMEM2 46.5 s. MUMs on the same pair: sporos 23.3 s, MUMmer4 87.5 s. SMEMs of 1 M 150 bp reads against hg38 chr21 at L=19 on one thread: sporos 1.92 s, minibwa 8.85 s, bwa fastmap 27.3 s. Canonical minimizers on CHM13 chr1, k=21, w=11, one thread: sporos 1.11 ns per base, simd-minimizers 2.17, minimap2 17.1." src="docs/benchmarks-light.svg" width="820">
   </picture>
 </p>
 
@@ -50,6 +54,7 @@ pixi run build-cli                                      # builds build/sporos (p
 
 build/sporos minimizers -k 21 -w 11 genome.fa           # name<TAB>position, one per minimizer
 build/sporos mem -mum -l 50 reference.fa query.fa       # MUMs, in MUMmer's output format
+build/sporos index ref.fa && build/sporos smem -l 19 ref.fa reads.fq   # SMEMs, bwa fastmap's format
 build/sporos seeds -k 19 -w 12 --keep 0.9998 ref.fa reads.fq.gz
 ```
 
@@ -62,7 +67,7 @@ build/sporos seeds -k 19 -w 12 --keep 0.9998 ref.fa reads.fq.gz
 | **Open syncmers** | k-mers whose smallest s-mer starts at a chosen offset `t`, or at any offset of a set. strobealign's default is `k=20, s=16, t=2`. |
 | **Seed index** | Reference minimizers, syncmers or all k-mers, keyed by canonical k-mer so lookups find both strands. Hits carry occurrence counts, with an optional abundance cutoff (GraphAligner-style `--keep`). |
 | **MEMs** | Every maximal exact match of length ≥ L between a query sequence and the reference (MUMmer's `-maxmatch`). Matches can be any length, up to whole sequences. |
-| **SMEMs** | Supermaximal exact matches, as in BWA: query intervals of MEMs (on either strand) that no other MEM's query interval contains, each with every reference position where it matches. The seeds `bwa fastmap` and minibwa find. |
+| **SMEMs** | Supermaximal exact matches, as in BWA: query intervals of MEMs (on either strand) that no other MEM's query interval contains, each with every reference position where it matches. The seeds BWA-MEM, `bwa fastmap` and minibwa start from. |
 | **MUMs** | MEMs whose string occurs exactly once in the reference and once in the query sequence (MUMmer's `-mum`). `-mumreference` requires uniqueness in the reference only. |
 
 > [!NOTE]
@@ -75,8 +80,8 @@ as `T`. Positions are 0-based everywhere except `sporos mem`, which prints MUMme
 
 ## Install
 
-sporos builds with [pixi](https://pixi.sh), which fetches the Mojo toolchain (nightly channel) and
-libdeflate:
+sporos builds with [pixi](https://pixi.sh), which fetches the Mojo toolchain (nightly channel),
+libdeflate and libsais:
 
 ```sh
 git clone https://github.com/kokyriakidis/sporos && cd sporos
@@ -103,11 +108,13 @@ sporos syncmers -k 20 -s 16 --open 2 genome.fa          # open syncmers (--open 
 sporos seeds -k 19 -w 12 --keep 0.9998 ref.fa reads.fq.gz
 sporos mem -mum -l 50 -t 8 reference.fa query.fa        # MUMmer's flags and output format
 sporos mem -maxmatch -b -l 100 reference.fa query.fa    # all MEMs, both strands
+sporos index reference.fa                               # FM-index for smem: reference.fa.sfm
 sporos smem -l 19 reference.fa reads.fq                 # SMEMs, in bwa fastmap's output format
 ```
 
 - **Threads:** every command takes `-t` (default: every physical core).
-- **Diagnostics:** `seeds` and `mem` take `-v`, which prints phase timings and peak memory to stderr.
+- **Diagnostics:** `seeds`, `mem`, `smem` and `index` take `-v`, which prints phase timings and peak memory
+  to stderr.
 - **Inputs:** any input can be gzipped, BGZF-compressed, or a pipe (`/dev/stdin`).
 
 <details>
@@ -177,25 +184,29 @@ The output follows `mummer`: a `> query` header (`> query Reverse` for the rever
 </details>
 
 <details>
-<summary><b><code>smem</code></b>: SMEMs, bwa fastmap-compatible</summary>
+<summary><b><code>smem</code></b> and <code>index</code>: SMEMs, bwa fastmap-compatible</summary>
 
 ```
-sporos smem [-l L] [-w W] [-t threads] [-v] <reference.fa> <query.fa>
+sporos index [-s sample_bits] [-t threads] [-v] <reference.fa> [index.sfm]
+sporos smem [-l L] [-w W] [--engine fm|mem] [-t threads] [-v] <reference.fa | index.sfm> <query.fa>
 ```
 
 | Option | Meaning |
 |---|---|
 | `-l L` | minimum SMEM length (default 17, as in `bwa fastmap`) |
 | `-w W` | print positions only for SMEMs with at most `W` hits, else `*` (default 20) |
+| `--engine` | `fm`: the FM-index (default for reads); `mem`: the MEM engine (default for one query sequence) |
+| `-s` | `index`: a suffix array sample every 2^s rows (default 2 up to 2^29 bases, 3 up to 2^31, then 4); smaller is faster, larger is smaller |
+
+`sporos index ref.fa` writes `ref.fa.sfm`, which `sporos smem ref.fa ...` then loads. Without one, `smem`
+builds the index in memory for a query file of many records (reads), and uses the MEM engine, which needs no
+index, for a single query sequence (a genome). Both engines give the same SMEMs.
 
 Both strands are searched, as with BWA's index of the reference and its reverse complement. The output is
 `bwa fastmap`'s: per query, `SQ name length`, then `EM start end count positions...` (0-based query
-interval, positions as `name:+pos` or `name:-pos`, 1-based), then `//`. The SMEMs equal BWA's and minibwa's;
-positions are listed in increasing order rather than in suffix-array order.
-
-SMEMs are computed from sporos's MEM engine, which needs no index build: a good fit for comparing genomes.
-On short reads with repetitive references, FM-index tools that never enumerate repeat copies (minibwa,
-`bwa fastmap`) are currently faster.
+interval, positions as `name:+pos` or `name:-pos`, 1-based), then `//`. The SMEMs equal minibwa's, except
+where minibwa matches through reference `N`s. Positions are listed in increasing order rather than in
+suffix-array order.
 
 </details>
 
@@ -260,6 +271,20 @@ def main() raises:
     var hits = index.lookup_batch(spans, max_occurrences=index.occurrence_cutoff(0.9998), threads=4)
     for h in hits.of(0):  # read 0's hits
         print(h.query_pos, h.ref_pos, h.reverse, h.occurrences)
+```
+
+SMEMs of reads, from an FM-index built once (or loaded with `FMIndex.load`):
+
+```mojo
+from sporos.fmindex import FMIndex
+
+    var fm = FMIndex.build(refs, genome.names, threads=4)  # fm.save("ref.sfm") to keep it
+    var found = fm.smems(spans, min_len=19, max_hits=20)
+    for i in range(found.offsets[0], found.offsets[1]):  # read 0's SMEMs
+        var smem = found.smems[i]
+        print(smem.start, smem.end, smem.count)
+        for h in found.hits_of(i):  # reference text offset, strand
+            print(h.ref_pos, h.reverse)
 ```
 
 Related calls:
@@ -348,6 +373,12 @@ Competitor rows come from that suite; sporos rows are from the current code.
 | hg38 vs CHM13 chr1, L=50 | **23.3 s / 4.4 s** | 87.5 s |
 | hg38 vs chimp chr21, L=50 | **0.81 s / 0.24 s** | 14.6 s |
 
+| SMEMs vs hg38 chr21, L=19 (1 thread) | sporos (1 / 10 threads) | minibwa `fastmap -b 64` | `bwa fastmap` |
+|---|---|---|---|
+| 1 M simulated 150 bp reads | **1.92 s / 0.45 s** | 8.85 s | 27.3 s |
+| 4 K simulated 10 kb reads | **0.37 s / 0.13 s** | 2.11 s | 6.44 s |
+| index build (1 / 10 threads) | 6.95 s / **2.88 s** (217 MB) | 3.61 s on 10 threads (106 MB) | 33.5 s (one thread) |
+
 | Seeds, CHM13 chr1, ns/bp (forward / canonical) | sporos | simd-minimizers 3.0 | minimap2 `mm_sketch` |
 |---|---|---|---|
 | minimizers k=21 w=11, 1 thread | **1.18 / 1.11** | 1.81 / 2.17 | — / 17.1 |
@@ -364,6 +395,11 @@ Competitor rows come from that suite; sporos rows are from the current code.
   - `sporos minimizers -k 21 -w 11` on CHM13 chr1 (41 M lines): 0.94 s on one thread, 0.26 s on ten;
   - `sporos seeds` on 1 M reads (27 M hit lines, index build included): 2.4 s on one thread, 0.61 s on ten.
 - **Peak memory** for MEMs on chr1 is 1.2 GB at L=100 and 2.4–2.6 GB at L=50; copMEM2 `-mf` uses 1.7 GB.
+- **SMEMs:**
+  - minibwa and `bwa fastmap` run on one thread. sporos loads its saved index in 0.06 s.
+  - sporos peaks at 434 MB on 1 M reads (minibwa: 149 MB), as it reads the whole query file at once.
+  - Its SMEMs equal minibwa's except where minibwa matches through reference `N`s: 116 of minibwa's 1.22 M
+    SMEMs on the short reads (3 of sporos's differ in turn), and 43 on the long reads.
 
 **Caveats:**
 - With 10 threads, sporos returns one merged list of positions, while simd-minimizers' harness only counts
@@ -412,9 +448,41 @@ Competitor rows come from that suite; sporos rows are from the current code.
 
 </details>
 
+<details>
+<summary><b>SMEMs: the FM-index engine</b></summary>
+
+- **Index** (`sporos/fmindex.mojo`).
+  - The BWT of the reference's ACGT runs and their reverse complements, each run ended by a separator, so
+    a pattern's interval comes with its reverse complement's (an FMD-index, as in BWA and minibwa) and no
+    match crosses a sequence end or an `N`.
+  - The suffix array is built by libsais (parallel). The BWT is stored in minibwa's 64-byte blocks of 128
+    rows: four cumulative counts and 128 two-bit symbols. Separators are stored as A and listed apart, and
+    a flag bit marks the few blocks that hold one.
+  - Ranks count all four bases with three popcounts per word, branch-free; a backward step counts only its
+    base and the bases below it.
+  - The index file also holds a two-bit copy of the reference, 40-bit suffix array samples, and the
+    interval of every k-mer (k up to 12, growing with the reference). Loading reads it in parallel into
+    huge pages.
+- **Search.**
+  - Gagie's SMEM algorithm, as in minibwa and ropebwt3: from each start, a backward search over `L`
+    bases, a forward extension, then a backward pass from the match end to find the next start.
+  - The first k bases of each backward search come from the k-mer cache in one lookup.
+  - Once a match is unique, sporos locates its one occurrence (needed for the output anyway) and extends
+    it by comparing 32 bases at a time against the reference, in both directions. Most of a read's bases
+    lie in such unique stretches, which FM-index tools otherwise walk one base at a time.
+  - 16 reads are searched together, their steps interleaved round-robin with each step prefetching the
+    block the next one reads; hits of repeated SMEMs are located in batches the same way.
+- **The MEM engine** gives the same SMEMs from `find_mems` on both strands: the SMEMs are the MEM query
+  intervals that no other one contains. It needs no index, so it suits one long query such as a genome.
+
+</details>
+
 ## Limits
 
 - Each sequence, and the concatenated reference, must be shorter than 2^32 bases.
+- Building an FM-index takes about 10 bytes of memory per reference base, or 18 past 2^30 bases (libsais
+  needs 64-bit suffix arrays there). The index takes 3.8 bytes per base at the default sampling up to 2^29
+  bases, 2.5 up to 2^31 and 1.9 beyond, plus its k-mer cache (67 MB for chr21, 268 MB at most).
 - MEMs and MUMs can be any length up to that. The minimum length `L` can be any value of at least 1.
 - Minimizer and syncmer k-mers are at most 64 bases, and seed-index k-mers at most 32.
 - Open-syncmer offsets must be below 64.

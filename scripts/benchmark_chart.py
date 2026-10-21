@@ -28,6 +28,12 @@ PANELS = [
         " s",
     ),
     (
+        "SMEMs of 1 M 150 bp reads against hg38 chr21, L = 19",
+        "1 thread, wall time in seconds (index built beforehand)",
+        [("sporos", 1.92), ("minibwa", 8.85), ("bwa fastmap", 27.3)],
+        " s",
+    ),
+    (
         "Canonical minimizers, CHM13 chr1, k = 21, w = 11",
         "1 thread, nanoseconds per base",
         [("sporos", 1.11), ("simd-minimizers", 2.17), ("minimap2", 17.1)],
@@ -104,7 +110,7 @@ def render(theme):
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{height}" viewBox="0 0 {WIDTH} {height}" '
         f'role="img" aria-label="sporos benchmark results: sporos is fastest in every panel">'
-        f"<title>sporos against copMEM2, MUMmer4, simd-minimizers and minimap2</title>"
+        f"<title>sporos against copMEM2, MUMmer4, minibwa, BWA, simd-minimizers and minimap2</title>"
         f"<style>{style}</style>" + "".join(parts) + "</svg>\n"
     )
 
