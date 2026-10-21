@@ -78,6 +78,34 @@ struct SeqText(Movable, Sized):
         prefetch[ahead](self.masks.unsafe_ptr().unsafe_offset(w))
         prefetch[ahead](self.masks.unsafe_ptr().unsafe_offset(w + 3))
 
+    @inline(.always)
+    def prefetch_words(self, i: Int):
+        """Prefetches only the words (no masks) of `prefetch`."""
+        comptime ahead = PrefetchOptions().for_read().high_locality()
+        var w = (i - 32 + _PAD_WORDS * _BASES) >> 5
+        prefetch[ahead](self.words.unsafe_ptr().unsafe_offset(w))
+        prefetch[ahead](self.words.unsafe_ptr().unsafe_offset(w + 3))
+
+    def masked_runs(self) -> List[Int]:
+        """The masked runs of the text, as `[start0, end0, start1, end1, ...]`
+        in increasing order (non-ACGT bases and separators)."""
+        var runs = List[Int]()
+        var n = self._len
+        var i = 0
+        while i < n:
+            var m = self.mask(i)
+            if m != 0:
+                for b in range(min(32, n - i)):
+                    if (m >> UInt64(2 * b)) & 3 != 0:
+                        var p = i + b
+                        if len(runs) > 0 and runs[len(runs) - 1] == p:
+                            runs[len(runs) - 1] = p + 1
+                        else:
+                            runs.append(p)
+                            runs.append(p + 1)
+            i += 32
+        return runs^
+
     def sequence_of(self, offset: Int) -> Int:
         """Index of the sequence containing text offset `offset`."""
         var lo = 0

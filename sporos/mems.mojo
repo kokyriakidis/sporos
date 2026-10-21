@@ -128,6 +128,38 @@ def match_backward(a: SeqText, i: Int, b: SeqText, j: Int, limit: Int) -> Int:
     return n
 
 
+@inline(.always)
+def _ref_forward(reference: SeqText, i: Int, query: SeqText, j: Int, stop: Int) -> Int:
+    """`match_forward` from reference `i`, whose unmasked stretch ends at
+    `stop`: reference masks are replaced by that bound."""
+    var n = 0
+    while True:
+        var d = (reference.window(i + n) ^ query.window(j + n)) | query.mask(j + n)
+        if d != 0:
+            return min(n + Int(count_trailing_zeros(d) >> 1), stop - i)
+        n += 32
+        if i + n >= stop:
+            return stop - i
+
+
+@inline(.always)
+def _ref_backward(reference: SeqText, i: Int, query: SeqText, j: Int, limit: Int, start: Int) -> Int:
+    """`match_backward` to reference `i`, whose unmasked stretch starts at
+    `start`."""
+    var n = 0
+    while n < limit and i - n > start:
+        var at = i - n - 32
+        var bt = j - n - 32
+        var d = (reference.window(at) ^ query.window(bt)) | query.mask(bt)
+        if d != 0:
+            return min(n + Int(count_leading_zeros(d) >> 1), i - start)
+        n += 32
+    return min(n, i - start)
+
+
+comptime _BLOCK_BITS = 16
+
+
 comptime _AHEAD = PrefetchOptions().for_read().high_locality()
 comptime _BUILD_CHUNK = 1 << 20
 """Reference positions per anchor-collection task."""
@@ -206,6 +238,14 @@ struct MemIndex(Movable):
 
     var params: MemParams
     var table: HashTable
+    var runs: List[Int]
+    """The reference's masked runs (`SeqText.masked_runs`): extensions clamp
+    to the unmasked stretch around an anchor instead of reading masks."""
+    var length: Int
+    var block_lo: List[Int]
+    """Per 2^_BLOCK_BITS bases: the unmasked stretch holding the block
+    (`block_lo`, `block_hi`), or `block_lo = -1` if masked bases split it."""
+    var block_hi: List[Int]
 
     def __init__(out self, reference: SeqText, params: MemParams, threads: Int = 1) raises:
         params.validate()
@@ -216,6 +256,46 @@ struct MemIndex(Movable):
             Pointer(to=reference).unsafe_origin_cast[ImmUntrackedOrigin](), params.k, params.ref_step
         )
         self.table = HashTable(source, threads, bucket_load=_BUCKET_LOAD)
+        self.runs = reference.masked_runs()
+        self.length = len(reference)
+        var blocks = (self.length >> _BLOCK_BITS) + 1
+        self.block_lo = List[Int](length=blocks, fill=-1)
+        self.block_hi = List[Int](length=blocks, fill=-1)
+        for b in range(blocks):
+            var first = b << _BLOCK_BITS
+            var last = min(self.length, first + (1 << _BLOCK_BITS)) - 1
+            if first > last:
+                continue
+            var stretch = self._search(first)
+            if stretch[0] <= first and stretch[1] > last:
+                self.block_lo[b] = stretch[0]
+                self.block_hi[b] = stretch[1]
+
+    @inline(.always)
+    def _unmasked(self, r: Int) -> Tuple[Int, Int]:
+        """The unmasked stretch `[lo, hi)` of the reference around `r`
+        (unmasked)."""
+        var b = r >> _BLOCK_BITS
+        var lo = self.block_lo[b]
+        if lo >= 0:
+            return (lo, self.block_hi[b])
+        return self._search(r)
+
+    def _search(self, r: Int) -> Tuple[Int, Int]:
+        """`_unmasked` by binary search over the masked runs. For a masked
+        `r`, a stretch that does not hold it."""
+        var count = len(self.runs) // 2
+        var a = 0
+        var b = count
+        while a < b:
+            var mid = (a + b) // 2
+            if self.runs[2 * mid] > r:
+                b = mid
+            else:
+                a = mid + 1
+        var hi = self.runs[2 * a] if a < count else self.length
+        var lo = self.runs[2 * a - 1] if a > 0 else 0
+        return (lo, hi)
 
     def find(
         self,
@@ -313,7 +393,7 @@ struct MemIndex(Movable):
             if (entry ^ fp) >> 32 != 0:
                 continue
             var r = Int(entry & 0xFFFFFFFF)
-            reference.prefetch(r)
+            reference.prefetch_words(r)
             if cands.head - cands.tail == _CANDS:
                 self._extend(cands, reference, query, out)
             cands.push(j, r)
@@ -331,10 +411,11 @@ struct MemIndex(Movable):
         # Anchors of one MEM sit `period` apart on its diagonal, so this
         # anchor is the MEM's first iff the match does not reach `period`
         # bases to the left: stop looking there.
-        var left = match_backward(reference, r, query, j, period)
+        var stretch = self._unmasked(r)
+        var left = _ref_backward(reference, r, query, j, period, stretch[0])
         if left >= period:
             return
-        var right = match_forward(reference, r, query, j)
+        var right = _ref_forward(reference, r, query, j, stretch[1])
         if right < k or left + right < self.params.min_len:
             return
         out.append(Mem(UInt32(r - left), UInt32(j - left), UInt32(left + right)))
