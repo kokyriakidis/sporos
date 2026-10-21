@@ -336,10 +336,22 @@ sporos.minimizers(seq, k=21, w=11)                       # array('I') of positio
 sporos.syncmers(seq, k=20, s=16, open_offset=2)          # open_offset: None (closed), an int, or a list
 index = sporos.Index([ref1, ref2], min_len=50, threads=8)
 index.matches(query, mode="mum", reverse=False)          # [(ref_index, ref_pos, query_pos, length), ...]
+index.matches(query, mode="maxmatch", max_occurrences=10)  # frequency-capped MEMs
+
+fm = sporos.FMIndex([ref1, ref2], names=["chr1", "chr2"], threads=8)  # or sporos.FMIndex.load("ref.sfm")
+fm.smems(reads, min_len=19, max_hits=20)                 # per read: [(start, end, count, hits), ...]
+fm.smems(reads, min_len=19, min_occurrences=2)           # f-SMEMs; hits are (ref_index, ref_pos, reverse)
+fm.save("ref.sfm")
+
+seeds = sporos.SeedIndex([ref1, ref2], k=19, w=12, scheme="minimizers")  # or "syncmers", "kmers"
+seeds.lookup(reads, max_occurrences=seeds.occurrence_cutoff(0.9998))
+# per read: [(query_pos, ref_index, ref_pos, occurrences, reverse), ...]
 ```
 
-The modes are `"maxmatch"`, `"mum"` and `"mumreference"`. Sequences can be `str` or `bytes`. Invalid
-arguments raise `ValueError` or `TypeError`.
+- The modes are `"maxmatch"`, `"mum"` and `"mumreference"`; `max_occurrences` and `min_occurrences` mean
+  what they mean in Mojo.
+- Sequences can be `str` or `bytes`, and calls taking many (`smems`, `lookup`) take a list of them.
+- Invalid arguments raise `ValueError` or `TypeError`.
 
 </details>
 
@@ -356,15 +368,25 @@ int64_t n = sporos_minimizers(seq, len, 21, 11, /*canonical*/ 1, /*threads*/ 1, 
 const uint8_t *refs[] = {ref};
 int64_t lens[] = {ref_len};
 sporos_index *index = sporos_index_new(refs, lens, 1, /*min_len*/ 50, /*threads, 0 = all cores*/ 0);
-sporos_matches *mums = sporos_index_matches(index, query, query_len, SPOROS_MUM, /*reverse*/ 0, 0);
+sporos_matches *mums = sporos_index_matches(index, query, query_len, SPOROS_MUM, /*reverse*/ 0,
+                                            /*max_occurrences*/ 0, /*min_occurrences*/ 1, /*threads*/ 0);
 const sporos_match *m = sporos_matches_data(mums);  // ref_seq, ref_pos, query_pos, length
 for (int64_t i = 0; i < sporos_matches_count(mums); i++) { /* ... */ }
 sporos_matches_free(mums);
 sporos_index_free(index);
+
+sporos_fm_index *fm = sporos_fm_index_new(refs, lens, /*names, NULL = seq0...*/ NULL, 1, 0);  // or _load(path)
+sporos_smems *smems = sporos_fm_index_smems(fm, reads, read_lens, n_reads, /*min_len*/ 19, /*max_hits*/ 20,
+                                            /*min_occurrences*/ 1, /*max_occurrences*/ 0, 0);
+const sporos_smem *s = sporos_smems_data(smems, /*read*/ 0);  // start, end, count, first_hit, hit_count
+const sporos_smem_hit *hits = sporos_smems_hits(smems);       // ref_seq, ref_pos, reverse
+sporos_smems_free(smems);
+sporos_fm_index_free(fm);
 ```
 
 - The API also has `sporos_syncmers` (closed, or open at one offset) and `sporos_syncmers_open` (open at a set
-  of offsets).
+  of offsets), `sporos_fm_index_save`/`_load`/`_name`, and the seed index: `sporos_seed_index_new`,
+  `sporos_seed_index_lookup` (hits per read) and `sporos_seed_index_occurrence_cutoff`.
 - Invalid arguments return `SPOROS_INVALID_ARGUMENT` or `NULL`.
 - The full API is in [`c/sporos.h`](c/sporos.h).
 
