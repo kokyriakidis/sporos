@@ -2,6 +2,8 @@
 
 # sporos
 
+*σπόρος (spóros), Greek for "seed", from σπείρω (speírō), "to sow"; the root of* spore *and* sperm.
+
 **Fast, exact DNA seeding in [Mojo](https://mojolang.org)**<br>
 minimizers · syncmers · seed indexes · MEMs · SMEMs · MUMs
 
