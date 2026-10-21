@@ -5,6 +5,7 @@
 **Fast, exact DNA seeding in [Mojo](https://mojolang.org)**<br>
 minimizers · syncmers · seed indexes · maximal exact matches · maximal unique matches
 
+[![CI](https://github.com/kokyriakidis/sporos/actions/workflows/ci.yml/badge.svg)](https://github.com/kokyriakidis/sporos/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2a78d6)](LICENSE)
 [![Mojo nightly](https://img.shields.io/badge/Mojo-nightly-eb6834)](https://mojolang.org)
 [![Platforms](https://img.shields.io/badge/platforms-Linux%20%C2%B7%20macOS%20arm64-52514e)](#install)
@@ -86,8 +87,8 @@ pixi run test             # optional: checks every kernel against its brute-forc
 
 | Platform | Status |
 |---|---|
-| Linux x86-64 | tested (AVX-512, and 8-lane AVX2-width builds) |
-| macOS arm64 (Apple silicon) | tested |
+| Linux x86-64 | tested in CI on every push (AVX2), and on AVX-512 hardware |
+| macOS arm64 (Apple silicon) | tested in CI on every push |
 | Linux arm64 | configured, untested |
 
 The C and Python builds are self-contained folders that run without pixi or Mojo.
