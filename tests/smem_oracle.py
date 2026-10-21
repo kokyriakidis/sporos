@@ -45,8 +45,19 @@ class Reference:
                 self.runs.append((name, off, run))
         self.text = "#" + "#".join(r[2] for r in self.runs) + "#"
 
-    def occurs(self, sub):
-        return sub in self.text or revcomp(sub) in self.text
+    def occurs(self, sub, at_least=1):
+        if at_least == 1:
+            return sub in self.text or revcomp(sub) in self.text
+        return self.count(sub) >= at_least
+
+    def count(self, sub):
+        n = 0
+        for pattern in (sub, revcomp(sub)):
+            at = self.text.find(pattern)
+            while at >= 0:
+                n += 1
+                at = self.text.find(pattern, at + 1)
+        return n
 
     def hits(self, sub):
         out = []
@@ -59,14 +70,15 @@ class Reference:
         return out
 
 
-def oracle(ref, query, min_len):
+def oracle(ref, query, min_len, at_least=1):
+    """SMEMs, or with `at_least` f > 1 f-SMEMs: maximal intervals occurring at least f times."""
     q = query.upper().replace("U", "T")
     n = len(q)
     ends = [0] * n
     e = 0
     for s in range(n):
         e = max(e, s)
-        while e < n and ref.occurs(q[s : e + 1]):
+        while e < n and ref.occurs(q[s : e + 1], at_least):
             e += 1
         ends[s] = e
     smems = []
@@ -191,6 +203,34 @@ def main():
                     print(f"        expected {expected[name]}")
                 else:
                     print(f"  ok    case {case} L={min_len} {label}: {total} SMEMs")
+        # f-SMEMs (-s f: at least f occurrences) and capped SMEMs (--max-occ N: at most N).
+        for min_len in (1, 5, 19, 33):
+            for at_least, at_most in ((2, 0), (3, 0), (8, 0), (1, 5), (2, 10), (1, 1)):
+                expected = {}
+                for name, r in named:
+                    rows = []
+                    for s, e in oracle(ref, r, min_len, at_least):
+                        h = ref.hits(r.upper().replace("U", "T")[s:e])
+                        if at_most == 0 or len(h) <= at_most:
+                            rows.append((s, e, len(h), tuple(sorted(h))))
+                    expected[name] = rows
+                for label, args in (("fm", [ref_path]), (f"index {indexes[0].rsplit('_', 1)[1]}", [indexes[0]])):
+                    cmd = [sporos, "smem", "-l", str(min_len), "-w", "100000000", "-t", "3", "-s", str(at_least)]
+                    if at_most:
+                        cmd += ["--max-occ", str(at_most)]
+                    out = subprocess.run(cmd + args + [reads_path], check=True, capture_output=True, text=True).stdout
+                    got = parse(out)
+                    bad = [name for name, _ in named if got.get(name, []) != expected[name]]
+                    total = sum(len(v) for v in expected.values())
+                    what = f"case {case} L={min_len} -s {at_least} --max-occ {at_most} {label}"
+                    if bad:
+                        failures += 1
+                        name = bad[0]
+                        print(f"  FAIL  {what}: {len(bad)} reads differ, e.g. {name}")
+                        print(f"        got      {got.get(name)}")
+                        print(f"        expected {expected[name]}")
+                    else:
+                        print(f"  ok    {what}: {total} SMEMs")
     if failures:
         print(f"smem_oracle: {failures} check(s) failed")
         sys.exit(1)

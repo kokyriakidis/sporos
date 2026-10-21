@@ -700,11 +700,23 @@ struct FMIndex(Movable):
 
     def smems[
         mut: Bool, //, origin: Origin[mut=mut]
-    ](self, queries: List[Span[UInt8, origin]], min_len: Int, max_hits: Int = 20) -> ReadSmems:
+    ](
+        self,
+        queries: List[Span[UInt8, origin]],
+        min_len: Int,
+        max_hits: Int = 20,
+        min_occurrences: Int = 1,
+        max_occurrences: Int = 0,
+    ) -> ReadSmems:
         """The SMEMs of length >= `min_len` of each query against the
         reference, both strands: query intervals of maximal exact matches
         not contained in another's. Hits are listed for SMEMs with at most
-        `max_hits` of them."""
+        `max_hits` of them.
+
+        With `min_occurrences` f > 1 they are f-SMEMs (Gagie's f-MEMs,
+        minibwa's `-s`): the maximal query intervals that occur at least f
+        times. `max_occurrences` (0: no limit) drops those occurring more
+        often, as Mumemto's `-F` caps matches."""
         var bounds = List[Int](capacity=len(queries) + 1)
         bounds.append(0)
         for q in queries:
@@ -712,14 +724,29 @@ struct FMIndex(Movable):
         var codes = List[UInt8](unsafe_uninit_length=bounds[len(bounds) - 1] + 32)
         for i in range(len(queries)):
             encode_bases(queries[i], codes.unsafe_ptr().unsafe_offset(bounds[i]))
-        return self.find_smems(codes, bounds, min_len, max_hits)
+        return self.find_smems(codes, bounds, min_len, max_hits, min_occurrences, max_occurrences)
 
-    def find_smems(self, codes: List[UInt8], bounds: List[Int], min_len: Int, max_hits: Int) -> ReadSmems:
+    def find_smems(
+        self,
+        codes: List[UInt8],
+        bounds: List[Int],
+        min_len: Int,
+        max_hits: Int,
+        min_occurrences: Int = 1,
+        max_occurrences: Int = 0,
+    ) -> ReadSmems:
         """`smems` on queries already encoded with `encode_bases`: query `q`
         is `codes[bounds[q] : bounds[q + 1]]`, and `codes` holds 32 more
         bytes (of any value) after the last query."""
         var found = List[_Found]()
-        self._search(codes.unsafe_ptr(), bounds, max(min_len, 1), max_hits >= 1, found)
+        self._search(codes.unsafe_ptr(), bounds, max(min_len, 1), max(min_occurrences, 1), max_hits >= 1, found)
+        if max_occurrences > 0:
+            var kept = 0
+            for i in range(len(found)):
+                if found[i].size <= max_occurrences:
+                    found[kept] = found[i]
+                    kept += 1
+            found.resize(unsafe_uninit_length=kept)
         var nq = len(bounds) - 1
         var result = ReadSmems()
         # Each query's SMEMs come out in increasing start; group them by query.
@@ -755,7 +782,13 @@ struct FMIndex(Movable):
         return result^
 
     def _search(
-        self, codes: ImmPointer[UInt8, _], bounds: List[Int], min_len: Int, locate: Bool, mut found: List[_Found]
+        self,
+        codes: ImmPointer[UInt8, _],
+        bounds: List[Int],
+        min_len: Int,
+        min_occ: Int,
+        locate: Bool,
+        mut found: List[_Found],
     ):
         """Runs the searches of every query, `_BATCH` at a time round-robin.
         With `locate`, unique matches are located as soon as they are found
@@ -770,7 +803,7 @@ struct FMIndex(Movable):
         while len(active) > 0:
             if j >= len(active):
                 j = 0
-            if self._step(active.unsafe_ptr()[unsafe_offset=j], codes, min_len, locate, found):
+            if self._step(active.unsafe_ptr()[unsafe_offset=j], codes, min_len, min_occ, locate, found):
                 if next < nq:
                     active[j] = _Search.start(next, bounds)
                     next += 1
@@ -782,7 +815,13 @@ struct FMIndex(Movable):
 
     @inline(.always)
     def _step(
-        self, mut s: _Search, codes: ImmPointer[UInt8, _], min_len: Int, locate: Bool, mut found: List[_Found]
+        self,
+        mut s: _Search,
+        codes: ImmPointer[UInt8, _],
+        min_len: Int,
+        min_occ: Int,
+        locate: Bool,
+        mut found: List[_Found],
     ) -> Bool:
         """One step of a search; True once the query is done."""
         var q = codes.unsafe_offset(s.begin)
@@ -801,7 +840,7 @@ struct FMIndex(Movable):
             var c = Int(q[unsafe_offset=s.i])
             if c < 4:
                 var ok = self.forward(s.p, c)
-                if ok.size > 0:
+                if ok.size >= min_occ:
                     s.p = ok
                     s.i += 1
                     self._prefetch_interval(ok.rc, ok.size)
@@ -878,8 +917,8 @@ struct FMIndex(Movable):
             self._next_start(s, q)
             return False
         if s.stage == _BACK_FIRST or s.stage == _BACK_SECOND:
-            if s.p.size == 0:
-                # The base at i + 1 does not occur at all.
+            if s.p.size < min_occ:
+                # The base at i + 1 occurs too rarely.
                 s.x = s.i + 2
                 s.stage = _SETUP
                 return False
@@ -903,7 +942,7 @@ struct FMIndex(Movable):
                     s.stage = _SETUP
                 return False
             var ok = self.backward(s.p, Int(q[unsafe_offset=s.i]))
-            if ok.size == 0:
+            if ok.size < min_occ:
                 s.x = s.i + 1
                 s.stage = _SETUP
             else:
@@ -913,8 +952,8 @@ struct FMIndex(Movable):
             return False
         if s.stage == _CACHE_FIRST or s.stage == _CACHE_SECOND:
             s.p = self._cached(s.key)
-            if s.p.size == 0:
-                # The k-mer does not occur: back off to base-by-base search,
+            if s.p.size < min_occ:
+                # The k-mer occurs too rarely: back off to base-by-base search,
                 # which finds where it fails.
                 s.i += self.cache_k
                 s.p = self.base_interval(Int(q[unsafe_offset=s.i]))

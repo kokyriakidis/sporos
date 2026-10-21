@@ -28,6 +28,8 @@ a command-line tool, a C library and a Python package.
   - MEMs between hg38 and CHM13 chr1 run 2.0–2.4x faster than copMEM2 on one thread and 10–14x faster with
     10 threads.
   - MUMs run 4–20x faster than MUMmer.
+  - Frequency-capped MEMs and MUMs (Mumemto's `-f`/`-F`) between two genomes in 1 s where Mumemto takes 170 s;
+    f-SMEMs (at least f occurrences) 2.2x faster than minibwa's `-s`.
   - SMEMs of reads run 4.8x faster than minibwa and 15x faster than `bwa fastmap` on one thread, from an
     FM-index that builds faster than minibwa's.
 - 🎯 **Exact.**
@@ -71,6 +73,8 @@ build/sporos seeds -k 19 -w 12 --keep 0.9998 ref.fa reads.fq.gz
 | **MEMs** | Every maximal exact match of length ≥ L between a query sequence and the reference (MUMmer's `-maxmatch`). Matches can be any length, up to whole sequences. |
 | **SMEMs** | Supermaximal exact matches, as in BWA: query intervals of MEMs (on either strand) that no other MEM's query interval contains, each with every reference position where it matches. The seeds BWA-MEM, `bwa fastmap` and minibwa start from. |
 | **MUMs** | MEMs whose string occurs exactly once in the reference and once in the query sequence (MUMmer's `-mum`). `-mumreference` requires uniqueness in the reference only. |
+| **Frequency-capped MEMs** | MEMs whose string occurs at most N times in the reference (and, with `-mum`, at most N times in the query sequence), and optionally at least M times: MUMs relaxed to rare repeats, as Mumemto's `-f`/`-F` cap multi-MEMs. `--max-occ 1` gives the MUMs. |
+| **f-SMEMs** | The maximal query intervals that occur at least f times in the reference (both strands): Gagie's f-MEMs, MONI-k's k-MEMs, minibwa's `-s`, ropebwt3's `-c`. With f = 1 they are the SMEMs; `--max-occ N` drops those occurring more than N times. |
 
 > [!NOTE]
 > MEMs and MUMs are **pairwise**, as in MUMmer. The reference can hold many sequences, indexed together, and
@@ -175,6 +179,8 @@ sporos mem [-mum | -mumreference | -maxmatch] [-l L] [-b | -r] [-F] [-n] [-t thr
 |---|---|
 | `-maxmatch`, `-mum`, `-mumreference` | all MEMs, MUMs, or MEMs unique in the reference (the default, as in MUMmer) |
 | `-l L` | minimum match length (any L ≥ 1, default 20); matches themselves have no upper length limit |
+| `--max-occ N` | keep MEMs whose string occurs at most N times in the reference (with `-mum`, also at most N times in the query sequence); with `-maxmatch` it acts like `-mumreference --max-occ N` |
+| `--min-occ M` | keep MEMs whose string occurs at least M times in the reference |
 | `-b`, `-r` | both strands, or the reverse complement only (default: forward) |
 | `-F` | four-column output, reference name first (always on with several reference sequences) |
 | `-n` | accepted for MUMmer compatibility; non-ACGT bases never match anyway |
@@ -197,6 +203,8 @@ sporos smem [-l L] [-w W] [--engine fm|mem] [-t threads] [-v] <reference.fa | in
 |---|---|
 | `-l L` | minimum SMEM length (default 17, as in `bwa fastmap`) |
 | `-w W` | print positions only for SMEMs with at most `W` hits, else `*` (default 20) |
+| `-s f` | f-SMEMs: maximal query intervals occurring at least f times (default 1: SMEMs); FM engine |
+| `--max-occ N` | drop SMEMs occurring more than N times; FM engine |
 | `--engine` | `fm`: the FM-index (default for reads); `mem`: the MEM engine (default for one query sequence) |
 | `-s` | `index`: a suffix array sample every 2^s rows (default 2 up to 2^29 bases, 3 up to 2^31, then 4); smaller is faster, larger is smaller |
 
@@ -293,6 +301,8 @@ Related calls:
 - `syncmers_batch` is the batch counterpart for syncmers.
 - `SeedIndex.lookup` probes a single read.
 - `filter_mums(..., unique_in_query=False)` gives `-mumreference`.
+- `filter_by_occurrences(mems, qtext, max_in_reference, max_in_query, min_in_reference)` gives the
+  frequency-capped MEMs; `FMIndex.smems(..., min_occurrences=f, max_occurrences=n)` the f-SMEMs.
 
 The docstrings in [`sporos/`](sporos) describe every parameter and its limits.
 
@@ -381,6 +391,17 @@ Competitor rows come from that suite; sporos rows are from the current code.
 | 4 K simulated 10 kb reads | **0.36 s / 0.13 s** | 2.11 s | 6.44 s |
 | index build (1 / 10 threads) | 4.57 s / **2.39 s** (217 MB) | 3.61 s on 10 threads (106 MB) | 33.5 s (one thread) |
 
+| f-SMEMs, 1 M reads vs chr21, L=19 | sporos `-s f` (1 / 10 threads) | minibwa `fastmap -s f` | ropebwt3 `mem -c f` (1 thread) |
+|---|---|---|---|
+| f = 2 | **7.9 s / 1.2 s** | 17.6 s | 246 s |
+| f = 5 | **7.6 s / 1.2 s** | 17.5 s | 216 s |
+
+| Frequency-capped matches, L=50, both strands | sporos `mem --max-occ N -b` (1 / 10 threads) | Mumemto `-k 2 -f N` / `-f 0 -F N` |
+|---|---|---|
+| E. coli K-12 vs O157, N = 3 or 10 | **0.10 s / 0.06 s** (63 MB) | 13.3-13.5 s (356 MB) |
+| hg38 vs chimp chr21, N = 3 or 10 | **0.95-1.03 s / 0.29-0.33 s** (263 MB) | 169-171 s (3.2 GB) |
+| hg38 vs CHM13 chr1, N = 10, forward strand (`-mum` / `-mumreference`) | **25.8 s / 5.1 s**, **20.8 s / 3.6 s** | did not finish its plain multi-MUMs in 300 s |
+
 | Seeds, CHM13 chr1, ns/bp (forward / canonical) | sporos | simd-minimizers 3.0 | minimap2 `mm_sketch` |
 |---|---|---|---|
 | minimizers k=21 w=11, 1 thread | **1.05 / 1.05** | 1.79 / 2.13 | — / 17.1 |
@@ -408,6 +429,11 @@ Competitor rows come from that suite; sporos rows are from the current code.
     SMEMs on the short reads (3 of sporos's differ in turn), and 43 on the long reads.
 
 **Caveats:**
+- Mumemto caps matches across the whole collection (every copy, both strands, in one output line); sporos
+  caps each MEM's string in the reference and the query, MUMmer-style, one line per position pair. The two
+  sets differ by definition; the timings compare the closest equivalent tasks on the same inputs. minibwa's f-SMEMs
+  differ from sporos's only where minibwa counts copies through reference `N`s (it fills them with random
+  bases), as for plain SMEMs.
 - With 10 threads, sporos returns one merged list of positions, while simd-minimizers' harness only counts
   each thread's positions.
 - MUMmer 4.0.1 and copMEM2 gain nothing from threads on a single query record.
@@ -442,6 +468,10 @@ Competitor rows come from that suite; sporos rows are from the current code.
 - **MUMs.** A MEM is a MUM unless another MEM of the same query contains it in reference or query
   coordinates. Both checks are linear sweeps, parallelized by blocks, after a parallel radix sort by
   reference start.
+- **Frequency-capped MEMs.** A MEM's string occurs in the reference once per MEM whose query interval
+  contains its own (in the query, once per MEM whose reference interval does), so the same sweeps count
+  containers instead of marking them, keeping only the N largest ends seen: no suffix array, LCP or
+  document array as in Mumemto.
 - **Seed index** (`sporos/index.mojo`).
   - Canonical k-mers are hashed by a bijection on 2k bits. Bucket and fingerprint therefore identify a k-mer
     exactly whenever their bits suffice; otherwise candidates are checked against the text.
@@ -502,7 +532,8 @@ Competitor rows come from that suite; sporos rows are from the current code.
 | `pixi run test` | builds and runs the Mojo test suites (oracles in `tests/reference.mojo`) |
 | `pixi run test-c`, `pixi run test-python` | builds the bindings and checks them against the library's outputs |
 | `pixi run test-cli` | checks every command across thread counts, gzip and piped input, and known answers |
-| `pixi run test-smem-oracle` | checks `sporos smem` against SMEMs found by plain string search on adversarial inputs |
+| `pixi run test-smem-oracle` | checks `sporos smem` (SMEMs, f-SMEMs, caps) against plain string search on adversarial inputs |
+| `pixi run test-mem-oracle` | checks `sporos mem --max-occ` / `--min-occ` against brute force on repeats of several copy numbers |
 | `pixi run bench-seeds`, `bench-reads`, `bench-index` | measures seed kernel, read batch and seed-index throughput |
 | `pixi run format` | formats the sources (120 columns) |
 | `python3 scripts/benchmark_chart.py` | redraws the chart above from its numbers |

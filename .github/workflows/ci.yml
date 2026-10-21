@@ -50,6 +50,9 @@ jobs:
       - name: SMEMs against their definition (plain string search)
         run: pixi run test-smem-oracle
 
+      - name: Frequency-capped MEMs against brute force
+        run: pixi run test-mem-oracle
+
       - name: C API
         run: pixi run test-c
 

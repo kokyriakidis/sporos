@@ -96,6 +96,13 @@ for len in 15 30; do
     "$sporos" index -t 2 ref.fa saved.sfm
     check "smem -l $len, reads: saved index = built" "$fm" "$(digest "$sporos" smem -l $len -t 2 saved.sfm reads.fq)"
 done
+# Occurrence limits: thread counts agree, and a cap of 1 is the MUM filter.
+check "mem --max-occ 3: 4 threads = 1" "$(digest "$sporos" mem -maxmatch -b --max-occ 3 -l 20 -t 1 ref.fa reads.fq)" \
+    "$(digest "$sporos" mem -maxmatch -b --max-occ 3 -l 20 -t 4 ref.fa reads.fq)"
+check "mem -mumreference --max-occ 1 = -mumreference" "$(digest "$sporos" mem -mumreference --max-occ 1 -l 30 ref.fa query.fa)" \
+    "$(digest "$sporos" mem -mumreference -l 30 ref.fa query.fa)"
+check "smem -s 2: 4 threads = 1" "$(digest "$sporos" smem -s 2 -l 15 -t 1 ref.fa reads.fq)" "$(digest "$sporos" smem -s 2 -l 15 -t 4 ref.fa reads.fq)"
+if "$sporos" smem --engine mem -s 2 ref.fa query.fa >/dev/null 2>&1; then check "smem -s with the MEM engine is an error" 1 0; else check "smem -s with the MEM engine is an error" 1 1; fi
 # The planted pieces: ref1[1000:9000] forward at query 0, and ref2[5000:12000] reverse-complemented.
 check "smem finds the forward piece" "$("$sporos" smem -l 100 ref.fa query.fa | awk -F'\t' '$1 == "EM" && $2 == 0 {print $3, $4, $5}')" "8000 1 ref1:+1001"
 check "smem finds the reverse piece" "$("$sporos" smem -l 100 ref.fa query.fa | awk -F'\t' '$1 == "EM" && $2 == 8500 {print $3, $4, $5}')" "15500 1 ref2:-5001"

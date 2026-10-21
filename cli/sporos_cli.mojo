@@ -22,7 +22,7 @@ from sporos.batch import SeedBatch, minimizers_batch, syncmers_batch
 from sporos.fasta import FastaRecords, read_fasta
 from sporos.fmindex import FMIndex, encode_bases
 from sporos.index import ALL_KMERS, MINIMIZER_SEEDS, SYNCMER_SEEDS, SeedIndex
-from sporos.mems import Mem, MemIndex, MemParams, Smems, filter_mums, find_mems, find_smems
+from sporos.mems import Mem, MemIndex, MemParams, Smems, filter_by_occurrences, find_mems, find_smems
 from sporos.minimizers import minimizer_positions
 from sporos.output import OutputBuffer, _PAIRS, put_padded
 from sporos.parallel import ParallelTask, default_threads, parallel_for
@@ -33,9 +33,10 @@ from sporos.window import LANES
 comptime USAGE = """usage:
   sporos seeds -k K [-w W | --syncmers -s S [--open T[,T...]] | --all-kmers] [--query-kmers]
                [--max-occ N | --keep F] [-t threads] [-v] <reference.fa> <reads.fa>
-  sporos mem [-mum | -mumreference | -maxmatch] [-l L] [-b | -r] [-F] [-n] [-t threads] [-v]
-             [-K anchor_k] [-k1 ref_step] [-k2 query_step] <reference.fa> <query.fa>
-  sporos smem [-l L] [-w W] [--engine fm|mem] [-t threads] [-v] <reference.fa | index.sfm> <query.fa>
+  sporos mem [-mum | -mumreference | -maxmatch] [-l L] [--max-occ N] [--min-occ M] [-b | -r] [-F] [-n]
+             [-t threads] [-v] [-K anchor_k] [-k1 ref_step] [-k2 query_step] <reference.fa> <query.fa>
+  sporos smem [-l L] [-w W] [-s min_occ] [--max-occ N] [--engine fm|mem] [-t threads] [-v]
+              <reference.fa | index.sfm> <query.fa>
   sporos index [-s sample_bits] [-t threads] [-v] <reference.fa> [index.sfm]
   sporos minimizers -k K -w W [--forward] [--count] [-t threads] <seqs.fa>
   sporos syncmers -k K -s S [--open T[,T...]] [--forward] [--count] [-t threads] <seqs.fa>"""
@@ -62,6 +63,14 @@ def _seconds(start: Int) -> Float64:
     return Float64(perf_counter_ns() - start) / 1e9
 
 
+def _count_option(args: List[String], i: Int, name: String) raises -> Int:
+    """An occurrence count after `name`: at least 1."""
+    var value = Int(_value(args, i))
+    if value < 1:
+        raise Error(t"{name} takes a count of at least 1, not {value}")
+    return value
+
+
 def _threads(args: List[String], i: Int) raises -> Int:
     """The thread count after `-t`: at least 1."""
     var threads = Int(_value(args, i))
@@ -71,7 +80,9 @@ def _threads(args: List[String], i: Int) raises -> Int:
 
 
 def run_mem(args: List[String]) raises:
-    var mode = "mumreference"
+    var kind = "mumreference"
+    var max_occ = 0
+    var min_occ = 1
     var min_len = 20
     var forward = True
     var reverse = False
@@ -95,7 +106,13 @@ def run_mem(args: List[String]) raises:
             i += 1
             query_step = Int(_value(args, i))
         elif a == "-mum" or a == "-mumreference" or a == "-maxmatch":
-            mode = String(a.removeprefix("-"))
+            kind = String(a.removeprefix("-"))
+        elif a == "--max-occ":
+            i += 1
+            max_occ = _count_option(args, i, "--max-occ")
+        elif a == "--min-occ":
+            i += 1
+            min_occ = _count_option(args, i, "--min-occ")
         elif a == "-l":
             i += 1
             min_len = Int(_value(args, i))
@@ -120,6 +137,7 @@ def run_mem(args: List[String]) raises:
         i += 1
     if len(paths) != 2:
         raise Error(USAGE)
+    var mode = _MemFilter(kind, max_occ, min_occ)
 
     var start = perf_counter_ns()
     var reference = read_fasta(paths[0], threads)
@@ -275,7 +293,7 @@ struct _RecordsTask[
     var texts: MutPointer[List[UInt8], Self.out_origin]
     var totals: MutPointer[Int, Self.total_origin]
     var first: Int
-    var mode: String
+    var mode: _MemFilter
     var forward: Bool
     var reverse: Bool
     var four_column: Bool
@@ -291,7 +309,7 @@ struct _RecordsTask[
         texts: MutPointer[List[UInt8], Self.out_origin],
         totals: MutPointer[Int, Self.total_origin],
         first: Int,
-        mode: String,
+        mode: _MemFilter,
         forward: Bool,
         reverse: Bool,
         four_column: Bool,
@@ -305,7 +323,7 @@ struct _RecordsTask[
         self.texts = texts
         self.totals = totals
         self.first = first
-        self.mode = mode
+        self.mode = mode.copy()
         self.forward = forward
         self.reverse = reverse
         self.four_column = four_column
@@ -354,6 +372,17 @@ struct _RecordsTask[
         self.totals[unsafe_offset=index] = total
 
 
+@fieldwise_init
+struct _MemFilter(Copyable, Movable):
+    """Which MEMs `mem` prints: the mode, and the most (0: no limit) and
+    fewest times their string may occur (in the reference; for `-mum`, the
+    most also in the query)."""
+
+    var kind: String
+    var max_occ: Int
+    var min_occ: Int
+
+
 def _report(
     mut out: OutputBuffer,
     index: MemIndex,
@@ -361,7 +390,7 @@ def _report(
     qtext: SeqText,
     name: String,
     reverse: Bool,
-    mode: String,
+    mode: _MemFilter,
     four_column: Bool,
     reference: FastaRecords,
     name_width: Int,
@@ -369,18 +398,19 @@ def _report(
 ) -> Int:
     var mems = find_mems(index, rtext, qtext, threads)
     var hits: List[Mem]
-    if mode == "maxmatch":
-        hits = mems^
-    elif mode == "mum":
-        hits = filter_mums(mems, qtext, threads=threads)
+    if mode.kind == "mum":
+        hits = filter_by_occurrences(mems, qtext, max(mode.max_occ, 1), max(mode.max_occ, 1), mode.min_occ, threads)
 
         # MUMmer prints -mum matches in reference order.
         def by_ref(a: Mem, b: Mem) -> Bool:
             return a.ref_pos < b.ref_pos
 
         sort(Span(hits), by_ref)
+    elif mode.kind == "mumreference":
+        hits = filter_by_occurrences(mems, qtext, max(mode.max_occ, 1), 0, mode.min_occ, threads)
     else:
-        hits = filter_mums(mems, qtext, unique_in_query=False, threads=threads)
+        # -maxmatch: every MEM, unless limits were asked for.
+        hits = filter_by_occurrences(mems, qtext, mode.max_occ, 0, mode.min_occ, threads)
     out.write("> ")
     out.write(name)
     if reverse:
@@ -1054,6 +1084,8 @@ def run_smem(args: List[String]) raises:
     picks one."""
     var min_len = 17
     var max_hits = 20
+    var min_occ = 1
+    var max_occ = 0
     var engine = String("auto")
     var threads = default_threads()
     var verbose = False
@@ -1067,6 +1099,12 @@ def run_smem(args: List[String]) raises:
         elif a == "-w":
             i += 1
             max_hits = Int(_value(args, i))
+        elif a == "-s":
+            i += 1
+            min_occ = _count_option(args, i, "-s")
+        elif a == "--max-occ":
+            i += 1
+            max_occ = _count_option(args, i, "--max-occ")
         elif a == "--engine":
             i += 1
             engine = _value(args, i)
@@ -1090,7 +1128,10 @@ def run_smem(args: List[String]) raises:
     for q in range(len(query)):
         if query.lengths[q] >= Int(UInt32.MAX):
             raise Error("query sequences must be shorter than 2^32 bases")
-    if engine == "fm" or (engine == "auto" and (index_path or len(query) > 1)):
+    var counted = min_occ > 1 or max_occ > 0
+    if counted and engine == "mem":
+        raise Error("-s and --max-occ need the FM engine (--engine fm)")
+    if engine == "fm" or (engine == "auto" and (index_path or len(query) > 1 or counted)):
         var fm: FMIndex
         if index_path:
             fm = FMIndex.load(index_path, threads)
@@ -1102,7 +1143,7 @@ def run_smem(args: List[String]) raises:
             fm = _build_fm(reference, threads)
             _log(verbose, String(t"index: {_seconds(start)} s ({fm.rows} rows, k-mer cache k={fm.cache_k})"))
         start = perf_counter_ns()
-        _fm_smems(fm, query, min_len, max_hits, threads)
+        _fm_smems(fm, query, min_len, max_hits, min_occ, max_occ, threads)
         _log(verbose, String(t"smems: {_seconds(start)} s"))
         return
     var reference = read_fasta(paths[0], threads)
@@ -1155,7 +1196,9 @@ def run_smem(args: List[String]) raises:
     _log(verbose, String(t"smems: {_seconds(start)} s"))
 
 
-def _fm_smems(fm: FMIndex, query: FastaRecords, min_len: Int, max_hits: Int, threads: Int) raises:
+def _fm_smems(
+    fm: FMIndex, query: FastaRecords, min_len: Int, max_hits: Int, min_occ: Int, max_occ: Int, threads: Int
+) raises:
     var out = OutputBuffer()
     var bounds: List[Int] = [0]
     var bases = 0
@@ -1179,6 +1222,8 @@ def _fm_smems(fm: FMIndex, query: FastaRecords, min_len: Int, max_hits: Int, thr
             first,
             min_len,
             max_hits,
+            min_occ,
+            max_occ,
         )
         parallel_for(task, count, threads)
         for s in range(count):
@@ -1202,6 +1247,8 @@ struct _FmSmemTask[
     var first: Int
     var min_len: Int
     var max_hits: Int
+    var min_occ: Int
+    var max_occ: Int
 
     def __init__(
         out self,
@@ -1212,6 +1259,8 @@ struct _FmSmemTask[
         first: Int,
         min_len: Int,
         max_hits: Int,
+        min_occ: Int,
+        max_occ: Int,
     ):
         self.fm = fm
         self.query = query
@@ -1220,6 +1269,8 @@ struct _FmSmemTask[
         self.first = first
         self.min_len = min_len
         self.max_hits = max_hits
+        self.min_occ = min_occ
+        self.max_occ = max_occ
 
     def run(self, index: Int):
         ref query = self.query[]
@@ -1233,7 +1284,7 @@ struct _FmSmemTask[
         var codes = List[UInt8](unsafe_uninit_length=starts[len(starts) - 1] + 32)
         for q in range(lo, hi):
             encode_bases(query.seq(q), codes.unsafe_ptr().unsafe_offset(starts[q - lo]))
-        var found = fm.find_smems(codes, starts, self.min_len, self.max_hits)
+        var found = fm.find_smems(codes, starts, self.min_len, self.max_hits, self.min_occ, self.max_occ)
         var out = OutputBuffer(fd=-1)
         for q in range(lo, hi):
             out.write("SQ\t")
