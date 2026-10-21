@@ -1,0 +1,54 @@
+# Builds sporos and runs every test suite on Linux x86-64 and macOS arm64.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch cancels the run still in progress.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86-64
+            os: ubuntu-24.04
+          - name: macOS arm64
+            os: macos-15
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: prefix-dev/setup-pixi@v0.11.0
+        with:
+          pixi-version: v0.81.0
+          cache: true
+
+      - name: CPU
+        run: |
+          uname -a
+          if [ "$(uname -s)" = Linux ]; then lscpu | grep -E 'Model name|^CPU\(s\)|Flags' | sed 's/Flags:.*avx512f.*/Flags: avx512f available/; s/Flags:.*/Flags: no avx512f/'; else sysctl -n machdep.cpu.brand_string hw.ncpu; fi
+
+      - name: Mojo test suites (kernels against brute-force oracles)
+        run: pixi run test
+
+      - name: Command line
+        run: pixi run test-cli
+
+      - name: C API
+        run: pixi run test-c
+
+      - name: Python package
+        run: pixi run test-python

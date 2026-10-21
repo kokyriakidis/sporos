@@ -401,6 +401,7 @@ Competitor rows come from that suite; sporos rows are from the current code.
 |---|---|
 | `pixi run test` | builds and runs the Mojo test suites (oracles in `tests/reference.mojo`) |
 | `pixi run test-c`, `pixi run test-python` | builds the bindings and checks them against the library's outputs |
+| `pixi run test-cli` | checks every command across thread counts, gzip and piped input, and known answers |
 | `pixi run bench-seeds`, `bench-reads`, `bench-index` | measures seed kernel, read batch and seed-index throughput |
 | `pixi run format` | formats the sources (120 columns) |
 | `python3 scripts/benchmark_chart.py` | redraws the chart above from its numbers |

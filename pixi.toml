@@ -36,6 +36,8 @@ build-bench-seeds = { cmd = "mojo build -I . -I tests -I benchmarks benchmarks/b
 bench-seeds = { cmd = "./build/bench_seeds", depends-on = ["build-bench-seeds"] }
 # The command-line tool: `pixi run build-cli`, then `build/sporos --help`.
 build-cli = { cmd = "mojo build -I . cli/sporos_cli.mojo -o build/sporos", depends-on = ["prepare"] }
+# Command-line checks on generated data (thread counts, gzip, pipes, known answers).
+test-cli = { cmd = "bash tests/test_cli.sh", depends-on = ["build-cli"] }
 build-bench-reads = { cmd = "mojo build -I . -I tests -I benchmarks benchmarks/bench_reads.mojo -o build/bench_reads", depends-on = ["prepare"] }
 # Per-call overhead on read-sized sequences: `pixi run bench-reads`.
 bench-reads = { cmd = "./build/bench_reads", depends-on = ["build-bench-reads"] }
