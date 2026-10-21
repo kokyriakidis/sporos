@@ -157,7 +157,7 @@ def _ref_backward(reference: SeqText, i: Int, query: SeqText, j: Int, limit: Int
     return min(n, i - start)
 
 
-comptime _BLOCK_BITS = 16
+comptime _BLOCK_BITS = 12
 
 
 comptime _AHEAD = PrefetchOptions().for_read().high_locality()
@@ -476,6 +476,8 @@ struct _FindTask(ParallelTask):
 
 
 comptime _RADIX_BITS = 11
+comptime _RADIX_MIN = 1 << 8
+"""Below this many MEMs an insertion sort beats the radix passes."""
 
 
 def sort_mems(mut mems: List[Mem]):
@@ -483,8 +485,15 @@ def sort_mems(mut mems: List[Mem]):
     an LSD radix sort on `(query - lowest) << 32 | reference`, skipping the
     digits every key shares."""
     var n = len(mems)
-    if n < 64:
-        sort(Span(mems))
+    if n < _RADIX_MIN:
+        # Few MEMs, found nearly in order: an insertion sort.
+        for i in range(1, n):
+            var m = mems[i]
+            var j = i
+            while j > 0 and m < mems[j - 1]:
+                mems[j] = mems[j - 1]
+                j -= 1
+            mems[j] = m
         return
     var low = Int(mems[0].query_pos)
     var high = low

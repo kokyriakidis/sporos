@@ -161,29 +161,43 @@ def run_mem(args: List[String]) raises:
     var out = OutputBuffer()
     var query_start = perf_counter_ns()
     var total = 0
-    if threads > 1 and len(query) >= 2 * threads:
-        # Many query records (reads): one thread per slice of records.
-        var slices = min(len(query), threads * 8)
-        var texts = List[List[UInt8]](length=slices, fill=List[UInt8]())
-        var totals = List[Int](length=slices, fill=0)
-        var task = _RecordsTask(
-            Pointer(to=index).as_imm(),
-            Pointer(to=rtext).as_imm(),
-            Pointer(to=query).as_imm(),
-            Pointer(to=reference).as_imm(),
-            texts.unsafe_ptr(),
-            totals.unsafe_ptr(),
-            slices,
-            mode,
-            forward,
-            reverse,
-            four_column,
-            name_width,
-        )
-        parallel_for(task, slices, threads)
-        for s in range(slices):
-            out.write_bytes(Span(texts[s]))
-            total += totals[s]
+    if len(query) > 1:
+        # Several query records (reads): slices of records (up to 4096 reads or
+        # 256 Kbp) in parallel rounds, each round written before the next.
+        var bounds: List[Int] = [0]
+        var bases = 0
+        for q in range(len(query)):
+            bases += query.lengths[q]
+            if bases >= _SEED_SLICE_BASES or q + 1 - bounds[len(bounds) - 1] >= _SEED_SLICE:
+                bounds.append(q + 1)
+                bases = 0
+        if bounds[len(bounds) - 1] != len(query):
+            bounds.append(len(query))
+        var slices = len(bounds) - 1
+        var round = threads * 4
+        var texts = List[List[UInt8]](length=round, fill=List[UInt8]())
+        var totals = List[Int](length=round, fill=0)
+        for first in range(0, slices, round):
+            var count = min(round, slices - first)
+            var task = _RecordsTask(
+                Pointer(to=index).as_imm(),
+                Pointer(to=rtext).as_imm(),
+                Pointer(to=query).as_imm(),
+                Pointer(to=reference).as_imm(),
+                Pointer(to=bounds).as_imm(),
+                texts.unsafe_ptr(),
+                totals.unsafe_ptr(),
+                first,
+                mode,
+                forward,
+                reverse,
+                four_column,
+                name_width,
+            )
+            parallel_for(task, count, threads)
+            for s in range(count):
+                out.write_bytes(Span(texts[s]))
+                total += totals[s]
         out.flush()
         _log(verbose, String(t"matches: {_seconds(query_start)} s ({total} reported)"))
         return
@@ -235,6 +249,7 @@ struct _RecordsTask[
     text_origin: ImmOrigin,
     query_origin: ImmOrigin,
     ref_origin: ImmOrigin,
+    bounds_origin: ImmOrigin,
     out_origin: MutOrigin,
     total_origin: MutOrigin,
 ](ParallelTask):
@@ -244,9 +259,10 @@ struct _RecordsTask[
     var rtext: ImmPointer[SeqText, Self.text_origin]
     var query: ImmPointer[FastaRecords, Self.query_origin]
     var reference: ImmPointer[FastaRecords, Self.ref_origin]
+    var bounds: ImmPointer[List[Int], Self.bounds_origin]
     var texts: MutPointer[List[UInt8], Self.out_origin]
     var totals: MutPointer[Int, Self.total_origin]
-    var slices: Int
+    var first: Int
     var mode: String
     var forward: Bool
     var reverse: Bool
@@ -259,9 +275,10 @@ struct _RecordsTask[
         rtext: ImmPointer[SeqText, Self.text_origin],
         query: ImmPointer[FastaRecords, Self.query_origin],
         reference: ImmPointer[FastaRecords, Self.ref_origin],
+        bounds: ImmPointer[List[Int], Self.bounds_origin],
         texts: MutPointer[List[UInt8], Self.out_origin],
         totals: MutPointer[Int, Self.total_origin],
-        slices: Int,
+        first: Int,
         mode: String,
         forward: Bool,
         reverse: Bool,
@@ -272,9 +289,10 @@ struct _RecordsTask[
         self.rtext = rtext
         self.query = query
         self.reference = reference
+        self.bounds = bounds
         self.texts = texts
         self.totals = totals
-        self.slices = slices
+        self.first = first
         self.mode = mode
         self.forward = forward
         self.reverse = reverse
@@ -283,9 +301,8 @@ struct _RecordsTask[
 
     def run(self, index: Int):
         ref query = self.query[]
-        var per = ceildiv(len(query), self.slices)
-        var lo = index * per
-        var hi = min(len(query), lo + per)
+        var lo = self.bounds[][self.first + index]
+        var hi = self.bounds[][self.first + index + 1]
         var out = OutputBuffer(fd=-1)
         var total = 0
         for q in range(lo, hi):
@@ -321,7 +338,7 @@ struct _RecordsTask[
                     self.name_width,
                     1,
                 )
-        self.texts[unsafe_offset=index] = out.buf.copy()
+        self.texts[unsafe_offset=index] = out.take()
         self.totals[unsafe_offset=index] = total
 
 

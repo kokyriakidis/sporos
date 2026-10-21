@@ -87,7 +87,6 @@ def test_bgzf_then_gzip_members() raises:
         assert_true(_is(r, 0, "ACGT") and _is(r, 1, "GGCC"))
 
 
-
 def test_parallel_parse_matches_serial() raises:
     # Over 16 MB, so read_fasta parses (and reads) on several threads.
     var path = String("build/test_io_big.fa")

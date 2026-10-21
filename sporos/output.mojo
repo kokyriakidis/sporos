@@ -50,6 +50,12 @@ struct OutputBuffer(Movable):
         if len(self.buf) >= _FLUSH_AT and self.fd >= 0:
             self.flush()
 
+    def take(mut self) -> List[UInt8]:
+        """The accumulated bytes (for `fd = -1`), leaving the buffer empty."""
+        var bytes = self.buf^
+        self.buf = List[UInt8]()
+        return bytes^
+
     def flush(mut self):
         if self.fd < 0:
             return
