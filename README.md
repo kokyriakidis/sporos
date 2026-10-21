@@ -23,6 +23,8 @@ a command-line tool, a C library and a Python package.
 
 - ⚡ **Fast.**
   - Minimizers and syncmers run 1.3–2.4x faster than simd-minimizers on one thread.
+  - Seed-index lookups of reads run 3.9x faster than minimap2's (1.4x one read per call) and 9x faster
+    than strobealign's.
   - MEMs between hg38 and CHM13 chr1 run 2–2.3x faster than copMEM2 on one thread and 10–14x faster with
     10 threads.
   - MUMs run 4–18x faster than MUMmer.
@@ -388,9 +390,13 @@ Competitor rows come from that suite; sporos rows are from the current code.
 | minimizers k=31 w=19, 10 threads | **0.13 / 0.13** | 0.16 / 0.19 | |
 | closed syncmers k=31 s=21, 10 threads | **0.17 / 0.18** | 0.20 / 0.25 | |
 
-- **Seed-index lookups** (hg38 chr21 index, k=19, w=12, occurrence cap 20, simulated 150 bp reads):
-  - read minimizers: 137 Mbp/s per thread, 560 Mbp/s on 8 threads;
-  - every read k-mer: 36 Mbp/s per thread.
+- **Seed-index lookups** (hg38 chr21 index, k=19, w=12, occurrence cap 20, 1 M simulated 150 bp reads, every
+  hit returned):
+  - read minimizers: 133 Mbp/s per thread batched (47 Mbp/s one read per call), 552 Mbp/s on 8 threads;
+    minimap2's `mm_sketch` + `mm_idx_get` on the same minimizers: 34.5 Mbp/s; strobealign's randstrobe
+    `find_hits`: 14.5 Mbp/s ([method](benchmarks/competitors/README.md#seed-index-lookups-2026-10-21));
+  - every read k-mer: 36 Mbp/s per thread;
+  - index build: 0.37 s on one thread (minimap2 1.63 s, strobealign 1.78 s).
 - **End to end**, including reading input and writing every line:
   - `sporos minimizers -k 21 -w 11` on CHM13 chr1 (41 M lines): 0.94 s on one thread, 0.26 s on ten;
   - `sporos seeds` on 1 M reads (27 M hit lines, index build included): 2.4 s on one thread, 0.61 s on ten.

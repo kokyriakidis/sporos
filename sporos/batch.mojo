@@ -24,6 +24,8 @@ from sporos.window import (
 comptime _GROUPS_PER_TASK = 64
 comptime _LONG = 1 << 13
 """Reads at least this long are scanned alone, split across all lanes."""
+comptime _SCALAR_GROUP = LANES // 4
+"""Groups of at most this many reads are scanned one read at a time."""
 
 
 struct SeedBatch(Movable, Sized):
@@ -129,6 +131,13 @@ struct _BatchTask[mut: Bool, //, origin: Origin[mut=mut]](ParallelTask):
         """Scans up to `LANES` reads, one per lane, through a padded copy."""
         var n = len(group)
         if n == 0:
+            return
+        if n <= _SCALAR_GROUP:
+            # Too few reads to fill the lanes: each alone, scalar, is faster.
+            for l in range(n):
+                var positions = self._single(group[l])
+                out.extend(Span(positions))
+                self.counts[unsafe_offset=group[l]] = len(positions)
             return
         var max_len = 0
         for l in range(n):

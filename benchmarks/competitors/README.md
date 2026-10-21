@@ -1,7 +1,7 @@
 # Competitor benchmarks
 
-sporos against MUMmer4, copMEM2, mumemto, BWA (`fastmap` SMEMs), ropebwt3 (`mem` SMEMs), simd-minimizers
-and minimap2's `mm_sketch`, on one Linux box. Raw results are TSVs in [`results/`](results/); the tables
+sporos against MUMmer4, copMEM2, mumemto, BWA (`fastmap` SMEMs), ropebwt3 (`mem` SMEMs), simd-minimizers,
+minimap2's `mm_sketch` and seed lookups, and strobealign's seed lookups, on one Linux box. Raw results are TSVs in [`results/`](results/); the tables
 below come from `python3 -I tables.py`.
 
 ## Reproduce
@@ -135,6 +135,31 @@ chr1 L=50 `bwa fastmap`). 1-minute load average when the scripts started: 0.96 (
   `-maxmatch -t 1` on chr1 L=50 but needs a 215 s index build first.
 
 The `sporos -t 10` vs `-t 1` ratios and all ratios in the tables compare at equal thread counts.
+
+### Seed-index lookups (2026-10-21)
+
+hg38 chr21 index, 1 M simulated 150 bp reads, one thread, reads in memory, best of 3; harnesses in
+[`harness/lookup`](harness/lookup/). sporos and minimap2 index the same (w, k)-minimizers (different
+hashes, near-identical density) and skip seeds with more than 20 hits; strobealign indexes randstrobes
+with its defaults for 150 bp reads and its own frequency cutoff.
+
+| | Mbp/s | hits per read | index build (1 / 8 threads) |
+|---|---|---|---|
+| sporos `lookup_batch`, k=19 w=12 | **133** | 27.7 | 0.37 / 0.07 s |
+| sporos `lookup` (one read per call), k=19 w=12 | 47 | 27.7 | |
+| minimap2 `mm_sketch` + `mm_idx_get`, k=19 w=12 | 34.5 | 27.6 | 1.63 / 1.22 s |
+| sporos `lookup_batch`, k=21 w=11 | **130** | 29.0 | 0.39 / 0.07 s |
+| minimap2, k=21 w=11 | 32.1 | 29.2 | 1.68 / 1.25 s |
+| strobealign `find_hits` (one hit per seed) | 14.5 | 51.0 | 1.78 / 1.34 s |
+| strobealign `find_hits` + every position | 13.1 | 97.2 | |
+
+- sporos `lookup_batch` on 8 threads: 552 Mbp/s.
+- strobealign does more per seed (both orientations, partial-strobe lookups, rescue), so its row is a
+  reference point rather than the same work.
+- minimap2 and strobealign build times include reading the FASTA; sporos's do not (about 0.03 s here).
+- The harness is a lighter path than minimap2's own seeding (`mm_collect_matches` also sorts and filters).
+- One-read `lookup` calls were 37 Mbp/s before short reads skipped the SIMD lanes (whose warm-up dominates
+  on 150 bp): about the same as minimap2's per-read loop.
 
 ### MEMs and MUMs
 

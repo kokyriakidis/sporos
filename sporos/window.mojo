@@ -32,7 +32,7 @@ from std.sys.defines import get_defined_int
 from std.sys.info import CompilationTarget
 from std.sys.intrinsics import llvm_intrinsic
 
-from sporos.alphabet import N_CODE, encode_base
+from sporos.alphabet import CodeBuffer, N_CODE, encode_base
 from sporos.nthash import (
     ROTATION,
     SEED_A,
@@ -72,6 +72,10 @@ def scan_ascii[
     mode: Int, canonical: Bool
 ](seq: Span[UInt8, _], windows: Int, params: ScanParams, threads: Int) -> List[UInt32]:
     """`scan` over ASCII bases; short inputs are first padded with `N`."""
+    if windows // LANES < params.k + params.w:
+        # Too short for the lanes: encode once and scan scalar.
+        var codes = CodeBuffer.encode(seq, PADDING)
+        return scan[mode, canonical](codes.unsafe_ptr(), windows, params, threads)
     if len(seq) >= PAD_BELOW:
         return scan[mode, canonical, ascii=True](seq.unsafe_ptr(), windows, params, threads, len(seq))
     var padded = List[UInt8](capacity=len(seq) + PADDING)
@@ -366,6 +370,9 @@ def scan_segment[
     read: lanes then stop where their 16-byte loads would pass that point.
     """
     var chunk = seg_windows // LANES
+    if chunk < params.k + params.w:
+        # Lanes this short would spend most of their steps warming up.
+        chunk = 0
     comptime if ascii:
         # Lanes read up to seg_start + LANES * chunk + k + w + 12.
         chunk = min(chunk, max(0, (readable - seg_start - params.k - params.w - 13) // LANES))
@@ -585,67 +592,91 @@ def _scan_lanes_core[
 def _scan_scalar[
     mode: Int, canonical: Bool
 ](codes: ImmPointer[UInt8, _], first: Int, windows: Int, params: ScanParams, mut out: List[UInt32], base: Int = 0,):
-    """Windows `[first, first + windows)` one by one (the lanes' remainder);
-    `codes[i]` is the base at position `base + i`. Each k-mer is hashed once,
-    then every window takes the minimum of its w keys."""
+    """Windows `[first, first + windows)` one by one (short inputs, and the
+    lanes' remainder); `codes[i]` is the base at position `base + i`. One
+    pass rolls ntHash, keeps the last w keys in a ring and the window's
+    minimum, rescanning the ring only when the minimum leaves the window."""
     var k = params.k
     var w = params.w
     var kmers = windows + w - 1
-    var keys = List[UInt64](capacity=kmers)
-    # Roll ntHash over the bases (as the lanes do): bases before `first`
-    # contribute nothing, like the lanes' empty rings.
+    var ring_size = 1
+    while ring_size < w:
+        ring_size <<= 1
+    # Seeds each rolling step mixes in and out, per code (4 and up: N, 0),
+    # then the ring of keys, in one buffer.
+    var tables = List[UInt32](unsafe_uninit_length=40 + 2 * ring_size)
+    var f_in = tables.unsafe_ptr()
+    var f_out = f_in.unsafe_offset(8)
+    var r_in = f_in.unsafe_offset(16)
+    var r_out = f_in.unsafe_offset(24)
+    for c in range(8):
+        var code = UInt8(min(c, 4))
+        var real = c < 4
+        f_in[unsafe_offset=c] = seed(code) if real else 0
+        f_out[unsafe_offset=c] = rotl32(seed(code), ROTATION * k) if real else 0
+        r_in[unsafe_offset=c] = rotl32(seed(complement(code)), ROTATION * (k - 1)) if real else 0
+        r_out[unsafe_offset=c] = rotr32(seed(complement(code)), ROTATION) if real else 0
+    var ring = f_in.unsafe_offset(40).unsafe_bitcast[UInt64]()
+    var ring_mask = ring_size - 1
+    var shift = UInt32(offset_bits(w))
+    out.reserve(len(out) + (2 * windows) // (w + 1) + 8)
+    var last = Span(out)[len(out) - 1] if len(out) > 0 else SENTINEL
     var fh: UInt32 = 0
     var rh: UInt32 = 0
     var run = 0
+    var span_run = 0
+    var best = UInt64.MAX
     for i in range(first, first + kmers + k - 1):
-        var c = codes[unsafe_offset=i]
-        var c_out = codes[unsafe_offset=i - k] if i - k >= first else N_CODE
-        fh = rotl32(fh, ROTATION) ^ rotl32(seed(c_out), ROTATION * k) ^ seed(c)
-        rh = (
-            rotr32(rh, ROTATION)
-            ^ rotr32(seed(complement(c_out)), ROTATION)
-            ^ rotl32(seed(complement(c)), ROTATION * (k - 1))
-        )
-        run = run + 1 if c < N_CODE else 0
+        var c = Int(min(codes[unsafe_offset=i], UInt8(4)))
+        var c_out = Int(min(codes[unsafe_offset=i - k], UInt8(4))) if i - k >= first else 4
+        fh = ((fh << ROTATION) | (fh >> (32 - ROTATION))) ^ f_out[unsafe_offset=c_out] ^ f_in[unsafe_offset=c]
+        rh = ((rh >> ROTATION) | (rh << (32 - ROTATION))) ^ r_out[unsafe_offset=c_out] ^ r_in[unsafe_offset=c]
+        run = run + 1 if c < 4 else 0
         var start = i - k + 1
         if start < first:
             continue
-        if run < k:
-            keys.append(UInt64.MAX)
+        var key = UInt64.MAX
+        if run >= k:
+            var h: UInt32
+            if k <= SMALL_K:
+                h = seed_hash(codes.unsafe_offset(start), k, canonical)
+            else:
+                h = fh + rh if canonical else fh
+            key = (UInt64((h & 0x7FFFFFFF) >> shift) << 32) | UInt64(start)
+        ring[unsafe_offset=start & ring_mask] = key
+        var j = start - w + 1  # the window ending at this k-mer
+        if key < best:
+            best = key
+        elif best != UInt64.MAX and Int(best & 0xFFFFFFFF) < j:
+            # The minimum left the window: rescan its w keys.
+            best = UInt64.MAX
+            for t in range(max(j, first), start + 1):
+                best = min(best, ring[unsafe_offset=t & ring_mask])
+        if j < first:
             continue
-        var h: UInt32
-        if k <= SMALL_K:
-            h = seed_hash(codes.unsafe_offset(start), k, canonical)
-        else:
-            h = fh + rh if canonical else fh
-        keys.append((UInt64(order_key(h, w)) << 32) | UInt64(start))
-    var tail = List[UInt32]()
-    var span_run = 0
-    for i in range(first, first + params.span - 1):
-        span_run = span_run + 1 if codes[unsafe_offset=i] < N_CODE else 0
-    for j in range(first, first + windows):
-        var best = UInt64.MAX
-        for i in range(j - first, j - first + w):
-            best = min(best, keys[i])
-        var minpos = Int(best & 0xFFFFFFFF)
         comptime if mode == MINIMIZERS:
             if best != UInt64.MAX:
-                tail.append(UInt32(base + minpos))
+                var v = UInt32(base + Int(best & 0xFFFFFFFF))
+                if v != last:
+                    out.append(v)
+                    last = v
         else:
+            if j == first:
+                for t in range(first, first + params.span - 1):
+                    span_run = span_run + 1 if codes[unsafe_offset=t] < N_CODE else 0
             span_run = span_run + 1 if codes[unsafe_offset=j + params.span - 1] < N_CODE else 0
+            var minpos = Int(best & 0xFFFFFFFF)
             var hit: Bool
             comptime if mode == CLOSED_SYNCMERS:
-                hit = minpos == j or minpos == j + w - 1
+                hit = best != UInt64.MAX and (minpos == j or minpos == j + w - 1)
             else:
                 var rel = minpos - j
-                hit = rel >= 0 and rel < 64 and (params.offsets >> UInt64(rel)) & 1 != 0
+                hit = best != UInt64.MAX and rel >= 0 and rel < 64 and (params.offsets >> UInt64(rel)) & 1 != 0
             if span_run >= params.span and hit:
-                tail.append(UInt32(base + j))
-    var deduped = List[UInt32]()
-    for v in tail:
-        if len(deduped) == 0 or deduped[len(deduped) - 1] != v:
-            deduped.append(v)
-    append_dedup(out, Span(deduped))
+                var v = UInt32(base + j)
+                if v != last:
+                    out.append(v)
+                    last = v
 
 
 @inline(.always)
