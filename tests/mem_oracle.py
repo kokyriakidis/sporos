@@ -118,6 +118,14 @@ def main():
                         args += ["--max-occ", str(max_occ)]
                     if min_occ > 1:
                         args += ["--min-occ", str(min_occ)]
+                    cap = max_occ if max_occ else (0 if mode == "maxmatch" else 1)
+                    if cap and min_occ > cap:
+                        # A floor above the cap is an error, not an empty result.
+                        run = subprocess.run(args + [f"{work}/occ_ref.fa", f"{work}/occ_query.fa"], capture_output=True)
+                        if run.returncode == 0:
+                            failures += 1
+                            print(f"  FAIL  {mode} --min-occ {min_occ} above cap {cap} was accepted")
+                        continue
                     out = subprocess.run(
                         args + [f"{work}/occ_ref.fa", f"{work}/occ_query.fa"], check=True, capture_output=True, text=True
                     ).stdout

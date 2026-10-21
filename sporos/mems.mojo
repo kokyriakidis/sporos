@@ -17,7 +17,7 @@ of the same query sequence.
 
 from std.bit import count_leading_zeros, count_trailing_zeros
 from std.math import ceildiv, gcd, iota
-from std.memory import pack_bits
+from std.memory import pack_bits, unsafe_memmove
 from std.sys.intrinsics import PrefetchOptions, prefetch
 
 from sporos.parallel import ParallelTask, parallel_for
@@ -583,7 +583,7 @@ def filter_mums(mems: List[Mem], query: SeqText, unique_in_query: Bool = True, t
     while lo < len(mems):
         var seq = query.sequence_of(Int(mems[lo].query_pos))
         var seq_end = query.starts[seq] + query.lengths[seq]
-        var hi = lo
+        var hi = lo + 1  # (a MEM past its sequence's end, from no find_mems, still moves on)
         while hi < len(mems) and Int(mems[hi].query_pos) < seq_end:
             hi += 1
         # Query intervals: `mems` is already in query order.
@@ -904,7 +904,7 @@ struct _ClearTask[order_origin: ImmOrigin, flags_origin: ImmOrigin, keep_origin:
 
 
 def filter_by_occurrences(
-    mems: List[Mem],
+    var mems: List[Mem],
     query: SeqText,
     max_in_reference: Int,
     max_in_query: Int = 0,
@@ -921,10 +921,11 @@ def filter_by_occurrences(
     interval contains its own (itself included), and in the query once per
     MEM whose reference interval does: sweeps that count containing
     intervals, up to the cap, give both. `mems` must come from one
-    `find_mems` call; the result keeps its order."""
+    `find_mems` call (it is consumed: without limits it is returned as is);
+    the result keeps its order."""
     if min_in_reference <= 1 and max_in_reference <= 1 and max_in_query <= 1:
         if max_in_reference == 0 and max_in_query == 0:
-            return mems.copy()
+            return mems^
         if max_in_reference == 1:
             return filter_mums(mems, query, unique_in_query=max_in_query == 1, threads=threads)
     var keep = List[Bool](length=len(mems), fill=True)
@@ -934,7 +935,7 @@ def filter_by_occurrences(
     while lo < len(mems):
         var seq = query.sequence_of(Int(mems[lo].query_pos))
         var seq_end = query.starts[seq] + query.lengths[seq]
-        var hi = lo
+        var hi = lo + 1  # (a MEM past its sequence's end, from no find_mems, still moves on)
         while hi < len(mems) and Int(mems[hi].query_pos) < seq_end:
             hi += 1
         var count = hi - lo
@@ -980,59 +981,85 @@ struct _TopEnds(Copyable, Movable):
     var cap: Int
 
     def __init__(out self, cap: Int):
-        self.ends = List[Int](capacity=min(cap, 1 << 16) + 16)
+        self.ends = List[Int](capacity=min(cap, 64) + 16)
         self.head = 0
         self.cap = cap
 
     @inline(.always)
-    def at_least(self, end: Int) -> Int:
-        """How many of the kept ends reach `end`: the number of seen ends
-        that do, capped at `cap`."""
+    def drop_through(mut self, start: Int):
+        """Forgets the ends at or before `start`: they reach no interval
+        starting there or later."""
+        var p = self.ends.unsafe_ptr()
+        while self.head < len(self.ends) and p[unsafe_offset=self.head] <= start:
+            self.head += 1
+        self._compact()
+
+    @inline(.always)
+    def _compact(mut self):
+        """Drops the forgotten prefix once it outgrows the kept ends:
+        amortized O(1) per end, and memory bounded by twice the kept ends."""
+        var live = len(self.ends) - self.head
+        if self.head >= 64 and self.head >= live:
+            # (memmove allows the overlap; one untracked view of the buffer.)
+            var p = self.ends.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+            unsafe_memmove(dest=p, src=p.unsafe_offset(self.head).as_imm(), count=live)
+            self.ends.resize(unsafe_uninit_length=live)
+            self.head = 0
+
+    @inline(.always)
+    def _first_at_least(self, end: Int) -> Int:
+        """Index of the first kept end that reaches `end` (or the length)."""
         var lo = self.head
         var hi = len(self.ends)
         var p = self.ends.unsafe_ptr()
-        # Most intervals are contained in none: no end reaches theirs.
-        if hi == lo or p[unsafe_offset=hi - 1] < end:
-            return 0
         while lo < hi:
             var mid = (lo + hi) >> 1
             if p[unsafe_offset=mid] < end:
                 lo = mid + 1
             else:
                 hi = mid
-        return len(self.ends) - lo
+        return lo
+
+    @inline(.always)
+    def at_least(self, end: Int) -> Int:
+        """How many of the kept ends reach `end`: the number of seen ends
+        that do, capped at `cap`."""
+        var hi = len(self.ends)
+        # Most intervals are contained in none: no end reaches theirs.
+        if hi == self.head or self.ends.unsafe_ptr()[unsafe_offset=hi - 1] < end:
+            return 0
+        return hi - self._first_at_least(end)
 
     @inline(.always)
     def add(mut self, end: Int):
         if len(self.ends) - self.head == self.cap:
-            if end <= self.ends[self.head]:
+            if end <= self.ends.unsafe_ptr()[unsafe_offset=self.head]:
                 return
             self.head += 1
-            if self.head >= max(self.cap, 64):
-                # Drop the evicted prefix now and then.
-                var kept = List[Int](capacity=self.cap + 16)
-                for i in range(self.head, len(self.ends)):
-                    kept.append(self.ends[i])
-                self.ends = kept^
-                self.head = 0
-        # Sweeps meet ends mostly in increasing order: insert from the back.
+            self._compact()
+        var n = len(self.ends)
+        # Sweeps meet ends mostly in increasing order: usually an append;
+        # otherwise one block move above the insertion point.
+        if n == self.head or self.ends.unsafe_ptr()[unsafe_offset=n - 1] <= end:
+            self.ends.append(end)
+            return
+        var at = self._first_at_least(end + 1)
         self.ends.append(end)
-        var i = len(self.ends) - 1
-        var p = self.ends.unsafe_ptr()
-        while i > self.head and p[unsafe_offset=i - 1] > end:
-            p[unsafe_offset=i] = p[unsafe_offset=i - 1]
-            i -= 1
-        p[unsafe_offset=i] = end
+        var p = self.ends.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+        unsafe_memmove(dest=p.unsafe_offset(at + 1), src=p.unsafe_offset(at).as_imm(), count=n - at)
+        p[unsafe_offset=at] = end
 
 
 def _count_containing(
-    starts: List[UInt64], shift: UInt64, lengths: List[UInt32], cap: Int, mut others: List[UInt32], threads: Int
+    starts: List[UInt64], shift: UInt64, lengths: List[UInt32], var cap: Int, mut others: List[UInt32], threads: Int
 ):
     """`others[i]`: how many other intervals `[starts[j] >> shift, ... +
     lengths[j])`, in increasing start, contain (or equal) interval `i`,
     capped at `cap`. Parallel by blocks as `_mark_contained`: each block's
     sweep starts from the largest ends of the blocks before it."""
     var count = len(starts)
+    # No interval has more than count - 1 others.
+    cap = max(1, min(cap, count))
     if threads <= 1 or count < 1 << 16:
         var top = _TopEnds(cap)
         _count_sweep(Span(starts), shift, Span(lengths), others.unsafe_ptr(), 0, count, top, cap, True)
@@ -1062,6 +1089,8 @@ def _count_containing(
     var running = _TopEnds(cap)
     for b in range(blocks):
         var mine = tops[b].copy()
+        if bounds[b] < count:
+            running.drop_through(Int(starts[bounds[b]] >> shift) - 1)
         tops[b] = running.copy()
         for i in range(mine.head, len(mine.ends)):
             running.add(mine.ends[i])
@@ -1101,6 +1130,8 @@ def _count_sweep(
         var j = i + 1
         while j < hi and Int(starts[j] >> shift) == start:
             j += 1
+        # Ends at or before this start reach none of the intervals from here on.
+        top.drop_through(start)
         if write:
             if j - i == 1:
                 others[unsafe_offset=i] = UInt32(top.at_least(start + Int(lengths[i])))

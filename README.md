@@ -400,7 +400,7 @@ Competitor rows come from that suite; sporos rows are from the current code.
 |---|---|---|
 | E. coli K-12 vs O157, N = 3 or 10 | **0.10 s / 0.06 s** (63 MB) | 13.3-13.5 s (356 MB) |
 | hg38 vs chimp chr21, N = 3 or 10 | **0.95-1.03 s / 0.29-0.33 s** (263 MB) | 169-171 s (3.2 GB) |
-| hg38 vs CHM13 chr1, N = 10, forward strand (`-mum` / `-mumreference`) | **25.8 s / 5.1 s**, **20.8 s / 3.6 s** | did not finish its plain multi-MUMs in 300 s |
+| hg38 vs CHM13 chr1, N = 10, forward strand (`-mum` / `-mumreference`) | **25.0 s / 5.1 s**, **20.1 s / 3.7 s** | did not finish its plain multi-MUMs in 300 s |
 
 | Seeds, CHM13 chr1, ns/bp (forward / canonical) | sporos | simd-minimizers 3.0 | minimap2 `mm_sketch` |
 |---|---|---|---|

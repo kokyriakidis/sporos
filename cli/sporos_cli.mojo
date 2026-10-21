@@ -137,6 +137,9 @@ def run_mem(args: List[String]) raises:
         i += 1
     if len(paths) != 2:
         raise Error(USAGE)
+    var cap = max_occ if max_occ > 0 else (0 if kind == "maxmatch" else 1)
+    if cap > 0 and min_occ > cap:
+        raise Error(t"--min-occ {min_occ} is above the most occurrences allowed ({cap}); raise it with --max-occ")
     var mode = _MemFilter(kind, max_occ, min_occ)
 
     var start = perf_counter_ns()
@@ -399,7 +402,7 @@ def _report(
     var mems = find_mems(index, rtext, qtext, threads)
     var hits: List[Mem]
     if mode.kind == "mum":
-        hits = filter_by_occurrences(mems, qtext, max(mode.max_occ, 1), max(mode.max_occ, 1), mode.min_occ, threads)
+        hits = filter_by_occurrences(mems^, qtext, max(mode.max_occ, 1), max(mode.max_occ, 1), mode.min_occ, threads)
 
         # MUMmer prints -mum matches in reference order.
         def by_ref(a: Mem, b: Mem) -> Bool:
@@ -407,10 +410,10 @@ def _report(
 
         sort(Span(hits), by_ref)
     elif mode.kind == "mumreference":
-        hits = filter_by_occurrences(mems, qtext, max(mode.max_occ, 1), 0, mode.min_occ, threads)
+        hits = filter_by_occurrences(mems^, qtext, max(mode.max_occ, 1), 0, mode.min_occ, threads)
     else:
         # -maxmatch: every MEM, unless limits were asked for.
-        hits = filter_by_occurrences(mems, qtext, mode.max_occ, 0, mode.min_occ, threads)
+        hits = filter_by_occurrences(mems^, qtext, mode.max_occ, 0, mode.min_occ, threads)
     out.write("> ")
     out.write(name)
     if reverse:

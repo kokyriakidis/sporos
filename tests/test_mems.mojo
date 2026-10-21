@@ -1,6 +1,7 @@
+from std.collections import Set
 from std.testing import assert_equal, assert_true, TestSuite
 
-from sporos.mems import Mem, MemIndex, MemParams, SmemHit, filter_mums, find_mems, find_smems
+from sporos.mems import Mem, MemIndex, MemParams, SmemHit, filter_by_occurrences, filter_mums, find_mems, find_smems
 from sporos.sort import parallel_sort
 from sporos.text import SeqText
 from sporos.alphabet import encode_base
@@ -272,6 +273,50 @@ def test_smems_match_definition() raises:
                     if a[i] != b[i]:
                         raise Error(String(t"n={n} L={min_len} threads={threads}: SMEM hit {i} differs"))
                 assert_true(len(flat) > 0)
+
+
+def test_occurrence_filter_parallel_matches_serial() raises:
+    # Enough MEMs in one query sequence for the block-parallel sweeps, with
+    # large equal-start groups that straddle block bounds; a sample is also
+    # checked against a direct count of containing intervals.
+    var n = 150_000
+    var seq = random_dna(2 * n + 1000, 77)  # longer than every synthetic MEM reaches
+    var spans = List[Span[UInt8, origin_of(seq)]]()
+    spans.append(Span(seq))
+    var qtext = SeqText(spans)
+    var state = UInt64(12345)
+    var mems = List[Mem](capacity=n)
+    var q = 0
+    while len(mems) < n:
+        state ^= state >> 12
+        state ^= state << 25
+        state ^= state >> 27
+        var r = state * 0x2545F4914F6CDD1D
+        var group = 1 + Int((r >> 8) % 40) if (r >> 50) % 16 == 0 else 1
+        for g in range(min(group, n - len(mems))):
+            var length = 20 + Int((r >> UInt64(13 + g % 30)) % 180)
+            mems.append(Mem(UInt32(Int((r >> 20) % 1_000_000) + 7 * g), UInt32(q), UInt32(length)))
+        q += Int((r >> 40) % 4)
+    for limits in [(2, 0, 1), (5, 0, 1), (1_000_000, 0, 1), (0, 0, 2), (3, 3, 1), (0, 2, 1), (10, 0, 3)]:
+        var serial = filter_by_occurrences(mems.copy(), qtext, limits[0], limits[1], limits[2], threads=1)
+        var parallel = filter_by_occurrences(mems.copy(), qtext, limits[0], limits[1], limits[2], threads=4)
+        assert_equal(len(serial), len(parallel))
+        for i in range(len(serial)):
+            assert_true(serial[i] == parallel[i])
+        if limits[1] == 0:
+            # Reference copies: MEMs whose query interval contains (or equals) this one's.
+            var kept = Set[Int]()
+            for m in serial:
+                kept.add((Int(m.ref_pos) << 32) | (Int(m.query_pos) << 8) ^ Int(m.length))
+            for s in range(0, n, 997):
+                var a = mems[s]
+                var copies = 0
+                for b in mems:
+                    if b.query_pos <= a.query_pos and b.query_pos + b.length >= a.query_pos + a.length:
+                        copies += 1
+                var keep = (limits[0] == 0 or copies <= limits[0]) and copies >= limits[2]
+                var key = (Int(a.ref_pos) << 32) | (Int(a.query_pos) << 8) ^ Int(a.length)
+                assert_equal(keep, key in kept)
 
 
 def main() raises:
