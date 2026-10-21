@@ -4,7 +4,8 @@ matches are located and extended by comparing bases (see `index.mojo`)."""
 
 from std.sys.intrinsics import prefetch
 
-from sporos.mems import Smem, SmemHit
+from sporos.mems import Smem, SmemHit, Smems
+from sporos.parallel import ParallelTask, parallel_for
 
 from .index import FMIndex, Interval, _AHEAD, _BATCH, _SEPARATOR, encode_bases
 
@@ -52,31 +53,6 @@ struct _Found(ImplicitlyCopyable, TrivialRegisterPassable):
     """Text offset of the only hit, when the search located it; else -1."""
 
 
-struct ReadSmems(Movable, Sized):
-    """SMEMs of a batch of queries: query `q`'s are `smems[offsets[q] :
-    offsets[q + 1]]`, in increasing start. Each SMEM's hits, sorted by
-    reference position (forward before reverse), are listed when it has at
-    most `max_hits` of them and left out otherwise; `Smem.count` is always
-    the number of hits."""
-
-    var offsets: List[Int]
-    var smems: List[Smem]
-    var hits: List[SmemHit]
-
-    def __init__(out self):
-        self.offsets = [0]
-        self.smems = List[Smem]()
-        self.hits = List[SmemHit]()
-
-    def __len__(self) -> Int:
-        return len(self.offsets) - 1
-
-    def hits_of(ref self, i: Int) -> Span[SmemHit, origin_of(self.hits)]:
-        """The listed hits of SMEM `i` (empty when it has more than `max_hits`)."""
-        var end = self.smems[i + 1].first if i + 1 < len(self.smems) else len(self.hits)
-        return Span(self.hits)[self.smems[i].first : end]
-
-
 def search_smems[
     mut: Bool, //, origin: Origin[mut=mut]
 ](
@@ -86,7 +62,8 @@ def search_smems[
     max_hits: Int = 20,
     min_occurrences: Int = 1,
     max_occurrences: Int = 0,
-) -> ReadSmems:
+    threads: Int = 1,
+) -> Smems:
     """The SMEMs of length >= `min_len` of each query against the
     reference, both strands: query intervals of maximal exact matches
     not contained in another's. Hits are listed for SMEMs with at most
@@ -103,7 +80,7 @@ def search_smems[
     var codes = List[UInt8](unsafe_uninit_length=bounds[len(bounds) - 1] + 32)
     for i in range(len(queries)):
         encode_bases(queries[i], codes.unsafe_ptr().unsafe_offset(bounds[i]))
-    return search_encoded(fm, codes, bounds, min_len, max_hits, min_occurrences, max_occurrences)
+    return search_encoded(fm, codes, bounds, min_len, max_hits, min_occurrences, max_occurrences, threads)
 
 
 def search_encoded(
@@ -114,10 +91,18 @@ def search_encoded(
     max_hits: Int,
     min_occurrences: Int = 1,
     max_occurrences: Int = 0,
-) -> ReadSmems:
+    threads: Int = 1,
+) -> Smems:
     """`smems` on queries already encoded with `encode_bases`: query `q`
-    is `codes[bounds[q] : bounds[q + 1]]`, and `codes` holds 32 more
-    bytes (of any value) after the last query."""
+    is `codes[bounds[q] : bounds[q + 1]]`. The search reads up to 32 bytes
+    past a query, so `codes` is copied when it does not hold them. With
+    `threads`, slices of queries are searched in parallel."""
+    if len(codes) < bounds[len(bounds) - 1] + 32:
+        var padded = codes.copy()
+        padded.resize(bounds[len(bounds) - 1] + 32, UInt8(4))
+        return search_encoded(fm, padded, bounds, min_len, max_hits, min_occurrences, max_occurrences, threads)
+    if threads > 1 and len(bounds) - 1 >= 2 * _SLICE_QUERIES:
+        return _search_parallel(fm, codes, bounds, min_len, max_hits, min_occurrences, max_occurrences, threads)
     var found = List[_Found]()
     _search(fm, codes.unsafe_ptr(), bounds, max(min_len, 1), max(min_occurrences, 1), max_hits >= 1, found)
     if max_occurrences > 0:
@@ -128,7 +113,7 @@ def search_encoded(
                 kept += 1
         found.resize(unsafe_uninit_length=kept)
     var nq = len(bounds) - 1
-    var result = ReadSmems()
+    var result = Smems()
     # Each query's SMEMs come out in increasing start; group them by query.
     var per = List[Int](length=nq + 1, fill=0)
     for f in found:
@@ -160,6 +145,101 @@ def search_encoded(
             _sort_hits(result.hits, first)
         result.smems.append(Smem(UInt32(f.start), UInt32(f.end), first, f.size))
     return result^
+
+
+comptime _SLICE_QUERIES = 1 << 11
+"""Queries per task when many are searched with several threads."""
+
+
+def _search_parallel(
+    fm: FMIndex,
+    codes: List[UInt8],
+    bounds: List[Int],
+    min_len: Int,
+    max_hits: Int,
+    min_occurrences: Int,
+    max_occurrences: Int,
+    threads: Int,
+) -> Smems:
+    """`search_encoded` over slices of queries in parallel, results joined
+    in query order."""
+    var nq = len(bounds) - 1
+    var slices = (nq + _SLICE_QUERIES - 1) // _SLICE_QUERIES
+    var parts = List[Smems](capacity=slices)
+    for _ in range(slices):
+        parts.append(Smems())
+    var task = _SliceTask(
+        Pointer(to=fm).as_imm(),
+        Pointer(to=codes).as_imm(),
+        Pointer(to=bounds).as_imm(),
+        parts.unsafe_ptr(),
+        nq,
+        min_len,
+        max_hits,
+        min_occurrences,
+        max_occurrences,
+    )
+    parallel_for(task, slices, threads)
+    var out = Smems()
+    for p in range(slices):
+        ref part = parts[p]
+        var base_smems = len(out.smems)
+        var base_hits = len(out.hits)
+        for smem in part.smems:
+            out.smems.append(Smem(smem.start, smem.end, smem.first + base_hits, smem.count))
+        out.hits.extend(Span(part.hits))
+        for q in range(1, len(part.offsets)):
+            out.offsets.append(base_smems + part.offsets[q])
+    return out^
+
+
+struct _SliceTask[fm_origin: ImmOrigin, codes_origin: ImmOrigin, bounds_origin: ImmOrigin, out_origin: MutOrigin](
+    ParallelTask
+):
+    """Searches one slice of `_SLICE_QUERIES` queries into its own `Smems`."""
+
+    var fm: ImmPointer[FMIndex, Self.fm_origin]
+    var codes: ImmPointer[List[UInt8], Self.codes_origin]
+    var bounds: ImmPointer[List[Int], Self.bounds_origin]
+    var parts: MutPointer[Smems, Self.out_origin]
+    var queries: Int
+    var min_len: Int
+    var max_hits: Int
+    var min_occurrences: Int
+    var max_occurrences: Int
+
+    def __init__(
+        out self,
+        fm: ImmPointer[FMIndex, Self.fm_origin],
+        codes: ImmPointer[List[UInt8], Self.codes_origin],
+        bounds: ImmPointer[List[Int], Self.bounds_origin],
+        parts: MutPointer[Smems, Self.out_origin],
+        queries: Int,
+        min_len: Int,
+        max_hits: Int,
+        min_occurrences: Int,
+        max_occurrences: Int,
+    ):
+        self.fm = fm
+        self.codes = codes
+        self.bounds = bounds
+        self.parts = parts
+        self.queries = queries
+        self.min_len = min_len
+        self.max_hits = max_hits
+        self.min_occurrences = min_occurrences
+        self.max_occurrences = max_occurrences
+
+    def run(self, index: Int):
+        var lo = index * _SLICE_QUERIES
+        var hi = min(self.queries, lo + _SLICE_QUERIES)
+        # Bounds stay absolute offsets into the shared codes.
+        var sub = List[Int](capacity=hi - lo + 1)
+        for q in range(lo, hi + 1):
+            sub.append(self.bounds[][q])
+        self.parts[unsafe_offset=index] = search_encoded(
+            self.fm[], self.codes[], sub, self.min_len, self.max_hits, self.min_occurrences, self.max_occurrences
+        )
 
 
 def _search(

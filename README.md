@@ -222,46 +222,53 @@ suffix-array order.
 
 ## Library
 
-Put the repository on Mojo's include path (`mojo build -I path/to/sporos ...`):
+Put the repository on Mojo's include path (`mojo build -I path/to/sporos ...`). The public API is what the
+`sporos` package exports:
 
 ```mojo
-from sporos.fasta import read_fasta
-from sporos.mems import MemIndex, MemParams, filter_mums, find_mems
-from sporos.minimizers import minimizer_positions
-from sporos.syncmers import syncmer_positions
-from sporos.text import SeqText
+from sporos import Reference, minimizer_positions, read_fasta, syncmer_positions
 
 
 def main() raises:
-    var genome = read_fasta("ref.fa", threads=4)  # FASTA/FASTQ, plain, gzip or BGZF
-    var seq = genome.seq(0)
+    # A reference of named sequences: FASTA/FASTQ, plain, gzip or BGZF.
+    var genome = Reference.read("ref.fa", threads=8)
 
-    # Seeds: k-mer start positions, increasing.
-    var mins = minimizer_positions(seq, k=21, w=11, threads=4)  # canonical by default
-    var opened = syncmer_positions(seq, k=20, s=16, open_offset=2)  # open; or open_offsets=[1, 3]
+    # Seeds: k-mer start positions in one sequence, increasing.
+    var mins = minimizer_positions(genome.seq(0), k=21, w=11, threads=8)  # canonical by default
+    var opened = syncmer_positions(genome.seq(0), k=20, s=16, open_offset=2)  # open; or open_offsets=[1, 3]
 
-    # MEMs and MUMs of a query against the reference.
+    # Exact matches with a query on both strands: MEMs, MUMs, or frequency-capped MEMs.
     var query = read_fasta("query.fa")
-    var refs = List[Span[UInt8, origin_of(genome.data)]]()
-    refs.append(seq)
-    var qseqs = List[Span[UInt8, origin_of(query.data)]]()
-    qseqs.append(query.seq(0))
-    var rtext = SeqText(refs)
-    var qtext = SeqText(qseqs)
-    var index = MemIndex(rtext, MemParams.choose(50, len(rtext), len(qtext)), threads=4)
-    var mems = find_mems(index, rtext, qtext, threads=4)  # every MEM of length >= 50
-    var mums = filter_mums(mems, qtext, threads=4)  # MUMmer's -mum
-    for m in mums:
-        print(m.ref_pos, m.query_pos, m.length)
+    for m in genome.mems(query.seq(0), min_len=50, mode="mum", reverse=True, threads=8):
+        print(genome.name(m.sequence), m.ref_pos, m.query_pos, m.length, m.reverse)
+    var rare = genome.mems(query.seq(0), min_len=50, mode="mumreference", max_occurrences=10)
+
+    # SMEMs of reads (an FM-index is built on first use; save_fm_index keeps it).
+    var reads = read_fasta("reads.fq")
+    var spans = List[Span[UInt8, origin_of(reads.data)]]()
+    for r in range(len(reads)):
+        spans.append(reads.seq(r))
+    var found = genome.smems(spans, min_len=19, max_hits=20, threads=8)  # min_occurrences=f: f-SMEMs
+    for i in range(found.offsets[0], found.offsets[1]):  # read 0's SMEMs, found.of(0)
+        var smem = found.smems[i]
+        for h in found.hits_of(i):
+            print(smem.start, smem.end, smem.count, genome.name(Int(h.sequence)), h.position, h.reverse)
 ```
+
+- **Coordinates** are 0-based. A `Match` gives the reference sequence index, the position in that sequence,
+  the query position, the length and the strand; on the reverse strand the query position is in the query's
+  reverse complement, as MUMmer reports it. An `SmemHit` gives the sequence, the position of the match's
+  leftmost base and the strand.
+- **Occurrence limits** use one vocabulary: `max_occurrences` and `min_occurrences` count the matched string
+  in the reference (`Reference.mems`, `Reference.smems`, `FMIndex.smems`, `filter_by_occurrences`,
+  `SeedIndex.lookup`); `max_hits` only bounds the SMEM positions listed.
+- **Threads:** every call takes `threads`; `default_threads()` is one per physical core.
 
 <details>
 <summary><b>Reads and seed indexes</b>: batches, <code>SeedIndex</code>, lookups</summary>
 
 ```mojo
-from sporos.batch import minimizers_batch
-from sporos.fasta import read_fasta
-from sporos.index import MINIMIZER_SEEDS, SeedIndex
+from sporos import MINIMIZER_SEEDS, SeedIndex, minimizers_batch, read_fasta
 
 
 def main() raises:
@@ -283,28 +290,32 @@ def main() raises:
         print(h.query_pos, h.ref_pos, h.reverse, h.occurrences)
 ```
 
-SMEMs of reads, from an FM-index built once (or loaded with `FMIndex.load`):
+`syncmers_batch` is the batch counterpart for syncmers, and `SeedIndex.lookup` probes a single read.
+
+</details>
+
+<details>
+<summary><b>Building blocks</b>: <code>SeqText</code>, <code>MemIndex</code>, <code>find_mems</code>, <code>FMIndex</code></summary>
+
+`Reference` wraps these; use them directly to control indexes and sampling:
 
 ```mojo
-from sporos.fmindex import FMIndex
+from sporos import FMIndex, MemIndex, MemParams, SeqText, filter_by_occurrences, find_mems
 
-    var fm = FMIndex.build(refs, genome.names, threads=4)  # fm.save("ref.sfm") to keep it
-    var found = fm.smems(spans, min_len=19, max_hits=20)
-    for i in range(found.offsets[0], found.offsets[1]):  # read 0's SMEMs
-        var smem = found.smems[i]
-        print(smem.start, smem.end, smem.count)
-        for h in found.hits_of(i):  # reference text offset, strand
-            print(h.ref_pos, h.reverse)
+    var rtext = SeqText(refs)  # packed reference: Mem positions are offsets into it
+    var qtext = SeqText(qseqs)  # SeqText(qseqs, reverse_complement=True) for the reverse strand
+    var index = MemIndex(rtext, MemParams.choose(50, len(rtext), len(qtext)), threads=4)
+    var mems = find_mems(index, rtext, qtext, threads=4)  # every MEM of length >= 50, in query order
+    var mums = filter_by_occurrences(mems^, qtext, max_occurrences=1, max_query_occurrences=1)  # -mum
+    var seq = rtext.sequence_of(Int(mums[0].ref_pos))  # text offset -> sequence, position
+
+    var fm = FMIndex.build(refs, names, threads=4)  # or FMIndex.load("ref.sfm"); fm.save(path)
+    var found = fm.smems(spans, min_len=19, threads=4)
 ```
 
-Related calls:
-- `syncmers_batch` is the batch counterpart for syncmers.
-- `SeedIndex.lookup` probes a single read.
-- `filter_mums(..., unique_in_query=False)` gives `-mumreference`.
-- `filter_by_occurrences(mems, qtext, max_in_reference, max_in_query, min_in_reference)` gives the
-  frequency-capped MEMs; `FMIndex.smems(..., min_occurrences=f, max_occurrences=n)` the f-SMEMs.
-
-The docstrings in [`sporos/`](sporos) describe every parameter and its limits.
+- `filter_mums(mems, qtext, unique_in_query)` is the `max_occurrences=1` case, `find_smems` (MEM engine)
+  gives SMEMs of one long query without an FM-index, and `sort_mems` orders MEMs by query position.
+- The docstrings in [`sporos/`](sporos) describe every parameter and its limits.
 
 </details>
 
@@ -455,7 +466,7 @@ Competitor rows come from that suite; sporos rows are from the current code.
   - Batches give each read its own lane.
   - Threads take small segments in order and copy their positions once into the final list, after the
     previous segment publishes where it ends.
-- **MEMs** (`sporos/mems.mojo`, `sporos/table.mojo`).
+- **MEMs** (`sporos/mems/`, `sporos/table.mojo`).
   - Matches are located through short anchors (K ≤ 32 bases): reference K-mers every `k1` bases, and query
     K-mers every `k2` bases, with `k1` and `k2` coprime and `k1 · k2 ≤ L - K + 1`. Each anchor hit is then
     extended in both directions, 32 bases per compare, as far as the match goes.
@@ -487,7 +498,7 @@ Competitor rows come from that suite; sporos rows are from the current code.
 <details>
 <summary><b>SMEMs: the FM-index engine</b></summary>
 
-- **Index** (`sporos/fmindex.mojo`).
+- **Index** (`sporos/fmindex/`).
   - The BWT of the reference's ACGT runs and their reverse complements, each run ended by a separator, so
     a pattern's interval comes with its reverse complement's (an FMD-index, as in BWA and minibwa) and no
     match crosses a sequence end or an `N`.

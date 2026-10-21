@@ -20,13 +20,15 @@ habits:
 
 ## Working here
 
+- The public API is what `sporos/__init__.mojo` exports (the README's Library section shows it); keep the
+  two in step when adding or renaming anything public.
 - Build and test: `pixi run test` (every kernel against the brute-force oracles in `tests/reference.mojo`);
   format: `pixi run format` (120 columns).
 - Toolchain: latest Mojo from the nightly channel.
 - Pointers handed out by owning types must carry the owner's origin (see `CodeBuffer.unsafe_ptr`); an
   untracked pointer lets the owner be destroyed early. Buffers that tasks reach through untracked pointers
   are explicit `alloc`/`dealloc` pairs: `_ = list^` after the tasks does not keep a `List` alive. Prefer tasks
-  generic over the origins of the data they read (`cli/sporos_cli.mojo`'s `_FormatTask`): tracked pointers keep
+  generic over the origins of the data they read (`cli/mem_command.mojo`'s `_FormatTask`): tracked pointers keep
   the owners alive while the task runs.
 - `unsafe_strided_load` on `UInt8` returns wrong lanes on the current nightly; gather explicitly.
 - In a `TestSuite` file, `String(StringSlice(unsafe_from_utf8=span))` fails to compile (recursive

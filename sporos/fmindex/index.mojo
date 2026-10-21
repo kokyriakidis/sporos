@@ -34,12 +34,12 @@ from std.bit import count_leading_zeros, count_trailing_zeros, pop_count
 from std.memory import bitcast, pack_bits
 from std.sys.intrinsics import PrefetchOptions, prefetch
 
-from sporos.mems import SmemHit
+from sporos.mems import SmemHit, Smems
 from sporos.text import _pack32
 
 from .build import build_index
 from .io import load_index, save_index
-from .search import ReadSmems, search_encoded, search_smems
+from .search import search_encoded, search_smems
 
 comptime _COUNT_MASK: UInt64 = (UInt64(1) << 56) - 1
 comptime _SEPARATOR_FLAG: UInt64 = UInt64(1) << 63
@@ -470,9 +470,8 @@ struct FMIndex(Movable):
         strand of a match of `length` bases at text offset `text_pos`."""
         var reverse = text_pos >= self.half
         var f = text_pos if not reverse else 2 * self.half - 1 - text_pos - length
-        var lo = self._run_of(f)
-        var seq = self.run_seq[lo]
-        return SmemHit(UInt32(self.offsets[seq] + self.run_ref[lo] + f - self.run_text[lo]), reverse)
+        var run = self._run_of(f)
+        return SmemHit(UInt32(self.run_seq[run]), UInt32(self.run_ref[run] + f - self.run_text[run]), reverse)
 
     def sequence_of(self, offset: Int) -> Int:
         """Index of the sequence containing reference text offset `offset`."""
@@ -497,7 +496,8 @@ struct FMIndex(Movable):
         max_hits: Int = 20,
         min_occurrences: Int = 1,
         max_occurrences: Int = 0,
-    ) -> ReadSmems:
+        threads: Int = 1,
+    ) -> Smems:
         """The SMEMs of length >= `min_len` of each query against the
         reference, both strands: query intervals of maximal exact matches
         not contained in another's. Hits are listed for SMEMs with at most
@@ -506,8 +506,9 @@ struct FMIndex(Movable):
         With `min_occurrences` f > 1 they are f-SMEMs (Gagie's f-MEMs,
         minibwa's `-s`): the maximal query intervals that occur at least f
         times. `max_occurrences` (0: no limit) drops those occurring more
-        often, as Mumemto's `-F` caps matches."""
-        return search_smems(self, queries, min_len, max_hits, min_occurrences, max_occurrences)
+        often, as Mumemto's `-F` caps matches. `threads` search slices of
+        queries in parallel."""
+        return search_smems(self, queries, min_len, max_hits, min_occurrences, max_occurrences, threads)
 
     def smems_encoded(
         self,
@@ -517,10 +518,12 @@ struct FMIndex(Movable):
         max_hits: Int = 20,
         min_occurrences: Int = 1,
         max_occurrences: Int = 0,
-    ) -> ReadSmems:
-        """`smems` on queries already encoded with `encode_bases` (no copy):
-        query `q` is `codes[bounds[q] : bounds[q + 1]]`."""
-        return search_encoded(self, codes, bounds, min_len, max_hits, min_occurrences, max_occurrences)
+        threads: Int = 1,
+    ) -> Smems:
+        """`smems` on queries already encoded with `encode_bases`: query `q`
+        is `codes[bounds[q] : bounds[q + 1]]` (no copy when 32 bytes follow
+        the last query)."""
+        return search_encoded(self, codes, bounds, min_len, max_hits, min_occurrences, max_occurrences, threads)
 
     @inline(.always)
     def _prefetch_row(self, row: Int):

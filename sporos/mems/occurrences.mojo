@@ -19,14 +19,14 @@ from .mums import _GroupFillTask, _PARALLEL_MEMS, _REF_ORDER_TASKS, _RefOrderTas
 def filter_by_occurrences(
     var mems: List[Mem],
     query: SeqText,
-    max_in_reference: Int,
-    max_in_query: Int = 0,
-    min_in_reference: Int = 1,
+    max_occurrences: Int,
+    max_query_occurrences: Int = 0,
+    min_occurrences: Int = 1,
     threads: Int = 1,
 ) -> List[Mem]:
-    """MEMs whose string occurs at most `max_in_reference` times in the
-    reference, at most `max_in_query` times in its query sequence (0: no
-    limit, for either) and at least `min_in_reference` times in the
+    """MEMs whose string occurs at most `max_occurrences` times in the
+    reference, at most `max_query_occurrences` times in its query sequence
+    (0: no limit, for either) and at least `min_occurrences` times in the
     reference: frequency-capped (and floored) MEMs, as Mumemto's `-F` caps
     multi-MEMs. With caps of 1 they are `filter_mums`'s MUMs.
 
@@ -36,14 +36,14 @@ def filter_by_occurrences(
     intervals, up to the cap, give both. `mems` must come from one
     `find_mems` call (it is consumed: without limits it is returned as is);
     the result keeps its order."""
-    if min_in_reference <= 1 and max_in_reference <= 1 and max_in_query <= 1:
-        if max_in_reference == 0 and max_in_query == 0:
+    if min_occurrences <= 1 and max_occurrences <= 1 and max_query_occurrences <= 1:
+        if max_occurrences == 0 and max_query_occurrences == 0:
             return mems^
-        if max_in_reference == 1:
-            return filter_mums(mems, query, unique_in_query=max_in_query == 1, threads=threads)
+        if max_occurrences == 1:
+            return filter_mums(mems, query, unique_in_query=max_query_occurrences == 1, threads=threads)
     var keep = List[Bool](length=len(mems), fill=True)
     var workers = threads if len(mems) >= _PARALLEL_MEMS else 1
-    var ref_cap = max(max_in_reference, min_in_reference)
+    var ref_cap = max(max_occurrences, min_occurrences)
     var lo = 0
     while lo < len(mems):
         var seq = query.sequence_of(Int(mems[lo].query_pos))
@@ -55,7 +55,7 @@ def filter_by_occurrences(
         var starts = List[UInt64](unsafe_uninit_length=count)
         var lengths = List[UInt32](unsafe_uninit_length=count)
         var others = List[UInt32](unsafe_uninit_length=count)
-        if max_in_reference > 0 or min_in_reference > 1:
+        if max_occurrences > 0 or min_occurrences > 1:
             # Copies in the reference: MEMs containing it in query coordinates.
             var fill = _GroupFillTask(
                 mems.unsafe_ptr().unsafe_offset(lo), starts.unsafe_ptr(), lengths.unsafe_ptr(), count, by_ref=False
@@ -64,9 +64,9 @@ def filter_by_occurrences(
             _count_containing(starts, 0, lengths, max(ref_cap, 1), others, workers)
             for i in range(count):
                 var copies = Int(others[i]) + 1
-                if (max_in_reference > 0 and copies > max_in_reference) or copies < min_in_reference:
+                if (max_occurrences > 0 and copies > max_occurrences) or copies < min_occurrences:
                     keep[lo + i] = False
-        if max_in_query > 0:
+        if max_query_occurrences > 0:
             # Copies in the query: MEMs containing it in reference coordinates.
             var keys = _GroupFillTask(
                 mems.unsafe_ptr().unsafe_offset(lo), starts.unsafe_ptr(), lengths.unsafe_ptr(), count, by_ref=True
@@ -77,9 +77,9 @@ def filter_by_occurrences(
                 mems.unsafe_ptr().unsafe_offset(lo), starts.unsafe_ptr().as_imm(), lengths.unsafe_ptr(), count
             )
             parallel_for(gather, _REF_ORDER_TASKS, workers)
-            _count_containing(starts, 32, lengths, max_in_query, others, workers)
+            _count_containing(starts, 32, lengths, max_query_occurrences, others, workers)
             for i in range(count):
-                if Int(others[i]) + 1 > max_in_query:
+                if Int(others[i]) + 1 > max_query_occurrences:
                     keep[lo + Int(starts[i] & 0xFFFFFFFF)] = False
         lo = hi
     return _collect(mems, keep, workers)

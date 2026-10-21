@@ -1,6 +1,6 @@
 from std.testing import assert_equal, assert_true, TestSuite
 
-from sporos.fmindex import FMIndex, ReadSmems
+from sporos.fmindex import FMIndex
 from sporos.mems import MemIndex, MemParams, find_smems
 from sporos.text import SeqText
 from reference import random_dna
@@ -101,15 +101,15 @@ def _check(
                 var qrc = SeqText(one, reverse_complement=True)
                 var mem = MemIndex(rtext, MemParams.choose(min_len, len(rtext), len(qtext)), 1)
                 var want = find_smems(mem, rtext, qtext, qrc, 1)
-                expected_count = len(want)
-                if got.offsets[qi + 1] - got.offsets[qi] != len(want):
+                expected_count = len(want.smems)
+                if got.offsets[qi + 1] - got.offsets[qi] != len(want.smems):
                     raise Error(
                         String(
                             t"L={min_len} query {qi}: {got.offsets[qi + 1] - got.offsets[qi]} SMEMs, expected"
-                            t" {len(want)}"
+                            t" {len(want.smems)}"
                         )
                     )
-                for s in range(len(want)):
+                for s in range(len(want.smems)):
                     var a = got.smems[got.offsets[qi] + s]
                     var b = want.smems[s]
                     if a.start != b.start or a.end != b.end or a.count != b.count:

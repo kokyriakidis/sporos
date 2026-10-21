@@ -10,8 +10,9 @@ from .engine import Mem, MemIndex, find_mems
 
 @fieldwise_init
 struct Smem(Comparable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
-    """A supermaximal exact match: query bases `[start, end)` (forward-strand
-    text offsets) occur in the reference at `Smems.hits[first : first + count]`."""
+    """A supermaximal exact match: bases `[start, end)` of its query occur
+    `count` times in the reference (both strands); its listed hits start at
+    `Smems.hits[first]` (see `Smems.hits_of`)."""
 
     var start: UInt32
     var end: UInt32
@@ -27,36 +28,53 @@ struct Smem(Comparable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
 
 @fieldwise_init
 struct SmemHit(Comparable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
-    """Where an SMEM occurs: the reference text offset of its leftmost base,
-    and whether the reference holds the query's reverse complement there."""
+    """Where an SMEM occurs: reference sequence `sequence`, 0-based
+    `position` of the match's leftmost base in it, and whether the reference
+    holds the query's reverse complement there."""
 
-    var ref_pos: UInt32
+    var sequence: UInt32
+    var position: UInt32
     var reverse: Bool
 
     def __lt__(self, other: Self) -> Bool:
-        return self.ref_pos < other.ref_pos or (self.ref_pos == other.ref_pos and not self.reverse and other.reverse)
+        if self.sequence != other.sequence:
+            return self.sequence < other.sequence
+        if self.position != other.position:
+            return self.position < other.position
+        return not self.reverse and other.reverse
 
     def __eq__(self, other: Self) -> Bool:
-        return self.ref_pos == other.ref_pos and self.reverse == other.reverse
+        return self.sequence == other.sequence and self.position == other.position and self.reverse == other.reverse
 
 
 struct Smems(Movable, Sized):
-    """SMEMs in increasing query start, each with its hits sorted by reference
-    position (forward before reverse at the same position)."""
+    """SMEMs of a batch of queries: query `q`'s are `of(q)`, in increasing
+    start. Each SMEM's hits, sorted by reference sequence and position
+    (forward before reverse), are `hits_of(i)`; an engine may leave them out
+    for SMEMs with more than its `max_hits`, while `Smem.count` always
+    counts them all."""
 
+    var offsets: List[Int]
     var smems: List[Smem]
     var hits: List[SmemHit]
 
-    def __init__(out self, var smems: List[Smem], var hits: List[SmemHit]):
-        self.smems = smems^
-        self.hits = hits^
+    def __init__(out self):
+        self.offsets = [0]
+        self.smems = List[Smem]()
+        self.hits = List[SmemHit]()
 
     def __len__(self) -> Int:
-        return len(self.smems)
+        """The number of queries."""
+        return len(self.offsets) - 1
+
+    def of(ref self, query: Int) -> Span[Smem, origin_of(self.smems)]:
+        """The SMEMs of query `query`."""
+        return Span(self.smems)[self.offsets[query] : self.offsets[query + 1]]
 
     def hits_of(ref self, i: Int) -> Span[SmemHit, origin_of(self.hits)]:
-        var smem = self.smems[i]
-        return Span(self.hits)[smem.first : smem.first + smem.count]
+        """The listed hits of SMEM `i` (an index into `smems`)."""
+        var end = self.smems[i + 1].first if i + 1 < len(self.smems) else len(self.hits)
+        return Span(self.hits)[self.smems[i].first : end]
 
 
 def find_smems(index: MemIndex, reference: SeqText, query: SeqText, query_rc: SeqText, threads: Int = 1) -> Smems:
@@ -87,8 +105,10 @@ def find_smems(index: MemIndex, reference: SeqText, query: SeqText, query_rc: Se
     # Sweep both lists by query start: of the MEMs starting at one position,
     # only the longest can be an SMEM, and it is one unless an earlier start
     # reaches as far.
-    var smems = List[Smem]()
-    var hits = List[SmemHit]()
+    var result = Smems()
+    var counts = List[Int](length=len(query.starts) + 1, fill=0)
+    ref smems = result.smems
+    ref hits = result.hits
     var reach = -1
     var f = 0
     var b = 0
@@ -111,15 +131,28 @@ def find_smems(index: MemIndex, reference: SeqText, query: SeqText, query_rc: Se
             var first = len(hits)
             for i in range(f, f_end):
                 if Int(forward[i].length) == longest:
-                    hits.append(SmemHit(forward[i].ref_pos, False))
+                    hits.append(_hit(reference, Int(forward[i].ref_pos), False))
             for i in range(b, b_end):
                 var m = backward[Int(keys[i] & 0xFFFFFFFF)]
                 if Int(m.length) == longest:
-                    hits.append(SmemHit(m.ref_pos, True))
+                    hits.append(_hit(reference, Int(m.ref_pos), True))
             var count = len(hits) - first
             sort(Span(hits)[first:])
-            smems.append(Smem(UInt32(start), UInt32(start + longest), first, count))
+            # In its own query's coordinates (MEMs never cross a sequence end).
+            var q = query.sequence_of(start)
+            var base = query.starts[q]
+            smems.append(Smem(UInt32(start - base), UInt32(start - base + longest), first, count))
+            counts[q + 1] += 1
             reach = start + longest
         f = f_end
         b = b_end
-    return Smems(smems^, hits^)
+    for q in range(len(query.starts)):
+        counts[q + 1] += counts[q]
+    result.offsets = counts^
+    return result^
+
+
+@always_inline
+def _hit(reference: SeqText, offset: Int, reverse: Bool) -> SmemHit:
+    var seq = reference.sequence_of(offset)
+    return SmemHit(UInt32(seq), UInt32(offset - reference.starts[seq]), reverse)

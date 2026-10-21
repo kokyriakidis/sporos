@@ -248,11 +248,16 @@ def test_smems_match_definition() raises:
                 var qrc = SeqText(qspans, reverse_complement=True)
                 var index = MemIndex(rtext, MemParams.choose(min_len, len(rtext), len(qtext)), threads)
                 var got = find_smems(index, rtext, qtext, qrc, threads)
+                # (query start, end, reference text offset, strand), queries one after another.
                 var flat = List[Tuple[Int, Int, Int, Bool]]()
-                for i in range(len(got)):
-                    var smem = got.smems[i]
-                    for h in got.hits_of(i):
-                        flat.append((Int(smem.start), Int(smem.end), Int(h.ref_pos), h.reverse))
+                assert_equal(len(got), len(queries))
+                for qi in range(len(got)):
+                    var offset = qtext.starts[qi]
+                    for i in range(got.offsets[qi], got.offsets[qi + 1]):
+                        var smem = got.smems[i]
+                        for h in got.hits_of(i):
+                            var at = rtext.starts[Int(h.sequence)] + Int(h.position)
+                            flat.append((Int(smem.start) + offset, Int(smem.end) + offset, at, h.reverse))
                 var expected = List[Tuple[Int, Int, Int, Bool]]()
                 for qi in range(len(queries)):
                     for e in _naive_smems(reference, queries[qi], min_len):
