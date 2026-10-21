@@ -340,22 +340,6 @@ struct SeedIndex(Movable):
             bounds.append(len(reads))
         var tasks = len(bounds) - 1
         var counts = List[Int](length=len(reads), fill=0)
-        if threads <= 1 or tasks <= 1:
-            # One thread: append straight into one list, no concatenation.
-            var hits = List[SeedHit]()
-            for t in range(tasks):
-                try:
-                    self._lookup_reads(
-                        reads.unsafe_ptr().unsafe_offset(bounds[t]),
-                        bounds[t + 1] - bounds[t],
-                        all_kmers,
-                        max_occurrences,
-                        hits,
-                        counts.unsafe_ptr().unsafe_offset(bounds[t]),
-                    )
-                except e:
-                    abort(String(t"seed lookup failed: {e}"))
-            return SeedHits(hits^, _prefix_sums(counts))
         var results = List[List[SeedHit]](length=tasks, fill=List[SeedHit]())
         if tasks > 0:
             var task = _LookupTask[origin](
