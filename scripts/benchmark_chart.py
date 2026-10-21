@@ -12,19 +12,19 @@ PANELS = [
     (
         "MEMs, hg38 vs CHM13 chr1, L = 50",
         "1 thread, wall time in seconds",
-        [("sporos", 22.5), ("copMEM2", 46.9), ("MUMmer4", 159.0)],
+        [("sporos", 20.7), ("copMEM2", 46.9), ("MUMmer4", 159.0)],
         " s",
     ),
     (
         "MEMs with 10 threads, same pair",
         "wall time in seconds (MUMmer4 runs single-threaded)",
-        [("sporos", 3.9), ("copMEM2", 46.5)],
+        [("sporos", 3.4), ("copMEM2", 46.5)],
         " s",
     ),
     (
         "MUMs (-mum), same pair",
         "1 thread, wall time in seconds",
-        [("sporos", 23.2), ("MUMmer4", 87.5)],
+        [("sporos", 23.3), ("MUMmer4", 87.5)],
         " s",
     ),
     (

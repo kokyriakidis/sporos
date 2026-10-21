@@ -22,8 +22,8 @@ a command-line tool, a C library and a Python package.
 
 - ⚡ **Fast.**
   - Minimizers and syncmers run 1.3–2.4x faster than simd-minimizers on one thread.
-  - MEMs between hg38 and CHM13 chr1 run 2x faster than copMEM2 on one thread and 12x faster with 10
-    threads.
+  - MEMs between hg38 and CHM13 chr1 run 2–2.3x faster than copMEM2 on one thread and 10–14x faster with
+    10 threads.
   - MUMs run 4–18x faster than MUMmer.
 - 🎯 **Exact.**
   - Every kernel is checked against a brute-force oracle.
@@ -37,7 +37,7 @@ a command-line tool, a C library and a Python package.
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/benchmarks-dark.svg">
-    <img alt="Bar charts, lower is better. MEMs on hg38 vs CHM13 chr1 at L=50 on one thread: sporos 22.5 s, copMEM2 46.9 s, MUMmer4 159 s. With 10 threads: sporos 3.9 s, copMEM2 46.5 s. MUMs on the same pair: sporos 23.2 s, MUMmer4 87.5 s. Canonical minimizers on CHM13 chr1, k=21, w=11, one thread: sporos 1.11 ns per base, simd-minimizers 2.17, minimap2 17.1." src="docs/benchmarks-light.svg" width="820">
+    <img alt="Bar charts, lower is better. MEMs on hg38 vs CHM13 chr1 at L=50 on one thread: sporos 20.7 s, copMEM2 46.9 s, MUMmer4 159 s. With 10 threads: sporos 3.4 s, copMEM2 46.5 s. MUMs on the same pair: sporos 23.3 s, MUMmer4 87.5 s. Canonical minimizers on CHM13 chr1, k=21, w=11, one thread: sporos 1.11 ns per base, simd-minimizers 2.17, minimap2 17.1." src="docs/benchmarks-light.svg" width="820">
   </picture>
 </p>
 
@@ -312,30 +312,32 @@ Competitor rows come from that suite; sporos rows are from the current code.
 
 | MEMs (1 / 10 threads) | sporos | copMEM2 `-mf` | MUMmer4 (1 thread) |
 |---|---|---|---|
-| hg38 vs CHM13 chr1, L=100 | **6.0 s / 1.4 s** | 11.4 s / 11.1 s | 132 s |
-| hg38 vs CHM13 chr1, L=50 (65.6 M MEMs) | **22.5 s / 3.9 s** | 46.9 s / 46.5 s | 159 s |
-| hg38 vs chimp chr21, L=50 | **0.81 s / 0.24 s** | 1.96 s / 1.95 s | 17.4 s |
+| hg38 vs CHM13 chr1, L=100 | **5.8 s / 1.1 s** | 11.4 s / 11.1 s | 132 s |
+| hg38 vs CHM13 chr1, L=50 (65.6 M MEMs) | **20.7 s / 3.4 s** | 46.9 s / 46.5 s | 159 s |
+| hg38 vs chimp chr21, L=50 | **0.78 s / 0.22 s** | 1.96 s / 1.95 s | 17.4 s |
 
 | MUMs, `-mum` | sporos (1 / 10 threads) | MUMmer4 (1 thread) |
 |---|---|---|
-| hg38 vs CHM13 chr1, L=100 | **6.0 s / 1.5 s** | 93.8 s |
-| hg38 vs CHM13 chr1, L=50 | **23.2 s / 4.8 s** | 87.5 s |
-| hg38 vs chimp chr21, L=50 | **0.82 s / 0.26 s** | 14.6 s |
+| hg38 vs CHM13 chr1, L=100 | **6.1 s / 1.2 s** | 93.8 s |
+| hg38 vs CHM13 chr1, L=50 | **23.3 s / 4.4 s** | 87.5 s |
+| hg38 vs chimp chr21, L=50 | **0.81 s / 0.24 s** | 14.6 s |
 
 | Seeds, CHM13 chr1, ns/bp (forward / canonical) | sporos | simd-minimizers 3.0 | minimap2 `mm_sketch` |
 |---|---|---|---|
 | minimizers k=21 w=11, 1 thread | **1.18 / 1.11** | 1.81 / 2.17 | — / 17.1 |
 | minimizers k=31 w=19, 1 thread | **1.04 / 0.98** | 1.64 / 1.93 | |
 | closed syncmers k=31 s=21, 1 thread | **1.09 / 1.25** | 2.00 / 2.58 | |
-| minimizers k=21 w=11, 10 threads | **0.18** / 0.21 | 0.19 / 0.20 | — / 1.96 |
-| minimizers k=31 w=19, 10 threads | **0.14 / 0.16** | 0.16 / 0.19 | |
+| minimizers k=21 w=11, 10 threads | **0.17 / 0.18** | 0.19 / 0.20 | — / 1.96 |
+| minimizers k=31 w=19, 10 threads | **0.13 / 0.13** | 0.16 / 0.19 | |
+| closed syncmers k=31 s=21, 10 threads | **0.17 / 0.18** | 0.20 / 0.25 | |
 
 - **Seed-index lookups** (hg38 chr21 index, k=19, w=12, occurrence cap 20, simulated 150 bp reads):
-  - read minimizers: 133 Mbp/s per thread, 560 Mbp/s on 8 threads;
+  - read minimizers: 137 Mbp/s per thread, 560 Mbp/s on 8 threads;
   - every read k-mer: 36 Mbp/s per thread.
-- **`sporos seeds`** on 1 M reads takes 1.2 s end to end with 10 threads, including the index build and 27 M
-  output lines.
-- **Peak memory** for MEMs on chr1 is 1.2 GB at L=100 and about 2.5 GB at L=50; copMEM2 `-mf` uses 1.7 GB.
+- **End to end**, including reading input and writing every line:
+  - `sporos minimizers -k 21 -w 11` on CHM13 chr1 (41 M lines): 0.94 s on one thread, 0.26 s on ten;
+  - `sporos seeds` on 1 M reads (27 M hit lines, index build included): 2.4 s on one thread, 0.61 s on ten.
+- **Peak memory** for MEMs on chr1 is 1.2 GB at L=100 and 2.4–2.6 GB at L=50; copMEM2 `-mf` uses 1.7 GB.
 
 **Caveats:**
 - With 10 threads, sporos returns one merged list of positions, while simd-minimizers' harness only counts
