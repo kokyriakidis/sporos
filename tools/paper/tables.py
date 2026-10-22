@@ -510,7 +510,8 @@ TABLES = {
                    "base, sporos at one byte per base, minimap2's mm_sketch in ASCII) and writes positions to memory. sporos "
                    "runs 16 lanes of 32 bits (AVX-512) or 8 (the width simd-minimizers uses, AVX2). mm_sketch computes canonical "
                    "minimizers only, of k at most 28 (the k = 31 rows run k = 28). Bold: fastest at each thread count.",
-        "header": ["Scheme", "k, w", "sporos-16", "sporos-8", "simd-min.", "mm_sketch", "sporos-16", "simd-min.", "mm_sketch"],
+        "header": ["Scheme", "k, w", "sporos (16 lanes)", "sporos (8 lanes)", "simd-minimizers", "mm_sketch",
+                   "sporos (16 lanes)", "simd-minimizers", "mm_sketch"],
         "groups": [("One thread", 2, 5), ("Ten threads", 6, 8)],
         "align": "llrrrrrrr",
         "fit": True,
@@ -570,7 +571,7 @@ STABLES = {
         "label": "S2",
         "caption": "Minimizers and closed syncmers of 100 Mbp of uniformly random DNA on one thread: ns per base, as in main Table 1. "
                    "Each harness draws its own random sequence.",
-        "header": ["Scheme", "k, w", "sporos-16", "sporos-8", "simd-min.", "mm_sketch"],
+        "header": ["Scheme", "k, w", "sporos (16 lanes)", "sporos (8 lanes)", "simd-minimizers", "mm_sketch"],
         "align": "llrrrr",
         "rows": seeds_table("random100M"),
     },

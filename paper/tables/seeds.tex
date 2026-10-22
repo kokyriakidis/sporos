@@ -6,7 +6,7 @@
 \resizebox{\ifdim\width>\textwidth\textwidth\else\width\fi}{!}{\begin{tabular}{@{}llrrrrrrr@{}}
 \toprule
  &  & \multicolumn{4}{c}{One thread} & \multicolumn{3}{c}{Ten threads} \\ \cmidrule(lr){3-6}\cmidrule(lr){7-9}
-Scheme & k, w & sporos-16 & sporos-8 & simd-min. & mm\_sketch & sporos-16 & simd-min. & mm\_sketch \\
+Scheme & k, w & sporos (16 lanes) & sporos (8 lanes) & simd-minimizers & mm\_sketch & sporos (16 lanes) & simd-minimizers & mm\_sketch \\
 \midrule
 Minimizers, forward & 21, 11 & \textbf{0.952} & 1.34 & 1.83 & -- & 0.227 & \textbf{0.208} & -- \\
 Minimizers, canonical & 21, 11 & \textbf{1.11} & 1.44 & 2.14 & 17.1 & \textbf{0.182} & 0.207 & 1.98 \\
