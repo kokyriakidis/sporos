@@ -89,6 +89,9 @@ REFS = {
  "Lattner2021": dict(type="article", authors=A("Lattner, Chris", "Amini, Mehdi", "Bondhugula, Uday", "Cohen, Albert", "others"), title="MLIR: scaling compiler infrastructure for domain specific computation", journal="2021 IEEE/ACM International Symposium on Code Generation and Optimization (CGO)", year="2021", pages="2--14", doi="10.1109/CGO51591.2021.9370308"),
 
 # ---------------------------------------------------------------- data
+ "Liao2023": dict(type="article", authors=A("Liao, Wen-Wei", "Asri, Mobin", "Ebler, Jana", "others"),
+     title="A draft human pangenome reference", journal="Nature", year="2023", volume="617", number="7960", pages="312--324",
+     doi="10.1038/s41586-023-05896-x"),
  "Nurk2022": dict(type="article", authors=A("Nurk, Sergey", "Koren, Sergey", "Rhie, Arang", "Rautiainen, Mikko", "others"), title="The complete sequence of a human genome", journal="Science", year="2022", volume="376", number="6588", pages="44--53", doi="10.1126/science.abj6987"),
  "Schneider2017": dict(type="article", authors=A("Schneider, Valerie A.", "Graves-Lindsay, Tina", "Howe, Kerstin", "Bouk, Nathan", "others"), title="Evaluation of GRCh38 and de novo haploid genome assemblies demonstrates the enduring quality of the reference assembly", journal="Genome Research", year="2017", volume="27", number="5", pages="849--864", doi="10.1101/gr.213611.116"),
  "Yoo2025": dict(type="article", authors=A("Yoo, DongAhn", "Rhie, Arang", "Hebbar, Prajna", "Antonacci, Francesca", "others"), title="Complete sequencing of ape genomes", journal="Nature", year="2025", volume="641", number="8062", pages="401--418", doi="10.1038/s41586-025-08816-3"),

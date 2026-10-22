@@ -16,12 +16,12 @@ WIDE_TABLES = ("seeds", "mems", "capped", "smems")
 
 ABSTRACT = [
  ("Motivation",
-  "Read mappers, whole-genome aligners and pangenome tools all begin with seeds, short exact matches between a "
-  "query and a reference. Each kind of seed is computed by its own tool: sampled k-mers such as minimizers and "
-  "syncmers inside read mappers, maximal exact and unique matches (MEMs and MUMs) between genomes by MUMmer and "
-  "copMEM2, super-maximal exact matches (SMEMs) of reads by BWA and its successors, and the recent "
-  "frequency-capped MEMs and f-SMEMs by one or two tools each. Seeding takes a large share of read mapping: up to "
-  "60% of BWA-MEM's time on short reads."),
+  "Nearly every comparison of DNA sequences, from mapping reads to aligning genomes and building pangenomes, starts "
+  "by finding seeds: exact matches between a query and a reference. Seeding can dominate the running time, up to "
+  "60% of BWA-MEM's on short reads, and the data it runs on keep growing, from complete telomere-to-telomere "
+  "genomes to pangenomes of many individuals. Yet seeds are computed by a patchwork of tools, one for each kind of "
+  "seed, each with its own index and definitions; several use a single processor core per query sequence, and the "
+  "newest kinds of seed, frequency-capped maximal exact matches and f-SMEMs, are offered by one or two tools each."),
  ("Results",
   "We present sporos, a library that computes all of these seeds exactly, with one set of definitions and one "
   "interface. Its main algorithmic contribution counts the copies of a MEM's string from the MEMs themselves: a "
@@ -53,7 +53,11 @@ BODY = [
  '(MUMs), anchors whole-genome alignment [@Delcher1999], and the super-maximal exact matches (SMEMs) of a read, '
  'the MEMs no longer one contains, seed BWA-MEM [@Li2012; @Li2013]. Seeding is not a negligible step: on short '
  'reads, single-threaded BWA-MEM spends 40% to 60% of its time finding SMEMs and locating their occurrences '
- '[@Vasimuddin2019], and accelerating that step has been the subject of dedicated hardware [@Subramaniyan2021].'),
+ '[@Vasimuddin2019], and accelerating that step has been the subject of dedicated hardware [@Subramaniyan2021]. '
+ 'The data that seeding runs on keep growing: complete telomere-to-telomere assemblies [@Nurk2022] and pangenomes '
+ 'of dozens of individuals [@Liao2023] make whole-genome comparisons and repeat-aware matching routine. The '
+ 'processors that run it have changed too, with vector units of up to 512 bits and tens of cores, and a seeding '
+ 'method keeps pace only if it uses both.'),
 ('p',
  'Each kind of seed is computed by its own tool, on its own data structure. Minimizers are computed inside read '
  'mappers such as minimap2 [@Li2018], with syncmers and strobemers in strobealign [@Sahlin2021; @Sahlin2022]; '
