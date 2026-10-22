@@ -7,7 +7,7 @@ import math
 
 from tables import SPEEDUPS
 
-WIDE = {"overview": True, "speedups": False}
+WIDE = {"overview": True, "speedups": True}
 
 TIKZ_STYLES = "\\usetikzlibrary{plotmarks}"
 
@@ -23,6 +23,7 @@ BOXES = {
     "input": (0.0, 2.55, 2.6, 1.3, "data", ["FASTA/FASTQ", "plain, gzip, BGZF", "→ 2-bit codes"]),
     "window": (3.3, 4.25, 4.2, 0.95, "step", ["Minimizers, syncmers:", "SIMD lanes, sliding minimum"]),
     "seedindex": (8.0, 4.25, 4.2, 0.95, "step", ["Seed index: canonical", "k-mer hash, fingerprints"]),
+    "lookups": (12.7, 4.25, 4.0, 0.95, "step", ["Batched lookups:", "one prefetch pipeline"]),
     "anchors": (3.3, 2.45, 4.2, 0.95, "step", ["Sparse anchor index:", "k1 · k2 ≤ L − K + 1"]),
     "extend": (8.0, 2.45, 4.2, 0.95, "step", ["MEMs: each found once,", "32-base extension"]),
     "sweeps": (12.7, 2.45, 4.0, 0.95, "step", ["Containment sweeps:", "MUMs, capped MEMs"]),
@@ -33,7 +34,7 @@ BOXES = {
 }
 ARROWS = [("input", "window"), ("input", "anchors"), ("input", "fmd"), ("window", "seedindex"),
           ("anchors", "extend"), ("extend", "sweeps"), ("fmd", "search"), ("search", "unique"),
-          ("seedindex", "api"), ("sweeps", "api"), ("unique", "api")]
+          ("seedindex", "lookups"), ("lookups", "api"), ("sweeps", "api"), ("unique", "api")]
 FILL = {"data": "EDEDED", "step": "FFFFFF", "out": "FBE3D6"}
 
 
@@ -116,80 +117,126 @@ def _overview_svg():
 
 
 # ------------------------------------------------------------------------------- speedups
-# One row per task: filled marker at one thread, hollow at ten (each against the other tool's best at that
-# thread count); the other tool's name at the right. Log-scale x from XMIN to XMAX.
-XMIN, XMAX = 1, 1000
-TICKS = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000]
-
-
-def _speedups_layout():
-    rows = SPEEDUPS
-    return rows, len(rows)
+# A dot plot across the page: rows grouped by kind of seed, each labelled with its task and the fastest other tool;
+# a filled dot at one thread and a hollow one at ten on a log axis from XMIN to XMAX, with parity (1x) dashed and
+# the slower side shaded; the speedups themselves in two columns at the right, whose headings carry the legend.
+XMIN, XMAX = 0.5, 1000
+TICKS = [(0.5, "0.5"), (1, "1"), (2, "2"), (5, "5"), (10, "10"), (20, "20"), (50, "50"), (100, "100"), (200, "200"),
+         (500, "500"), (1000, "1,000")]
+# Geometry in cm: plot width, row and group-heading heights, value columns to the right of the plot.
+PW, ROW, HEAD, COL1, COL2 = 8.6, 0.46, 0.55, 1.3, 3.2
 
 
 def _xfrac(v):
+    v = min(max(v, XMIN), XMAX)
     return (math.log10(v) - math.log10(XMIN)) / (math.log10(XMAX) - math.log10(XMIN))
 
 
+def _times(v):
+    if not v:
+        return "–"
+    return (f"{v:.2f}" if v < 1 else f"{v:.1f}" if v < 10 else f"{v:,.0f}") + "×"
+
+
+def _times_tex(v):
+    return _times(v).replace("×", "$\\times$")
+
+
+def _speedup_rows():
+    """(y of each row's centre, from the top, in cm; the row or group heading) top to bottom, and the total height."""
+    out, y, group = [], 0.0, None
+    for r in SPEEDUPS:
+        if r["group"] != group:
+            group = r["group"]
+            y += HEAD
+            out.append((y - HEAD / 2 + 0.06, "group", group))
+        y += ROW
+        out.append((y - ROW / 2, "row", r))
+    return out, y
+
+
 def _speedups_tikz():
-    rows, n = _speedups_layout()
-    width, step, left = 6.0, 0.42, 0.0
-    height = n * step
-    out = [f"\\draw[black!60] (0,0) -- ({width},0);"]
-    for t in TICKS:
-        x = _xfrac(t) * width
-        out.append(f"\\draw[gray!25] ({x:.3f},0) -- ({x:.3f},{height:.3f});"
-                   f"\\node[below, font=\\scriptsize] at ({x:.3f},0) {{{t}$\\times$}};")
-    out.append(f"\\node[font=\\small] at ({width / 2:.2f},-0.65) {{speedup over the fastest other tool}};")
-    for i, r in enumerate(rows):
-        y = height - (i + 0.5) * step
-        out.append(f"\\node[anchor=east, font=\\scriptsize] at ({left - 0.1:.2f},{y:.3f}) {{{_tex_text(r['label'])}}};")
-        out.append(f"\\node[anchor=west, font=\\scriptsize\\itshape, black!70] at ({width + 0.1:.2f},{y:.3f}) {{{r['rival']}}};")
+    rows, height = _speedup_rows()
+    top = height
+    out = [f"\\fill[gray!12] (0,0) rectangle ({_xfrac(1) * PW:.3f},{top:.3f});",
+           f"\\node[anchor=south, font=\\scriptsize, black!60] at ({_xfrac(0.7) * PW:.3f},{top + 0.02:.3f}) {{slower}};"]
+    for v, lab in TICKS:
+        x = _xfrac(v) * PW
+        out.append(f"\\draw[gray!25] ({x:.3f},0) -- ({x:.3f},{top:.3f});"
+                   f"\\node[below, font=\\scriptsize] at ({x:.3f},0) {{{lab}$\\times$}};")
+    out.append(f"\\draw[black!55, dashed] ({_xfrac(1) * PW:.3f},0) -- ({_xfrac(1) * PW:.3f},{top:.3f});")
+    out.append(f"\\draw[black!60] (0,0) -- ({PW},0);")
+    out.append(f"\\node[font=\\footnotesize] at ({PW / 2:.2f},-0.75) {{speedup of sporos over the fastest other tool (log scale)}};")
+    hy = top + 0.3
+    # Each value column's heading, right-aligned with its values, with its marker to the left of the text.
+    out.append(f"\\node[anchor=east, font=\\footnotesize\\bfseries] (h1) at ({PW + COL1 + 0.35:.3f},{hy:.3f}) {{1 thread}};"
+               f"\\fill[black] ([xshift=-5pt]h1.west) circle (2.4pt);"
+               f"\\node[anchor=east, font=\\footnotesize\\bfseries] (h10) at ({PW + COL2 + 0.35:.3f},{hy:.3f}) {{10 threads}};"
+               f"\\draw[black, fill=white, thick] ([xshift=-5pt]h10.west) circle (2.4pt);")
+    for yc, kind, item in rows:
+        y = top - yc
+        if kind == "group":
+            out.append(f"\\node[anchor=west, font=\\footnotesize\\bfseries] at (-5.6,{y:.3f}) {{{item}}};")
+            continue
+        r = item
+        out.append(f"\\node[anchor=east, font=\\footnotesize] at (-0.12,{y:.3f}) "
+                   f"{{{_tex_text(r['label'])} \\textcolor{{black!60}}{{vs {r['rival']}}}}};")
         xs = [v for v in (r["t1"], r["t10"]) if v]
         if len(xs) == 2:
-            out.append(f"\\draw[black!40] ({_xfrac(min(xs)) * width:.3f},{y:.3f}) -- ({_xfrac(max(xs)) * width:.3f},{y:.3f});")
-        if r["t1"]:
-            out.append(f"\\fill[black] ({_xfrac(r['t1']) * width:.3f},{y:.3f}) circle (2.2pt);")
+            out.append(f"\\draw[black!45, line width=0.8pt] ({_xfrac(min(xs)) * PW:.3f},{y:.3f}) -- ({_xfrac(max(xs)) * PW:.3f},{y:.3f});")
         if r["t10"]:
-            out.append(f"\\draw[black, fill=white, thick] ({_xfrac(r['t10']) * width:.3f},{y:.3f}) circle (2.2pt);")
-    out.append(f"\\fill[black] (0.2,{height + 0.35:.3f}) circle (2.2pt) node[right, font=\\scriptsize] {{1 thread}};"
-               f"\\draw[black, fill=white, thick] (2.0,{height + 0.35:.3f}) circle (2.2pt) node[right, font=\\scriptsize] {{10 threads}};")
+            out.append(f"\\draw[black, fill=white, thick] ({_xfrac(r['t10']) * PW:.3f},{y:.3f}) circle (2.4pt);")
+        if r["t1"]:
+            out.append(f"\\fill[black] ({_xfrac(r['t1']) * PW:.3f},{y:.3f}) circle (2.4pt);")
+        out.append(f"\\node[anchor=east, font=\\footnotesize] at ({PW + COL1 + 0.35:.3f},{y:.3f}) {{{_times_tex(r['t1'])}}};"
+                   f"\\node[anchor=east, font=\\footnotesize] at ({PW + COL2 + 0.35:.3f},{y:.3f}) {{{_times_tex(r['t10'])}}};")
     return "\n".join(out)
 
 
 def _speedups_svg():
-    rows, n = _speedups_layout()
-    left, width, step, top = 210, 360, 26, 34
-    W, H = left + width + 130, top + n * step + 50
+    rows, height = _speedup_rows()
+    s = 40  # px per cm
+    left, top = 5.8 * s, 1.0 * s
+    W, H = left + (PW + COL2 + 0.6) * s, top + height * s + 1.4 * s
 
     def X(v):
-        return left + _xfrac(v) * width
+        return left + _xfrac(v) * PW * s
 
-    out = [f'<svg viewBox="0 0 {W} {H}" class="chart" role="img" aria-label="Speedup of sporos over the fastest other tool">',
-           f'<circle cx="{left + 6}" cy="14" r="5" fill="currentColor"/><text x="{left + 16}" y="18" font-size="11" fill="currentColor">1 thread</text>',
-           f'<circle cx="{left + 96}" cy="14" r="5" fill="none" stroke="currentColor" stroke-width="1.6"/>'
-           f'<text x="{left + 106}" y="18" font-size="11" fill="currentColor">10 threads</text>']
-    base = top + n * step
-    for t in TICKS:
-        out.append(f'<line x1="{X(t):.1f}" y1="{top}" x2="{X(t):.1f}" y2="{base}" stroke="currentColor" stroke-opacity=".15"/>'
-                   f'<text x="{X(t):.1f}" y="{base + 16}" text-anchor="middle" font-size="11" fill="currentColor">{t}×</text>')
-    out.append(f'<line x1="{left}" y1="{base}" x2="{left + width}" y2="{base}" stroke="currentColor" stroke-opacity=".6"/>'
-               f'<text x="{left + width / 2:.0f}" y="{base + 36}" text-anchor="middle" font-size="12" fill="currentColor">'
-               'speedup over the fastest other tool</text>')
-    for i, r in enumerate(rows):
-        y = top + (i + 0.5) * step
-        out.append(f'<text x="{left - 8}" y="{y + 4:.1f}" text-anchor="end" font-size="11" fill="currentColor">{r["label"]}</text>'
-                   f'<text x="{left + width + 8}" y="{y + 4:.1f}" font-size="11" font-style="italic" fill="currentColor" '
-                   f'fill-opacity=".75">{r["rival"]}</text>')
+    base = top + height * s
+    out = [f'<svg viewBox="0 0 {W:.0f} {H:.0f}" class="chart" role="img" aria-label="Speedup of sporos over the fastest other tool">',
+           f'<rect x="{left:.1f}" y="{top:.1f}" width="{X(1) - left:.1f}" height="{height * s:.1f}" fill="currentColor" fill-opacity=".07"/>',
+           f'<text x="{X(0.7):.1f}" y="{top - 4:.1f}" text-anchor="middle" font-size="11" fill="currentColor" fill-opacity=".75">slower</text>']
+    for v, lab in TICKS:
+        out.append(f'<line x1="{X(v):.1f}" y1="{top:.1f}" x2="{X(v):.1f}" y2="{base:.1f}" stroke="currentColor" stroke-opacity=".12"/>'
+                   f'<text x="{X(v):.1f}" y="{base + 15:.1f}" text-anchor="middle" font-size="11" fill="currentColor">{lab}×</text>')
+    out.append(f'<line x1="{X(1):.1f}" y1="{top:.1f}" x2="{X(1):.1f}" y2="{base:.1f}" stroke="currentColor" stroke-opacity=".6" stroke-dasharray="4 3"/>'
+               f'<line x1="{left:.1f}" y1="{base:.1f}" x2="{left + PW * s:.1f}" y2="{base:.1f}" stroke="currentColor" stroke-opacity=".6"/>'
+               f'<text x="{left + PW * s / 2:.1f}" y="{base + 36:.1f}" text-anchor="middle" font-size="12" fill="currentColor">'
+               'speedup of sporos over the fastest other tool (log scale)</text>')
+    c1, c2 = left + (PW + COL1 + 0.35) * s, left + (PW + COL2 + 0.35) * s
+    out.append(f'<circle cx="{c1 - 76:.1f}" cy="{top - 18:.1f}" r="5" fill="currentColor"/>'
+               f'<text x="{c1:.1f}" y="{top - 14:.1f}" text-anchor="end" font-size="12" font-weight="700" fill="currentColor">1 thread</text>'
+               f'<circle cx="{c2 - 88:.1f}" cy="{top - 18:.1f}" r="5" fill="none" stroke="currentColor" stroke-width="1.6"/>'
+               f'<text x="{c2:.1f}" y="{top - 14:.1f}" text-anchor="end" font-size="12" font-weight="700" fill="currentColor">10 threads</text>')
+    for yc, kind, item in rows:
+        y = top + yc * s
+        if kind == "group":
+            out.append(f'<text x="8" y="{y + 4:.1f}" font-size="12" font-weight="700" fill="currentColor">{item}</text>')
+            continue
+        r = item
+        out.append(f'<text x="{left - 6:.1f}" y="{y + 4:.1f}" text-anchor="end" font-size="12" fill="currentColor">{r["label"]} '
+                   f'<tspan fill-opacity=".6">vs {r["rival"]}</tspan></text>')
         xs = [v for v in (r["t1"], r["t10"]) if v]
         if len(xs) == 2:
-            out.append(f'<line x1="{X(min(xs)):.1f}" y1="{y:.1f}" x2="{X(max(xs)):.1f}" y2="{y:.1f}" stroke="currentColor" stroke-opacity=".35"/>')
+            out.append(f'<line x1="{X(min(xs)):.1f}" y1="{y:.1f}" x2="{X(max(xs)):.1f}" y2="{y:.1f}" stroke="currentColor" stroke-opacity=".45" stroke-width="1.5"/>')
+        if r["t10"]:
+            out.append(f'<circle cx="{X(r["t10"]):.1f}" cy="{y:.1f}" r="5" fill="var(--paper, #fff)" stroke="currentColor" stroke-width="1.6">'
+                       f'<title>{r["label"]}, 10 threads: {_times(r["t10"])} over {r["rival"]}</title></circle>')
         if r["t1"]:
             out.append(f'<circle cx="{X(r["t1"]):.1f}" cy="{y:.1f}" r="5" fill="currentColor"><title>{r["label"]}, 1 thread: '
-                       f'{r["t1"]:.1f}× over {r["rival"]}</title></circle>')
-        if r["t10"]:
-            out.append(f'<circle cx="{X(r["t10"]):.1f}" cy="{y:.1f}" r="5" fill="var(--paper, #fff)" stroke="currentColor" '
-                       f'stroke-width="1.6"><title>{r["label"]}, 10 threads: {r["t10"]:.1f}× over {r["rival"]}</title></circle>')
+                       f'{_times(r["t1"])} over {r["rival"]}</title></circle>')
+        out.append(f'<text x="{c1:.1f}" y="{y + 4:.1f}" text-anchor="end" font-size="12" fill="currentColor">{_times(r["t1"])}</text>'
+                   f'<text x="{c2:.1f}" y="{y + 4:.1f}" text-anchor="end" font-size="12" fill="currentColor">{_times(r["t10"])}</text>')
     out.append("</svg>")
     return "\n".join(out)
 

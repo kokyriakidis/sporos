@@ -3,7 +3,7 @@
 \caption{Minimizers and closed syncmers of CHM13 chr1 (248~Mbp): ns per base, the best of 5 to 7 runs on one thread and of 3 on ten. Every tool reads its input already encoded (simd-minimizers packed at two bits per base, sporos at one byte per base, minimap2's mm\_sketch in ASCII) and writes positions to memory. sporos runs 16 lanes of 32 bits (AVX-512) or 8 (the width simd-minimizers uses, AVX2). mm\_sketch computes canonical minimizers only, of k at most 28 (the k = 31 rows run k = 28). Bold: fastest at each thread count.}\label{tab:seeds}
 \centering\footnotesize
 \setlength{\tabcolsep}{4pt}
-\resizebox{\textwidth}{!}{\begin{tabular}{@{}llrrrrrrr@{}}
+\resizebox{\ifdim\width>\textwidth\textwidth\else\width\fi}{!}{\begin{tabular}{@{}llrrrrrrr@{}}
 \toprule
  &  & \multicolumn{4}{c}{One thread} & \multicolumn{3}{c}{Ten threads} \\ \cmidrule(lr){3-6}\cmidrule(lr){7-9}
 Scheme & k, w & sporos-16 & sporos-8 & simd-min. & mm\_sketch & sporos-16 & simd-min. & mm\_sketch \\

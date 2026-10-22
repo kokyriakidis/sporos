@@ -6,6 +6,7 @@
 \usepackage{microtype}
 \usepackage{amsmath,amssymb}
 \usepackage{booktabs}
+\usepackage{float}
 \usepackage{array}
 \usepackage{longtable}
 \usepackage{graphicx}
@@ -26,7 +27,7 @@
 
 \texttt{benchmarks/competitors/setup\_xaros.sh} in the sporos repository installs every tool at the version of Table S1, downloads the genomes from NCBI and UCSC, simulates the reads (\texttt{sim\_reads.py}, fixed seeds) and builds the harnesses; \texttt{run\_seeds.sh}, \texttt{run\_lookups.sh}, \texttt{run\_mems.sh}, \texttt{run\_capped.sh} and \texttt{run\_smems.sh} run the benchmarks and write the raw measurements that the main tables are made from. Each timed command ran under \texttt{/usr/bin/time -v} after the machine had kept at most 1.5 processors busy for half a second; wall time is the best of three runs (one for runs past 60~s), memory the largest peak resident set size of those runs. Kernel benchmarks (Table 1, Table 2) time only the computation, inside each tool's own harness.
 
-\begin{table}[h]
+\begin{table}[H]
 \caption{Versions of the tools compared. Tools built from source were compiled for the benchmark machine; MUMmer4, Mumemto, BWA and ropebwt3 are Bioconda packages.}\label{tab:versions}
 \centering\footnotesize
 \setlength{\tabcolsep}{4pt}
@@ -66,7 +67,7 @@ The commands, with \texttt{R} and \texttt{Q} the reference and query FASTA files
 
 \subsection{Minimizers and syncmers of random DNA}
 
-\begin{table}[h]
+\begin{table}[H]
 \caption{Minimizers and closed syncmers of 100~Mbp of uniformly random DNA on one thread: ns per base, as in main Table 1. Each harness draws its own random sequence.}\label{tab:seeds_random}
 \centering\footnotesize
 \setlength{\tabcolsep}{4pt}
@@ -90,11 +91,11 @@ Closed syncmers, canonical & 31, 19 & \textbf{1.01} & 1.40 & 2.33 & -- \\
 
 Tables S3 to S5 complete main Table 3: MEMs and MUMs of at least 100~bp, MEMs unique in the reference, and peak memory. copMEM2 takes at least 1.0~GB whatever the input size, and setting up its tables dominates its time on the small pair; sporos's anchor index grows with the reference and the sampling, and its peak on chromosome 1 at L = 50 comes from the 65.6 million MEMs it holds before filtering.
 
-\begin{table}[h]
+\begin{table}[H]
 \caption{MEMs and MUMs of at least 100~bp, as main Table 3.}\label{tab:mems100}
 \centering\footnotesize
 \setlength{\tabcolsep}{4pt}
-\resizebox{\linewidth}{!}{\begin{tabular}{@{}lrrrrrrrr@{}}
+\resizebox{\ifdim\width>\linewidth\linewidth\else\width\fi}{!}{\begin{tabular}{@{}lrrrrrrrr@{}}
 \toprule
  & \multicolumn{5}{c}{MEMs (\texttt{-maxmatch})} & \multicolumn{3}{c}{MUMs (\texttt{-mum})} \\ \cmidrule(lr){2-6}\cmidrule(lr){7-9}
 Pair & sporos, 1 thr. & sporos, 10 thr. & copMEM2, 1 thr. & copMEM2, 10 thr. & MUMmer4 & sporos, 1 thr. & sporos, 10 thr. & MUMmer4 \\
@@ -106,7 +107,7 @@ hg38 / CHM13 chr1 (249 / 248~Mbp) & \textbf{5.50} & \textbf{1.13} & 10.8 & 10.8 
 \end{tabular}}
 \end{table}
 
-\begin{table}[h]
+\begin{table}[H]
 \caption{MEMs unique in the reference (\texttt{-mumreference}): wall time in seconds and the speedup over MUMmer4 on one thread.}\label{tab:mumreference}
 \centering\footnotesize
 \setlength{\tabcolsep}{4pt}
@@ -124,7 +125,7 @@ chr1, L = 100 & 5.34 & 1.08 & 87.6 & 16 \\
 \end{tabular}
 \end{table}
 
-\begin{table}[h]
+\begin{table}[H]
 \caption{Peak resident memory in MB of the one-thread runs of main Table 3 and Supplementary Table S3.}\label{tab:memory}
 \centering\footnotesize
 \setlength{\tabcolsep}{4pt}
@@ -144,7 +145,7 @@ chr1, L = 100 & 1{,}171 & 2{,}723 & 1{,}674 & 3{,}123 & 1{,}171 & 2{,}923 \\
 
 \subsection{FM-index builds}
 
-\begin{table}[h]
+\begin{table}[H]
 \caption{Building the FM-indexes of hg38 chr21 for Table 5: wall time in seconds on 1 and 10 threads, and the larger peak memory in MB. BWA's index builds on one thread.}\label{tab:builds}
 \centering\footnotesize
 \setlength{\tabcolsep}{4pt}
@@ -164,11 +165,11 @@ BWA & 33.4 & -- & 74 \\
 
 Table S7 compares the SMEMs of sporos with those of \texttt{bwa fastmap} and minibwa, by read, interval, number of occurrences and listed positions. Of the 5{,}242 SMEMs that only the other tool reports, 5{,}140 list a position whose reference span holds an N, which BWA and minibwa replace by random bases when they build their index and sporos never matches, and 0 list no positions, so that this check cannot tell; 102 remain. Ten threads gave the same output as one for every read set and f.
 
-\begin{table}[h]
-\caption{SMEM outputs compared, by read, interval, number of occurrences and listed positions. The last column counts the other tool's own SMEMs that list a position whose reference span holds a non-ACGT base under Through N (BWA and minibwa replace each N of the reference by a random base, and match through it), and those of the rest that list no positions, having more than 20 occurrences, under No positions.}\label{tab:smem_checks}
+\begin{table}[H]
+\caption{SMEM outputs compared, by read, interval, number of occurrences and listed positions. Through N counts the other tool's own SMEMs that list a position whose reference span holds a non-ACGT base (BWA and minibwa replace each N of the reference by a random base, and match through it); No positions counts those of the rest that list no positions, having more than 20 occurrences.}\label{tab:smem_checks}
 \centering\footnotesize
 \setlength{\tabcolsep}{4pt}
-\resizebox{\linewidth}{!}{\begin{tabular}{@{}llrrrrrr@{}}
+\resizebox{\ifdim\width>\linewidth\linewidth\else\width\fi}{!}{\begin{tabular}{@{}llrrrrrr@{}}
 \toprule
 Reads & Against & sporos & Other & Only sporos & Only other & Through N & No positions \\
 \midrule

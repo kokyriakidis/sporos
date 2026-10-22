@@ -313,7 +313,7 @@ def smems_table():
                 continue
             one = bold_min([secs(v) if v else "–" for v in (t["s1"], t["mb"], t["bwa"], t["rb1"])], [t["s1"], t["mb"], t["bwa"], t["rb1"]])
             ten = bold_min([secs(v) if v else "–" for v in (t["s10"], t["rb10"])], [t["s10"], t["rb10"]])
-            rows.append([f"{label}, {'SMEMs' if f == 1 else f'f = {f}'}", one[0], ten[0], one[1], one[2], one[3], ten[1]])
+            rows.append([f"{label}, {'SMEMs' if f == 1 else f'f = {f}'}", one[0], one[1], one[2], one[3], ten[0], ten[1]])
     return rows
 
 
@@ -336,36 +336,41 @@ def _fastest(pairs):
 
 
 def speedups():
+    """Figure 2's rows, in three groups: the task, the fastest other tool, and sporos's speedup over it on one thread
+    and on ten (each tool at its best on that many threads)."""
     out = []
 
-    def add(label, rival, t1, t10):
+    def add(group, label, rival, t1, t10):
         if t1 or t10:
-            out.append(dict(label=label, rival=rival, t1=t1, t10=t10))
+            out.append(dict(group=group, label=label, rival=rival, t1=t1, t10=t10))
 
-    add("Minimizers, canonical (chr1)", "simd-minimizers", seed_speedup("can", 21, 11, 1), seed_speedup("can", 21, 11, 10))
-    add("Closed syncmers, canonical (chr1)", "simd-minimizers", seed_speedup("closed-can", 21, 11, 1), seed_speedup("closed-can", 21, 11, 10))
+    K, G, R = "Sampled k-mers", "Exact matches between genomes", "Exact matches of reads"
+    add(K, "Minimizers, canonical (chr1)", "simd-minimizers", seed_speedup("can", 21, 11, 1), seed_speedup("can", 21, 11, 10))
+    add(K, "Closed syncmers, canonical (chr1)", "simd-minimizers", seed_speedup("closed-can", 21, 11, 1),
+        seed_speedup("closed-can", 21, 11, 10))
     sp, mm = lookup("sporos k=19 w=12", "lookup minimizers, batch"), lookup("minimap2 k=19 w=12", "lookup minimizers, per read")
-    add("Seed-index lookups (150 bp)", "minimap2", sp / mm if sp and mm else None, None)
+    add(K, "Seed-index lookups (150 bp reads)", "minimap2", sp / mm if sp and mm else None, None)
     for mode, label in (("maxmatch", "MEMs"), ("mum", "MUMs")):
         s1 = wall(MEMS, pair="chr1", L="50", tool="sporos", mode=mode, threads=1)
         s10 = wall(MEMS, pair="chr1", L="50", tool="sporos", mode=mode, threads=10)
+        mummer = wall(MEMS, pair="chr1", L="50", tool="mummer", mode=mode, threads=1)
         if mode == "maxmatch":
-            name1, o1 = _fastest([("copMEM2", copmem2("chr1", "50", 1)), ("MUMmer4", wall(MEMS, pair="chr1", L="50", tool="mummer", mode=mode, threads=1))])
-            name10, o10 = _fastest([("copMEM2", copmem2("chr1", "50", 10)), ("MUMmer4", wall(MEMS, pair="chr1", L="50", tool="mummer", mode=mode, threads=1))])
+            name1, o1 = _fastest([("copMEM2", copmem2("chr1", "50", 1)), ("MUMmer4", mummer)])
+            name10, o10 = _fastest([("copMEM2", copmem2("chr1", "50", 10)), ("MUMmer4", mummer)])
         else:
             name1 = name10 = "MUMmer4"
-            o1 = o10 = wall(MEMS, pair="chr1", L="50", tool="mummer", mode=mode, threads=1)
-        add(f"{label}, L = 50 (chr1)", name1, o1 / s1 if o1 and s1 else None, o10 / s10 if o10 and s10 else None)
+            o1 = o10 = mummer
+        add(G, f"{label}, L = 50 (chr1)", name1, o1 / s1 if o1 and s1 else None, o10 / s10 if o10 and s10 else None)
     s1 = wall(CAPPED, pair="chr21", tool="sporos", mode="total cap 10", threads=1)
     s10 = wall(CAPPED, pair="chr21", tool="sporos", mode="total cap 10", threads=10)
     mu = wall(CAPPED, pair="chr21", tool="mumemto", mode="total cap 10", threads=1)
-    add("Capped MEMs, ≤ 10 copies (chr21)", "Mumemto", mu / s1 if mu and s1 else None, mu / s10 if mu and s10 else None)
+    add(G, "Capped MEMs, at most 10 copies (chr21)", "Mumemto", mu / s1 if mu and s1 else None, mu / s10 if mu and s10 else None)
     for reads, f, label in (("150bp", 1, "SMEMs, 150 bp reads"), ("10kb", 1, "SMEMs, 10 kbp reads"),
-                            ("150bp", 2, "f-SMEMs, f = 2 (150 bp)")):
+                            ("150bp", 2, "f-SMEMs, f = 2, 150 bp reads")):
         t = smem_times(reads, f)
         n1, o1 = _fastest([("minibwa", t["mb"]), ("bwa", t["bwa"]), ("ropebwt3", t["rb1"])])
         n10, o10 = _fastest([("minibwa", t["mb"]), ("bwa", t["bwa"]), ("ropebwt3", t["rb10"])])
-        add(label, n1 if n1 == n10 else f"{n1}; {n10}", o1 / t["s1"] if o1 and t["s1"] else None,
+        add(R, label, n1 if n1 == n10 else f"{n1}; {n10}", o1 / t["s1"] if o1 and t["s1"] else None,
             o10 / t["s10"] if o10 and t["s10"] else None)
     return out
 
@@ -411,6 +416,9 @@ def quoted():
     V["seed_t10_min"], V["seed_t10_max"] = _range(ten)
     slow = [x for x in ten if x and x < 1]
     # Phrased by the text: "from N times slower to M times faster", or "N–M times faster".
+    V["seed_t10_limit"] = ("On ten threads sporos was slower than simd-minimizers for some schemes" if slow else
+                           f"On ten threads sporos was only {span(V['seed_t10_min'], V['seed_t10_max'])} times faster than "
+                           "simd-minimizers")
     V["seed_t10_phrase"] = (f"between {1 / min(slow):.1f} times slower and {V['seed_t10_max']} times faster than"
                             if slow else f"{span(V['seed_t10_min'], V['seed_t10_max'])} times faster than")
     eight = [seed(SMIN, "chm13_chr1", m, k, w, 1) / seed(SP8, "chm13_chr1", m, k, w, 1) for m, k, w, _ in SEED_SCHEMES
@@ -653,10 +661,10 @@ STABLES["builds"] = {
 }
 STABLES["smem_checks"] = {
     "label": "S7",
-    "caption": "SMEM outputs compared, by read, interval, number of occurrences and listed positions. The last column counts "
-               "the other tool's own SMEMs that list a position whose reference span holds a non-ACGT base under Through N "
-               "(BWA and minibwa replace each N of the reference by a random base, and match through it), and those of the rest "
-               "that list no positions, having more than 20 occurrences, under No positions.",
+    "caption": "SMEM outputs compared, by read, interval, number of occurrences and listed positions. Through N counts the "
+               "other tool's own SMEMs that list a position whose reference span holds a non-ACGT base (BWA and minibwa replace "
+               "each N of the reference by a random base, and match through it); No positions counts those of the rest that list "
+               "no positions, having more than 20 occurrences.",
     "header": ["Reads", "Against", "sporos", "Other", "Only sporos", "Only other", "Through N", "No positions"],
     "align": "llrrrrrr",
     "fit": True,

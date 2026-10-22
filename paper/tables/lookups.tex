@@ -3,7 +3,7 @@
 \caption{Seed-index lookups of 1 M simulated 150~bp reads against hg38 chr21 on one thread: throughput in Mbp of reads per second, the best of three runs, reads in memory, timing only the loop that seeds each read and copies out its hits; index build time on 1 and 8 threads. sporos and minimap2 index the same (w, k)-minimizers under different hashes and skip seeds with more than 20 hits; strobealign indexes randstrobes with its defaults for 150~bp reads and does more per seed (both orientations, partial-strobe lookups), so its rows are a reference point. minimap2's and strobealign's build times include reading the FASTA file.}\label{tab:lookups}
 \centering\footnotesize
 \setlength{\tabcolsep}{4pt}
-\resizebox{\linewidth}{!}{\begin{tabular}{@{}lrrr@{}}
+\resizebox{\ifdim\width>\linewidth\linewidth\else\width\fi}{!}{\begin{tabular}{@{}lrrr@{}}
 \toprule
 Seeding & Mbp/s & Hits per read & Build (s), 1 / 8 threads \\
 \midrule

@@ -323,8 +323,8 @@ BODY = [
  'kernel at the width of AVX2, but other processors, including ARM, were not measured. The comparison with '
  'Mumemto covers pairs of genomes, not the collections of many genomes Mumemto was designed for, and the two '
  'tools\' definitions differ. Positions are 32-bit, so each sequence and the concatenated reference must be shorter '
- 'than \\(2^{32}\\) bases, and building an FM-index takes about ten bytes of memory per reference base. On ten '
- 'threads sporos was only slightly faster than simd-minimizers.'),
+ 'than \\(2^{32}\\) bases, and building an FM-index takes about ten bytes of memory per reference base. '
+ f'{V["seed_t10_limit"]}.'),
 ]
 
 BACK = [
@@ -345,6 +345,7 @@ FIGURES = {
             "index that looks them up (top), MEMs, MUMs and frequency-capped MEMs between genomes (middle), and SMEMs "
             "and f-SMEMs of reads (bottom), behind Mojo, command-line, C and Python interfaces.",
 "speedups": "Speedup of sporos over the fastest other tool for each task, on one thread (filled) and ten "
-            "(hollow), each tool at its best on that many threads; the other tool is named on the right (Tables 1 to 5). "
-            "copMEM2, MUMmer4, minibwa, bwa fastmap and Mumemto use one thread; the seed-lookup harnesses run one.",
+            "(hollow), on a log scale; the dashed line marks parity, and the values are at the right (Tables 1 to 5). "
+            "Each tool runs at its best on that many threads: copMEM2, MUMmer4, minibwa, BWA and Mumemto do not gain "
+            "from more threads on these inputs, and the seed-lookup harnesses run on one.",
 }

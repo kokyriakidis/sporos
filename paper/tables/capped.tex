@@ -3,7 +3,7 @@
 \caption{Frequency-capped MEMs of at least 50~bp on both strands: wall time in seconds and peak memory in MB. Mumemto (one thread) finds the multi-MEMs of the two genomes as one collection, capped per genome (\texttt{-k 2 -f N}) or in total (\texttt{-k 2 -f 0 -F N}); sporos finds the MEMs of the query against the reference whose string occurs at most N times in the reference (\texttt{-maxmatch -{}-max-occ N}, for the total cap) or in the reference and the query (\texttt{-mum -{}-max-occ N}, per genome). The definitions differ (Section 4.4): the last column gives the share of Mumemto's forward-strand position pairs that sporos also reports, and of sporos's that Mumemto reports.}\label{tab:capped}
 \centering\footnotesize
 \setlength{\tabcolsep}{4pt}
-\resizebox{\textwidth}{!}{\begin{tabular}{@{}lrrrrrrr@{}}
+\resizebox{\ifdim\width>\textwidth\textwidth\else\width\fi}{!}{\begin{tabular}{@{}lrrrrrrr@{}}
 \toprule
 Pair and cap & sporos, 1 thr. & sporos, 10 thr. & Mumemto & Speedup & sporos MB & Mumemto MB & Shared (\%) \\
 \midrule

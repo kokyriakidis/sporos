@@ -3,7 +3,7 @@
 \caption{MEMs and MUMs of at least 50~bp between whole chromosomes, forward strand: wall time in seconds, the best of three runs (one run past 60~s), output written to a file. copMEM2 is the faster of its default and \texttt{-mf} settings; it and MUMmer4 gain nothing from more threads on a single query sequence (Supplementary Section S1). Every sporos output equals MUMmer4's, and its MEMs equal copMEM2's. Bold: fastest at each thread count.}\label{tab:mems}
 \centering\footnotesize
 \setlength{\tabcolsep}{4pt}
-\resizebox{\textwidth}{!}{\begin{tabular}{@{}lrrrrrrrr@{}}
+\resizebox{\ifdim\width>\textwidth\textwidth\else\width\fi}{!}{\begin{tabular}{@{}lrrrrrrrr@{}}
 \toprule
  & \multicolumn{5}{c}{MEMs (\texttt{-maxmatch})} & \multicolumn{3}{c}{MUMs (\texttt{-mum})} \\ \cmidrule(lr){2-6}\cmidrule(lr){7-9}
 Pair & sporos, 1 thr. & sporos, 10 thr. & copMEM2, 1 thr. & copMEM2, 10 thr. & MUMmer4 & sporos, 1 thr. & sporos, 10 thr. & MUMmer4 \\
