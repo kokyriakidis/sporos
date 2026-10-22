@@ -16,13 +16,13 @@ WIDE_TABLES = ("seeds", "mems", "capped", "smems")
 
 ABSTRACT = [
  ("Motivation",
-  "Read mapping, genome alignment and pangenome analysis all start by finding seeds, exact matches between a query "
-  "and a reference; on short reads, seeding takes 40% to 60% of single-threaded BWA-MEM's time. However, seed "
-  "computation remains fragmented across specialized tools, each with its own index, coordinate conventions and "
-  "output format, and recently introduced seed types, such as frequency-capped maximal exact matches and f-SMEMs, "
-  "are supported by only one or two implementations. Moreover, few of these tools are designed for modern CPUs "
-  "with wide SIMD units and many cores; MUMmer4, copMEM2 and the SMEM search of minibwa, for example, process each "
-  "query sequence on a single core."),
+  "As sequencing data and reference collections grow, from complete genomes to pangenomes, finding seeds, the "
+  "exact matches between a query and a reference from which reads are mapped and genomes are aligned, has become a "
+  "central step of sequence analysis. Many kinds of seeds are in use, from sampled k-mers such as minimizers to "
+  "maximal exact matches, and each is computed by its own specialized tool, with its own index and output format. "
+  "And as processors gain wider vector units and more cores, the speed of seeding depends increasingly on how well "
+  "an implementation uses them, yet several widely used seeding tools process each query sequence on a "
+  "single core."),
  ("Results",
   "We present sporos, one library that computes all of these seeds exactly, on every core and vector lane. Its "
   "key contribution counts the copies of a MEM's string from the MEMs themselves: a "
@@ -71,7 +71,10 @@ BODY = [
  'often a match may occur, relaxing uniqueness to rare repeats, from a suffix array, LCP array and document array '
  'built over the whole collection [@Shivakumar2025]. f-SMEMs, the maximal query intervals that occur at least f '
  'times, are k-MEMs in MONI [@Tatarnikov2022], f-MEMs in Gagie\'s terms [@Gagie2026] and (L, f)-SMEMs in ropebwt3 '
- 'and minibwa, the two tools that compute them for whole read sets [@Li2024; @Li2026].'),
+ 'and minibwa, the two tools that compute them for whole read sets [@Li2024; @Li2026]. Several of these tools '
+ 'also leave most of a processor idle on a single query: MUMmer4 divides its work only between query records, '
+ 'copMEM2 gains nothing from more threads on one query sequence and the SMEM search of minibwa runs on one core '
+ '(Supplementary Section S1).'),
 ('p',
  'We present sporos, a library that computes all of these seeds exactly: minimizers and syncmers, an index of '
  'them for looking seeds up, MEMs, MUMs and frequency-capped MEMs between genomes, and SMEMs and f-SMEMs of reads. '
