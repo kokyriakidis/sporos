@@ -145,19 +145,20 @@ def lookups_table():
     rows = []
     for k, w in ((19, 12), (21, 11)):
         sp, mm = f"sporos k={k} w={w}", f"minimap2 k={k} w={w}"
-        rows.append([f"sporos, batch (k = {k}, w = {w})", f"**{num(lookup(sp, 'lookup minimizers, batch'))}**",
-                     num(hits(sp, "lookup minimizers, batch")),
-                     f"{num(lookup(sp, 'build, 1 threads'))} / {num(lookup(sp, 'build, 8 threads'))}"])
-        rows.append([f"sporos, one read per call (k = {k}, w = {w})", num(lookup(sp, "lookup minimizers, per read")),
+        build = lambda tool: f"{lookup(tool, 'build, 1 threads'):.2f} / {lookup(tool, 'build, 8 threads'):.2f}"
+        rows.append([f"Minimizers, k = {k}, w = {w}", "", "", ""])
+        rows.append(["sporos, batched", f"**{num(lookup(sp, 'lookup minimizers, batch'))}**",
+                     num(hits(sp, "lookup minimizers, batch")), build(sp)])
+        rows.append(["sporos, per read", num(lookup(sp, "lookup minimizers, per read")),
                      num(hits(sp, "lookup minimizers, per read")), ""])
-        rows.append([f"minimap2 (k = {k}, w = {w})", num(lookup(mm, "lookup minimizers, per read")),
-                     num(hits(mm, "lookup minimizers, per read")),
-                     f"{num(lookup(mm, 'build, 1 threads'))} / {num(lookup(mm, 'build, 8 threads'))}"])
+        rows.append(["minimap2", num(lookup(mm, "lookup minimizers, per read")),
+                     num(hits(mm, "lookup minimizers, per read")), build(mm)])
     sa = "strobealign defaults"
-    rows.append(["strobealign, one hit per seed", num(lookup(sa, "lookup find_hits (one per seed)")),
+    rows.append(["Randstrobes", "", "", ""])
+    rows.append(["strobealign", num(lookup(sa, "lookup find_hits (one per seed)")),
                  num(hits(sa, "lookup find_hits (one per seed)")),
-                 f"{num(lookup(sa, 'build, 1 threads'))} / {num(lookup(sa, 'build, 8 threads'))}"])
-    rows.append(["strobealign, every position", num(lookup(sa, "lookup find_hits + every position")),
+                 f"{lookup(sa, 'build, 1 threads'):.2f} / {lookup(sa, 'build, 8 threads'):.2f}"])
+    rows.append(["strobealign, all positions", num(lookup(sa, "lookup find_hits + every position")),
                  num(hits(sa, "lookup find_hits + every position")), ""])
     return rows
 
@@ -520,11 +521,11 @@ TABLES = {
     "lookups": {
         "caption": "Seed-index lookups of 1 M simulated 150 bp reads against hg38 chr21 on one thread: throughput in Mbp of "
                    "reads per second, the best of three runs, reads in memory, timing only the loop that seeds each read and "
-                   "copies out its hits; index build time on 1 and 8 threads. sporos and minimap2 index the same (w, k)-minimizers "
+                   "copies out its hits; index build time in seconds on 1 / 8 threads. sporos and minimap2 index the same (w, k)-minimizers "
                    "under different hashes and skip seeds with more than 20 hits; strobealign indexes randstrobes with its defaults "
                    "for 150 bp reads and does more per seed (both orientations, partial-strobe lookups), so its rows are a reference "
                    "point. minimap2's and strobealign's build times include reading the FASTA file.",
-        "header": ["Seeding", "Mbp/s", "Hits per read", "Build (s), 1 / 8 threads"],
+        "header": ["Seeds and tool", "Mbp/s", "Hits/read", "Build (s)"],
         "align": "lrrr",
         "fit": True,
         "rows": lookups_table(),
