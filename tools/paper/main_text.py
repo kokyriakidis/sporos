@@ -251,7 +251,7 @@ BODY = [
 ('p',
  f'sporos computed minimizers and closed syncmers {V["seed_t1_min"]}–{V["seed_t1_max"]} times faster than '
  f'simd-minimizers on one thread, over every scheme on CHM13 chromosome 1 and on random DNA ([#tab:seeds]; '
- f'Supplementary Table S1), at {V["seed_chr1_ns"]} ns per base for canonical (21, 11)-minimizers of chromosome 1, '
+ f'Supplementary Table S2), at {V["seed_chr1_ns"]} ns per base for canonical (21, 11)-minimizers of chromosome 1, '
  f'or {V["seed_chr1_gbps"]} Gbp per second. Restricted to 8 lanes, the vector width simd-minimizers uses, it was '
  f'{V["seed8_min"]}–{V["seed8_max"]} times faster on chromosome 1, and the 16-lane build was '
  f'{V["seed16_vs_8_min"]}–{V["seed16_vs_8_max"]} times faster than the 8-lane one, where simd-minimizers found its '
@@ -271,14 +271,14 @@ BODY = [
 ('p',
  f'sporos found every MEM of the three genome pairs {V["copmem2_t1_min"]}–{V["copmem2_t1_max"]} times faster than '
  f'copMEM2 on one thread, and {V["copmem2_chr1_min"]}–{V["copmem2_chr1_max"]} times faster on the pair of human '
- f'chromosomes 1 ([#tab:mems]; Supplementary Table S2). copMEM2 and MUMmer4 do not divide a single query sequence '
+ f'chromosomes 1 ([#tab:mems]; Supplementary Table S3). copMEM2 and MUMmer4 do not divide a single query sequence '
  f'among threads, so on ten threads sporos was {V["copmem2_chr1_t10_min"]}–{V["copmem2_chr1_t10_max"]} times '
  f'faster than copMEM2 on chromosome 1, finding its {V["checks_max_mems"]} million MEMs of at least 50 bp in {V["chr1_mems_t10"]} s. '
  f'Against MUMmer4, sporos was {V["mummer_min"]}–{V["mummer_max"]} times faster on one thread for MEMs, MUMs and '
- 'MEMs unique in the reference (Supplementary Table S3); the smallest margin is for MUMs of the chromosome 1 pair, '
+ 'MEMs unique in the reference (Supplementary Table S4); the smallest margin is for MUMs of the chromosome 1 pair, '
  f'where MUMmer4 never enumerates the {V["checks_max_mems"]} million MEMs that sporos filters. In all '
  f'{V["checks_total"]} comparisons, every output of sporos equalled MUMmer4\'s or copMEM2\'s match for match. '
- f'sporos used {V["chr1_rss_gb"]} GB at most on chromosome 1 (Supplementary Table S4).'),
+ f'sporos used {V["chr1_rss_gb"]} GB at most on chromosome 1 (Supplementary Table S5).'),
 ('table', 'mems'),
 ('sub', 'Frequency-capped MEMs'),
 ('p',

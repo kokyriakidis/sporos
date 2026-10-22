@@ -8,7 +8,7 @@ TABLES = STABLES
 BODY = [
 ('sec', 'Setup'),
 ('p',
- '`benchmarks/competitors/setup_xaros.sh` in the sporos repository installs every tool at the version of Table S5, '
+ '`benchmarks/competitors/setup_xaros.sh` in the sporos repository installs every tool at the version of Table S1, '
  'downloads the genomes from NCBI and UCSC, simulates the reads (`sim_reads.py`, fixed seeds) and builds the '
  'harnesses; `run_seeds.sh`, `run_lookups.sh`, `run_mems.sh`, `run_capped.sh` and `run_smems.sh` run the '
  'benchmarks and write the raw measurements that the main tables are made from. Each timed command ran under '
@@ -39,10 +39,10 @@ BODY = [
 ('table', 'seeds_random'),
 ('sub', 'MEMs and MUMs'),
 ('p',
- 'Tables S2 to S4 complete main Table 3: MEMs and MUMs of at least 100 bp, MEMs unique in the reference, and peak '
- 'memory. copMEM2 holds fixed tables of 1 to 2 GB whatever the input size, which dominates its time on the small '
+ 'Tables S3 to S5 complete main Table 3: MEMs and MUMs of at least 100 bp, MEMs unique in the reference, and peak '
+ f'memory. copMEM2 takes at least {V["copmem2_rss_min"]} GB whatever the input size, and setting up its tables dominates its time on the small '
  'pair; sporos\'s anchor index grows with the reference and the sampling, and its peak on chromosome 1 at L = 50 '
- 'comes from the 65 million MEMs it holds before filtering.'),
+ f'comes from the {V["checks_max_mems"]} million MEMs it holds before filtering.'),
 ('table', 'mems100'),
 ('table', 'mumreference'),
 ('table', 'memory'),

@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Git post-commit hook: after a commit that changes paper/, pushes it to the Overleaf project (sync-overleaf.sh).
+# Installed by `pixi run paper-hook`. It never undoes or blocks the commit: when the sync cannot run (no overleaf
+# remote, no network, edits made in Overleaf since the last sync, or the first sync, which needs --force), it
+# says why and `pixi run paper-sync` retries by hand.
+cd "$(git rev-parse --show-toplevel)" || exit 0
+git remote get-url overleaf >/dev/null 2>&1 || exit 0
+if git diff-tree --no-commit-id --name-only -r --root HEAD | grep -q '^paper/'; then
+  bash tools/paper/sync-overleaf.sh || echo "post-commit: paper/ not pushed to Overleaf; run pixi run paper-sync" >&2
+fi
+exit 0

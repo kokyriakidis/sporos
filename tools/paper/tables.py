@@ -517,7 +517,7 @@ TABLES = {
     "mems": {
         "caption": "MEMs and MUMs of at least 50 bp between whole chromosomes, forward strand: wall time in seconds, the best of "
                    "three runs (one run past 60 s), output written to a file. copMEM2 is the faster of its default and `-mf` "
-                   "settings; it and MUMmer4 gain nothing from more threads on a single query sequence (Supplementary Section S2). "
+                   "settings; it and MUMmer4 gain nothing from more threads on a single query sequence (Supplementary Section S1). "
                    "Every sporos output equals MUMmer4's, and its MEMs equal copMEM2's. Bold: fastest at each thread count.",
         "header": ["Pair", "sporos, 1 thr.", "sporos, 10 thr.", "copMEM2, 1 thr.", "copMEM2, 10 thr.", "MUMmer4",
                    "sporos, 1 thr.", "sporos, 10 thr.", "MUMmer4"],
@@ -553,7 +553,7 @@ TABLES = {
 
 STABLES = {
     "seeds_random": {
-        "label": "S1",
+        "label": "S2",
         "caption": "Minimizers and closed syncmers of 100 Mbp of uniformly random DNA on one thread: ns per base, as in main Table 1. "
                    "Each harness draws its own random sequence.",
         "header": ["Scheme", "k, w", "sporos-16", "sporos-8", "simd-min.", "mm_sketch"],
@@ -561,7 +561,7 @@ STABLES = {
         "rows": seeds_table("random100M"),
     },
     "mems100": {
-        "label": "S2",
+        "label": "S3",
         "caption": "MEMs and MUMs of at least 100 bp, as main Table 3.",
         "header": ["Pair", "sporos, 1 thr.", "sporos, 10 thr.", "copMEM2, 1 thr.", "copMEM2, 10 thr.", "MUMmer4",
                    "sporos, 1 thr.", "sporos, 10 thr.", "MUMmer4"],
@@ -571,15 +571,15 @@ STABLES = {
         "rows": mems_table("100"),
     },
     "mumreference": {
-        "label": "S3",
+        "label": "S4",
         "caption": "MEMs unique in the reference (`-mumreference`): wall time in seconds and the speedup over MUMmer4 on one thread.",
         "header": ["Pair", "sporos, 1 thr.", "sporos, 10 thr.", "MUMmer4", "Speedup"],
         "align": "lrrrr",
         "rows": mumreference_table(),
     },
     "memory": {
-        "label": "S4",
-        "caption": "Peak resident memory in MB of the one-thread runs of main Table 3 and Supplementary Table S2.",
+        "label": "S5",
+        "caption": "Peak resident memory in MB of the one-thread runs of main Table 3 and Supplementary Table S3.",
         "header": ["Pair", "sporos MEMs", "copMEM2", "copMEM2 -mf", "MUMmer4 MEMs", "sporos MUMs", "MUMmer4 MUMs"],
         "align": "lrrrrrr",
         "rows": mems_memory_table(),
@@ -632,7 +632,7 @@ def threads_same():
 
 
 STABLES["versions"] = {
-    "label": "S5",
+    "label": "S1",
     "caption": "Versions of the tools compared. Tools built from source were compiled for the benchmark machine; MUMmer4, "
                "Mumemto, BWA and ropebwt3 are Bioconda packages.",
     "header": ["Tool", "Version"],
@@ -650,15 +650,18 @@ STABLES["builds"] = {
 STABLES["smem_checks"] = {
     "label": "S7",
     "caption": "SMEM outputs compared, by read, interval, number of occurrences and listed positions. The last column counts "
-               "the other tool's own SMEMs that list a position whose reference span holds a non-ACGT base (BWA and minibwa "
-               "replace each N of the reference by a random base, and match through it), and the last those of the rest that "
-               "list no positions, having more than 20 occurrences.",
+               "the other tool's own SMEMs that list a position whose reference span holds a non-ACGT base under Through N "
+               "(BWA and minibwa replace each N of the reference by a random base, and match through it), and those of the rest "
+               "that list no positions, having more than 20 occurrences, under No positions.",
     "header": ["Reads", "Against", "sporos", "Other", "Only sporos", "Only other", "Through N", "No positions"],
     "align": "llrrrrrr",
     "fit": True,
     "rows": smem_checks_table(),
 }
 V["smem_threads_same"] = threads_same()
+_cm = [rss(MEMS, pair=p, L=L, tool=t, mode="maxmatch", threads=1) for p, _ in PAIRS for L in ("50", "100")
+       for t in ("copmem2", "copmem2 -mf")]
+V["copmem2_rss_min"] = f"{min(m for m in _cm if m) / 1024:.1f}" if any(_cm) else "?"
 _only, _through, _unlisted = smem_differences()
 V["smem_only_other"], V["smem_through_n"], V["smem_unlisted"] = f"{_only:,}", f"{_through:,}", f"{_unlisted:,}"
 V["smem_unexplained"] = f"{_only - _through - _unlisted:,}"

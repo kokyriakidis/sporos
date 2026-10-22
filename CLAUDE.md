@@ -37,5 +37,6 @@ habits:
 - Finished work merges straight into `main` and is pushed; no pull requests.
 - The paper's text lives in `tools/paper/` (`main_text.py`, `supplement.py`, `refs.py`); its numbers come from
   `benchmarks/competitors/results/` through `tables.py`. `pixi run paper` rewrites `paper/`, an Overleaf project,
-  from them, and `pixi run paper-sync` pushes it (the `overleaf` remote; the token stays in the keychain). Edit
+  from them, and `pixi run paper-sync` pushes it (the `overleaf` remote; the token stays in the keychain); with
+  `pixi run paper-hook` installed, every commit that changes `paper/` pushes it. Edit
   the sources, never the generated `.tex`; type no number into the text that `tables.py` can compute.

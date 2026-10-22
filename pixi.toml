@@ -75,3 +75,5 @@ test-python = { cmd = "PYTHONPATH=$PIXI_PROJECT_ROOT/build/python python3 tests/
 paper = "python3 tools/paper/render.py"
 paper-refs = "python3 tools/paper/check_refs.py"
 paper-sync = "bash tools/paper/sync-overleaf.sh"
+# Pushes paper/ to Overleaf after every commit that changes it (a git post-commit hook; once per clone).
+paper-hook = "ln -sf ../../tools/paper/post-commit .git/hooks/post-commit && echo installed .git/hooks/post-commit"
