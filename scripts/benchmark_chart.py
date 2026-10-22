@@ -1,45 +1,19 @@
 """Draws the README's benchmark chart as light and dark SVGs.
 
-    python3 scripts/benchmark_chart.py      # writes docs/benchmarks-{light,dark}.svg
+    python3 scripts/benchmark_chart.py      # writes docs/benchmarks-{light,dark}.svg (pixi run paper does too)
 
-The numbers are the README's Performance tables (xaros, Intel i9-7900X); update both together.
-Each panel is one benchmark on its own scale, lower is better; sporos is the accent, rivals gray.
+The numbers come from the competitor benchmark's results, through tools/paper/readme.py's panels(), as do the
+README's tables and the paper's. Each panel is one benchmark on its own scale, lower is better; sporos is the
+accent, rivals gray.
 """
 
+import sys
 from pathlib import Path
 
-PANELS = [
-    (
-        "MEMs, hg38 vs CHM13 chr1, L = 50",
-        "1 thread, wall time in seconds",
-        [("sporos", 19.5), ("copMEM2", 46.5), ("MUMmer4", 159.6)],
-        " s",
-    ),
-    (
-        "MEMs with 10 threads, same pair",
-        "wall time in seconds (MUMmer4 runs single-threaded)",
-        [("sporos", 3.3), ("copMEM2", 46.4)],
-        " s",
-    ),
-    (
-        "MUMs (-mum), same pair",
-        "1 thread, wall time in seconds",
-        [("sporos", 21.6), ("MUMmer4", 87.1)],
-        " s",
-    ),
-    (
-        "SMEMs of 1 M 150 bp reads against hg38 chr21, L = 19",
-        "1 thread, wall time in seconds (index built beforehand)",
-        [("sporos", 1.85), ("minibwa", 8.85), ("bwa fastmap", 27.3)],
-        " s",
-    ),
-    (
-        "Canonical minimizers, CHM13 chr1, k = 21, w = 11",
-        "1 thread, nanoseconds per base",
-        [("sporos", 1.05), ("simd-minimizers", 2.13), ("minimap2", 17.1)],
-        " ns",
-    ),
-]
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools" / "paper"))
+import readme  # noqa: E402
+
+PANELS = readme.panels()
 
 THEMES = {
     # Transparent surface: the page is GitHub's (#ffffff light, #0d1117 dark).

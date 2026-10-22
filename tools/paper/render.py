@@ -496,6 +496,11 @@ def build_pdfs():
 
 if __name__ == "__main__":
     os.makedirs(HTML_OUT, exist_ok=True)
+    # The README's numbers and chart, from the same results.
+    import readme
+    import runpy
+    readme.update()
+    runpy.run_path(os.path.join(ROOT, "scripts", "benchmark_chart.py"), run_name="__main__")
     open(os.path.join(HTML_OUT, "paper.html"), "w").write(render_html_main())
     open(os.path.join(HTML_OUT, "supplement.html"), "w").write(render_html_supplement())
     for kind in ("sections", "figures", "tables"):

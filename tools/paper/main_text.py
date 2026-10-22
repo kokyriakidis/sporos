@@ -241,7 +241,7 @@ BODY = [
 ('sec', 'Results'),
 ('sub', 'Experimental setup'),
 ('p',
- f'All measurements were taken on an {V["machine_cpu"]} (Skylake-X, AVX-512, ten cores, hyper-threading off) with '
+ f'All measurements were taken on an {V["machine_cpu"]} (Skylake-X, AVX-512, ten cores, hyper-threading and turbo boost off, so at a fixed clock) with '
  '91 GB of memory, under Ubuntu Linux. '
  'sporos, simd-minimizers, minimap2, copMEM2 and strobealign were compiled for the native instruction set, minibwa '
  'with its own build, and MUMmer4, Mumemto, BWA and ropebwt3 installed from Bioconda. The genome pairs are '

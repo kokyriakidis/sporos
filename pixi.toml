@@ -10,7 +10,9 @@ license-file = "LICENSE"
 
 # Latest Mojo (nightly channel): the vendored Modular skills track the latest compiler.
 [dependencies]
-mojo = ">=1.2.0.dev2026102005,<2"
+# Pinned: nightlies change the language from day to day. Move it on purpose, rebuild and test, then re-run the
+# benchmarks (`SPOROS_ONLY=1 bash benchmarks/competitors/run_all.sh`).
+mojo = "==1.2.0.dev2026102005"
 libdeflate = ">=1.26,<2"
 libsais = ">=2.12,<3"
 

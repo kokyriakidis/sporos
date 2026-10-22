@@ -24,7 +24,8 @@ habits:
   two in step when adding or renaming anything public.
 - Build and test: `pixi run test` (every kernel against the brute-force oracles in `tests/reference.mojo`);
   format: `pixi run format` (120 columns).
-- Toolchain: latest Mojo from the nightly channel.
+- Toolchain: one Mojo nightly, pinned exactly in `pixi.toml` (1.2.0.dev2026102005). Move it on purpose: change the
+  pin, `pixi lock`, build and test on xaros, then re-run the benchmarks sporos-only.
 - Pointers handed out by owning types must carry the owner's origin (see `CodeBuffer.unsafe_ptr`); an
   untracked pointer lets the owner be destroyed early. Buffers that tasks reach through untracked pointers
   are explicit `alloc`/`dealloc` pairs: `_ = list^` after the tasks does not keep a `List` alive. Prefer tasks
