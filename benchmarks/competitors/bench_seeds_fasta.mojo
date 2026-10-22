@@ -16,7 +16,7 @@ from sporos.minimizers import minimizer_positions_from_codes
 from sporos.syncmers import syncmer_positions_from_codes
 from sporos.window import LANES, PADDING
 
-comptime REPS = 5
+comptime REPS = 7
 
 
 def _now(threads: Int) -> Int:
@@ -39,6 +39,8 @@ def main() raises:
     var start = perf_counter_ns()
     var codes = CodeBuffer.encode(seq, PADDING)
     print(t"sporos encode n={n} ns/bp={Float64(perf_counter_ns() - start) / Float64(n)}")
+    # One untimed run first, as the simd-minimizers harness does: threads, pages and clocks warmed before timing.
+    _ = minimizer_positions_from_codes(codes.unsafe_ptr(), n, 21, 11, False, threads)
     for cfg in [(21, 11), (31, 19)]:
         var k = cfg[0]
         var w = cfg[1]

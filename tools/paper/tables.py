@@ -416,7 +416,9 @@ def quoted():
     V["seed_t10_min"], V["seed_t10_max"] = _range(ten)
     slow = [x for x in ten if x and x < 1]
     # Phrased by the text: "from N times slower to M times faster", or "N–M times faster".
-    V["seed_t10_limit"] = ("On ten threads sporos was slower than simd-minimizers for some schemes" if slow else
+    _words = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight"]
+    V["seed_t10_limit"] = (f"On ten threads sporos was slower than simd-minimizers for {_words[len(slow)]} of the "
+                           f"{_words[len([x for x in ten if x])]} schemes" if slow else
                            f"On ten threads sporos was only {span(V['seed_t10_min'], V['seed_t10_max'])} times faster than "
                            "simd-minimizers")
     V["seed_t10_phrase"] = (f"between {1 / min(slow):.1f} times slower and {V['seed_t10_max']} times faster than"
@@ -503,8 +505,8 @@ V = quoted()
 # ------------------------------------------------------------------------------- tables
 TABLES = {
     "seeds": {
-        "caption": "Minimizers and closed syncmers of CHM13 chr1 (248 Mbp): ns per base, the best of 5 to 7 runs on one "
-                   "thread and of 3 on ten. Every tool reads its input already encoded (simd-minimizers packed at two bits per "
+        "caption": "Minimizers and closed syncmers of CHM13 chr1 (248 Mbp): ns per base, the best of 7 runs after one "
+                   "untimed run, on one thread and on ten. Every tool reads its input already encoded (simd-minimizers packed at two bits per "
                    "base, sporos at one byte per base, minimap2's mm_sketch in ASCII) and writes positions to memory. sporos "
                    "runs 16 lanes of 32 bits (AVX-512) or 8 (the width simd-minimizers uses, AVX2). mm_sketch computes canonical "
                    "minimizers only, of k at most 28 (the k = 31 rows run k = 28). Bold: fastest at each thread count.",

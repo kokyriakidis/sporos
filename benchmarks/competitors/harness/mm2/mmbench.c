@@ -25,10 +25,11 @@ int main(int argc, char **argv){
   int ks[2]={21,31}, ws[2]={11,19};
   for(int t=0;t<2;t++){ K=ks[t]; W=ws[t]; if(K>28){ printf("k=%d > 28 unsupported by mm_sketch; using k=28 w=%d\n",K,W); K=28; }
     double best=1e9; long cnt=0;
-    for(int r=0;r<5;r++){ pthread_t th[64]; job_t jb[64]; double t0=now();
+    /* Run 0 is an untimed warm-up, as in the other harnesses; the best of the next 7 counts. */
+    for(int r=0;r<8;r++){ pthread_t th[64]; job_t jb[64]; double t0=now();
       for(int i=0;i<T;i++){ jb[i].id=i; pthread_create(&th[i],0,worker,&jb[i]); }
       cnt=0; for(int i=0;i<T;i++){ pthread_join(th[i],0); cnt+=jb[i].cnt; }
-      double el=now()-t0; if(el<best) best=el; }
+      double el=now()-t0; if(r>0 && el<best) best=el; }
     printf("mm_sketch %s k=%d w=%d T=%d n=%ld out=%ld time=%.4fs %.3f ns/bp %.3f Gbp/s\n", argv[1], K, W, T, n, cnt, best, best*1e9/n, n/best/1e9);
   }
   return 0;

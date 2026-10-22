@@ -8,7 +8,8 @@
 #                    built with SPOROS_LANES=8 and 16; input already 2-bit coded, 1 byte/base
 #   simd-minimizers  harness/smbench; input already packed 2 bits/base
 #   minimap2         harness/mm2 (mm_sketch on ASCII; k=31 runs as k=28, its maximum)
-# Single thread: best of 5-7 runs (thread CPU time for sporos, wall time for the others).
+# Every harness makes one untimed run first. Single thread: best of 7 runs (thread CPU time for sporos, wall time
+# for the others).
 # 10 threads: best wall time; simd-minimizers and mm_sketch split the sequence into chunks.
 # Also the end-to-end CLI: `sporos minimizers -k 21 -w 11 -t T chr1.fa > /dev/null`.
 # Writes results/seeds.tsv (parsed), results/seeds_raw.txt and results/seeds_cli.tsv. SPOROS_ONLY=1 measures

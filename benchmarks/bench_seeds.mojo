@@ -29,6 +29,8 @@ def main() raises:
         n = Int(args[1])
     var seq = random_dna(n, 5)
     var codes = CodeBuffer.encode(Span(seq), PADDING)
+    # One untimed run first, as the competitor harnesses do: pages and clocks warmed before any timing.
+    _ = minimizer_positions_from_codes(codes.unsafe_ptr(), n, 21, 11, False, 1)
     for cfg in [(15, 10), (21, 11), (31, 19)]:
         var k = cfg[0]
         var w = cfg[1]

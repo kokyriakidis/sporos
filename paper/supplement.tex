@@ -25,7 +25,7 @@
 {\large Konstantinos Kyriakidis and Benedict Paten}\par\bigskip
 \section{Setup}
 
-\texttt{benchmarks/competitors/setup\_xaros.sh} in the sporos repository installs every tool at the version of Table S1, downloads the genomes from NCBI and UCSC, simulates the reads (\texttt{sim\_reads.py}, fixed seeds) and builds the harnesses; \texttt{run\_seeds.sh}, \texttt{run\_lookups.sh}, \texttt{run\_mems.sh}, \texttt{run\_capped.sh} and \texttt{run\_smems.sh} run the benchmarks and write the raw measurements that the main tables are made from. Each timed command ran under \texttt{/usr/bin/time -v} after the machine had kept at most 1.5 processors busy for half a second; wall time is the best of three runs (one for runs past 60~s), memory the largest peak resident set size of those runs. Kernel benchmarks (Table 1, Table 2) time only the computation, inside each tool's own harness.
+\texttt{benchmarks/competitors/setup\_xaros.sh} in the sporos repository installs every tool at the version of Table S1, downloads the genomes from NCBI and UCSC, simulates the reads (\texttt{sim\_reads.py}, fixed seeds) and builds the harnesses; \texttt{run\_seeds.sh}, \texttt{run\_lookups.sh}, \texttt{run\_mems.sh}, \texttt{run\_capped.sh} and \texttt{run\_smems.sh} run the benchmarks and write the raw measurements that the main tables are made from. Each timed command ran under \texttt{/usr/bin/time -v} after the machine had kept at most 1.5 processors busy for half a second; wall time is the best of three runs (one for runs past 60~s), memory the largest peak resident set size of those runs. Kernel benchmarks (Table 1, Table 2) time only the computation, inside each tool's own harness; the minimizer and syncmer harnesses make one untimed run before timing, so that threads, memory pages and processor clocks are warm for every tool alike.
 
 \begin{table}[H]
 \caption{Versions of the tools compared. Tools built from source were compiled for the benchmark machine; MUMmer4, Mumemto, BWA and ropebwt3 are Bioconda packages.}\label{tab:versions}
@@ -75,14 +75,14 @@ The commands, with \texttt{R} and \texttt{Q} the reference and query FASTA files
 \toprule
 Scheme & k, w & sporos-16 & sporos-8 & simd-min. & mm\_sketch \\
 \midrule
-Minimizers, forward & 21, 11 & \textbf{0.946} & 1.35 & 1.78 & -- \\
-Minimizers, canonical & 21, 11 & \textbf{1.02} & 1.45 & 2.12 & 18.3 \\
-Closed syncmers, forward & 21, 11 & \textbf{1.16} & 1.54 & 2.00 & -- \\
-Closed syncmers, canonical & 21, 11 & \textbf{1.16} & 1.51 & 2.55 & -- \\
-Minimizers, forward & 31, 19 & \textbf{0.842} & 1.26 & 1.60 & -- \\
-Minimizers, canonical & 31, 19 & \textbf{0.924} & 1.34 & 1.91 & 15.9 \\
-Closed syncmers, forward & 31, 19 & \textbf{1.00} & 1.42 & 1.82 & -- \\
-Closed syncmers, canonical & 31, 19 & \textbf{1.01} & 1.40 & 2.33 & -- \\
+Minimizers, forward & 21, 11 & \textbf{0.944} & 1.34 & 1.86 & -- \\
+Minimizers, canonical & 21, 11 & \textbf{1.02} & 1.44 & 2.15 & 18.3 \\
+Closed syncmers, forward & 21, 11 & \textbf{1.16} & 1.53 & 2.06 & -- \\
+Closed syncmers, canonical & 21, 11 & \textbf{1.15} & 1.50 & 2.58 & -- \\
+Minimizers, forward & 31, 19 & \textbf{0.842} & 1.24 & 1.79 & -- \\
+Minimizers, canonical & 31, 19 & \textbf{0.924} & 1.33 & 1.91 & 15.9 \\
+Closed syncmers, forward & 31, 19 & \textbf{1.00} & 1.42 & 1.96 & -- \\
+Closed syncmers, canonical & 31, 19 & \textbf{1.01} & 1.39 & 2.35 & -- \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -100,9 +100,9 @@ Tables S3 to S5 complete main Table 3: MEMs and MUMs of at least 100~bp, MEMs un
  & \multicolumn{5}{c}{MEMs (\texttt{-maxmatch})} & \multicolumn{3}{c}{MUMs (\texttt{-mum})} \\ \cmidrule(lr){2-6}\cmidrule(lr){7-9}
 Pair & sporos, 1 thr. & sporos, 10 thr. & copMEM2, 1 thr. & copMEM2, 10 thr. & MUMmer4 & sporos, 1 thr. & sporos, 10 thr. & MUMmer4 \\
 \midrule
-E. coli (4.6 / 5.5~Mbp) & \textbf{0.05} & \textbf{0.03} & 0.82 & 0.82 & 1.93 & \textbf{0.05} & 0.03 & 1.67 \\
-Human / chimpanzee chr21 (47 / 33~Mbp) & \textbf{0.38} & \textbf{0.16} & 1.27 & 1.27 & 16.4 & \textbf{0.38} & 0.16 & 14.6 \\
-hg38 / CHM13 chr1 (249 / 248~Mbp) & \textbf{5.50} & \textbf{1.13} & 10.8 & 10.8 & 126 & \textbf{5.61} & 1.21 & 87.0 \\
+E. coli (4.6 / 5.5~Mbp) & \textbf{0.05} & \textbf{0.03} & 0.81 & 0.81 & 1.90 & \textbf{0.06} & 0.03 & 1.70 \\
+Human / chimpanzee chr21 (47 / 33~Mbp) & \textbf{0.38} & \textbf{0.16} & 1.25 & 1.26 & 16.5 & \textbf{0.39} & 0.17 & 14.5 \\
+hg38 / CHM13 chr1 (249 / 248~Mbp) & \textbf{5.40} & \textbf{1.12} & 10.8 & 10.8 & 126 & \textbf{5.52} & 1.20 & 87.0 \\
 \bottomrule
 \end{tabular}}
 \end{table}
@@ -115,12 +115,12 @@ hg38 / CHM13 chr1 (249 / 248~Mbp) & \textbf{5.50} & \textbf{1.13} & 10.8 & 10.8 
 \toprule
 Pair & sporos, 1 thr. & sporos, 10 thr. & MUMmer4 & Speedup \\
 \midrule
-E. coli, L = 50 & 0.09 & 0.05 & 1.68 & 19 \\
+E. coli, L = 50 & 0.09 & 0.05 & 1.69 & 19 \\
 E. coli, L = 100 & 0.05 & 0.03 & 1.68 & 34 \\
-chr21, L = 50 & 0.71 & 0.23 & 14.6 & 21 \\
+chr21, L = 50 & 0.71 & 0.23 & 14.6 & 20 \\
 chr21, L = 100 & 0.38 & 0.16 & 14.5 & 38 \\
-chr1, L = 50 & 18.7 & 3.38 & 87.3 & 4.7 \\
-chr1, L = 100 & 5.34 & 1.08 & 87.6 & 16 \\
+chr1, L = 50 & 17.9 & 3.25 & 87.6 & 4.9 \\
+chr1, L = 100 & 5.19 & 1.10 & 87.4 & 17 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -133,11 +133,11 @@ chr1, L = 100 & 5.34 & 1.08 & 87.6 & 16 \\
 \toprule
 Pair & sporos MEMs & copMEM2 & copMEM2 -mf & MUMmer4 MEMs & sporos MUMs & MUMmer4 MUMs \\
 \midrule
-E. coli, L = 50 & 59 & 2{,}094 & 1{,}070 & 71 & 59 & 71 \\
-E. coli, L = 100 & 41 & 2{,}092 & 1{,}068 & 72 & 41 & 71 \\
+E. coli, L = 50 & 59 & 2{,}095 & 1{,}071 & 71 & 59 & 72 \\
+E. coli, L = 100 & 41 & 2{,}092 & 1{,}068 & 72 & 41 & 72 \\
 chr21, L = 50 & 230 & 2{,}203 & 1{,}169 & 610 & 232 & 610 \\
 chr21, L = 100 & 147 & 2{,}158 & 1{,}132 & 610 & 148 & 610 \\
-chr1, L = 50 & 2{,}716 & 2{,}794 & 1{,}758 & 6{,}246 & 3{,}082 & 2{,}923 \\
+chr1, L = 50 & 2{,}717 & 2{,}794 & 1{,}758 & 6{,}246 & 3{,}082 & 2{,}923 \\
 chr1, L = 100 & 1{,}171 & 2{,}723 & 1{,}674 & 3{,}123 & 1{,}171 & 2{,}923 \\
 \bottomrule
 \end{tabular}
@@ -163,7 +163,7 @@ BWA & 33.4 & -- & 74 \\
 
 \section{SMEM outputs}
 
-Table S7 compares the SMEMs of sporos with those of \texttt{bwa fastmap} and minibwa, by read, interval, number of occurrences and listed positions. Of the 5{,}242 SMEMs that only the other tool reports, 5{,}140 list a position whose reference span holds an N, which BWA and minibwa replace by random bases when they build their index and sporos never matches, and 0 list no positions, so that this check cannot tell; 102 remain. Ten threads gave the same output as one for every read set and f.
+Table S7 compares the SMEMs of sporos with those of \texttt{bwa fastmap} and minibwa, by read, interval, number of occurrences and listed positions. Of the 5{,}242 SMEMs that only the other tool reports, 5{,}140 list a position whose reference span holds an N, which BWA and minibwa replace by random bases when they build their index and sporos never matches, and 102 list no positions, so that this check cannot tell; 0 remain. Ten threads gave the same output as one for every read set and f.
 
 \begin{table}[H]
 \caption{SMEM outputs compared, by read, interval, number of occurrences and listed positions. Through N counts the other tool's own SMEMs that list a position whose reference span holds a non-ACGT base (BWA and minibwa replace each N of the reference by a random base, and match through it); No positions counts those of the rest that list no positions, having more than 20 occurrences.}\label{tab:smem_checks}
@@ -173,14 +173,14 @@ Table S7 compares the SMEMs of sporos with those of \texttt{bwa fastmap} and min
 \toprule
 Reads & Against & sporos & Other & Only sporos & Only other & Through N & No positions \\
 \midrule
-1 M reads of 150~bp, SMEMs & minibwa & 1{,}220,875 & 1{,}220,988 & 3 & 116 & 116 & -- \\
-1 M reads of 150~bp, SMEMs & bwa fastmap & 1{,}220,875 & 1{,}220,883 & 6 & 14 & 14 & -- \\
-1 M reads of 150~bp, f = 2 & minibwa & 2{,}524,708 & 2{,}528,183 & 93 & 3{,}568 & 3{,}563 & -- \\
-1 M reads of 150~bp, f = 5 & minibwa & 2{,}215,160 & 2{,}215,296 & 188 & 324 & 251 & -- \\
-4{,}000 reads of 10~kbp, SMEMs & minibwa & 80{,}950 & 80{,}992 & 1 & 43 & 43 & -- \\
-4{,}000 reads of 10~kbp, SMEMs & bwa fastmap & 80{,}950 & 80{,}954 & 2 & 6 & 6 & -- \\
-4{,}000 reads of 10~kbp, f = 2 & minibwa & 727{,}491 & 728{,}542 & 26 & 1{,}077 & 1{,}077 & -- \\
-4{,}000 reads of 10~kbp, f = 5 & minibwa & 662{,}496 & 662{,}535 & 55 & 94 & 70 & -- \\
+1 M reads of 150~bp, SMEMs & minibwa & 1{,}220,875 & 1{,}220,988 & 3 & 116 & 116 & 0 \\
+1 M reads of 150~bp, SMEMs & bwa fastmap & 1{,}220,875 & 1{,}220,883 & 6 & 14 & 14 & 0 \\
+1 M reads of 150~bp, f = 2 & minibwa & 2{,}524,708 & 2{,}528,183 & 93 & 3{,}568 & 3{,}563 & 5 \\
+1 M reads of 150~bp, f = 5 & minibwa & 2{,}215,160 & 2{,}215,296 & 188 & 324 & 251 & 73 \\
+4{,}000 reads of 10~kbp, SMEMs & minibwa & 80{,}950 & 80{,}992 & 1 & 43 & 43 & 0 \\
+4{,}000 reads of 10~kbp, SMEMs & bwa fastmap & 80{,}950 & 80{,}954 & 2 & 6 & 6 & 0 \\
+4{,}000 reads of 10~kbp, f = 2 & minibwa & 727{,}491 & 728{,}542 & 26 & 1{,}077 & 1{,}077 & 0 \\
+4{,}000 reads of 10~kbp, f = 5 & minibwa & 662{,}496 & 662{,}535 & 55 & 94 & 70 & 24 \\
 \bottomrule
 \end{tabular}}
 \end{table}

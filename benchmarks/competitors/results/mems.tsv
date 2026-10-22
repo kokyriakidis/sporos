@@ -1,112 +1,112 @@
 pair	L	tool	mode	threads	reps	wall_s	user_s	sys_s	max_rss_mb	busy_cpus	load1
-ecoli	-	bwa index	build	1	3	1.73	1.63	0.03	49	1.07	0.10
-ecoli	-	ropebwt3 build	build	1	3	0.77	0.74	0.03	51	1.03	0.25
-ecoli	-	ropebwt3 build	build	10	3	0.55	0.75	0.03	51	0.06	0.39
-ecoli	50	sporos	maxmatch	1	3	0.09	0.07	0.02	59	0.06	0.68
-ecoli	50	sporos	maxmatch	10	3	0.05	0.09	0.05	85	1.09	0.68
-ecoli	50	mummer	maxmatch	1	3	1.96	1.91	0.04	71	1.05	0.68
-ecoli	50	sporos	mum	1	3	0.09	0.07	0.02	59	0.67	0.73
-ecoli	50	sporos	mum	10	3	0.05	0.10	0.05	85	1.19	0.73
-ecoli	50	mummer	mum	1	3	1.69	1.65	0.04	71	1.05	0.73
-ecoli	50	sporos	mumreference	1	3	0.09	0.07	0.02	59	0.77	0.75
-ecoli	50	sporos	mumreference	10	3	0.05	0.09	0.06	85	1.05	0.85
-ecoli	50	mummer	mumreference	1	3	1.68	1.65	0.03	72	1.07	0.85
-ecoli	50	copmem2	maxmatch	1	3	1.68	0.74	0.94	2094	1.07	0.86
-ecoli	50	copmem2 -mf	maxmatch	1	3	0.89	0.43	0.46	1070	1.07	0.87
-ecoli	50	copmem2	maxmatch	10	3	1.68	0.72	0.96	2094	0.57	0.96
-ecoli	50	copmem2 -mf	maxmatch	10	3	0.89	0.43	0.45	1071	0.49	0.97
-ecoli	50	mumemto	mum (both strands)	1	3	13.17	12.92	0.23	348	0.08	0.97
-ecoli	50	bwa fastmap	SMEM (fwd+rc)	1	3	1.29	1.26	0.01	15	0.83	1.06
-ecoli	50	ropebwt3 mem	SMEM (fwd+rc, no pos)	1	3	2.12	2.11	0.00	22	0.93	1.06
-ecoli	50	ropebwt3 mem	SMEM (fwd+rc, no pos)	10	3	2.12	2.11	0.01	22	0.43	1.05
-ecoli	100	sporos	maxmatch	1	3	0.05	0.04	0.01	41	0.77	1.12
-ecoli	100	sporos	maxmatch	10	3	0.03	0.04	0.03	53	1.12	1.20
-ecoli	100	mummer	maxmatch	1	3	1.93	1.89	0.04	72	1.07	1.20
-ecoli	100	sporos	mum	1	3	0.05	0.04	0.01	41	0.67	1.26
-ecoli	100	sporos	mum	10	3	0.03	0.05	0.02	53	0.50	1.24
-ecoli	100	mummer	mum	1	3	1.67	1.63	0.03	71	0.59	1.24
-ecoli	100	sporos	mumreference	1	3	0.05	0.03	0.02	41	0.63	1.22
-ecoli	100	sporos	mumreference	10	3	0.03	0.05	0.03	53	0.51	1.22
-ecoli	100	mummer	mumreference	1	3	1.68	1.64	0.04	72	1.05	1.20
-ecoli	100	copmem2	maxmatch	1	3	1.61	0.70	0.91	2092	0.77	1.18
-ecoli	100	copmem2 -mf	maxmatch	1	3	0.82	0.37	0.45	1068	0.53	1.33
-ecoli	100	copmem2	maxmatch	10	3	1.60	0.69	0.90	2092	0.67	1.30
-ecoli	100	copmem2 -mf	maxmatch	10	3	0.82	0.35	0.46	1068	0.42	1.36
-ecoli	100	mumemto	mum (both strands)	1	3	12.98	12.72	0.24	348	0.53	1.33
-ecoli	100	bwa fastmap	SMEM (fwd+rc)	1	3	1.27	1.24	0.01	15	0.89	1.17
-ecoli	100	ropebwt3 mem	SMEM (fwd+rc, no pos)	1	3	1.65	1.64	0.01	21	0.77	1.15
-ecoli	100	ropebwt3 mem	SMEM (fwd+rc, no pos)	10	3	1.65	1.64	0.01	21	0.77	1.30
-chr21	-	bwa index	build	1	3	33.50	33.15	0.21	74	1.05	1.26
-chr21	-	ropebwt3 build	build	1	3	8.32	7.96	0.32	493	0.06	1.07
-chr21	-	ropebwt3 build	build	10	3	6.58	8.09	0.33	493	0.10	1.12
-chr21	50	sporos	maxmatch	1	3	0.72	0.62	0.09	230	0.24	1.33
-chr21	50	sporos	maxmatch	10	3	0.23	0.94	0.29	301	1.05	1.30
-chr21	50	mummer	maxmatch	1	3	17.45	17.04	0.40	610	0.65	1.30
-chr21	50	sporos	mum	1	3	0.74	0.65	0.09	232	0.24	1.12
-chr21	50	sporos	mum	10	3	0.24	1.02	0.26	300	0.81	1.11
-chr21	50	mummer	mum	1	3	14.64	14.24	0.40	610	1.07	1.11
-chr21	50	sporos	mumreference	1	3	0.71	0.61	0.10	231	0.47	1.10
-chr21	50	sporos	mumreference	10	3	0.23	0.92	0.29	301	1.07	1.18
-chr21	50	mummer	mumreference	1	3	14.56	14.17	0.39	610	0.60	1.18
-chr21	50	copmem2	maxmatch	1	3	2.76	1.71	1.03	2203	1.03	1.16
-chr21	50	copmem2 -mf	maxmatch	1	3	1.97	1.42	0.53	1169	0.14	1.21
-chr21	50	copmem2	maxmatch	10	3	2.75	1.72	1.01	2203	0.38	1.18
-chr21	50	copmem2 -mf	maxmatch	10	3	1.96	1.42	0.51	1169	0.06	1.23
-chr21	50	mumemto	mum (both strands)	1	1	168.32	165.61	2.53	3130	0.06	1.19
-chr21	50	bwa fastmap	SMEM (fwd+rc)	1	3	11.49	11.36	0.09	101	0.46	1.03
-chr21	50	ropebwt3 mem	SMEM (fwd+rc, no pos)	1	3	24.99	24.90	0.08	130	0.59	1.13
-chr21	50	ropebwt3 mem	SMEM (fwd+rc, no pos)	10	3	25.00	24.92	0.07	130	0.61	1.09
-chr21	100	sporos	maxmatch	1	3	0.38	0.30	0.07	147	0.57	1.02
-chr21	100	sporos	maxmatch	10	3	0.16	0.45	0.16	168	1.24	1.02
-chr21	100	mummer	maxmatch	1	3	16.45	16.03	0.42	610	0.93	1.02
-chr21	100	sporos	mum	1	3	0.38	0.31	0.07	148	1.12	1.01
-chr21	100	sporos	mum	10	3	0.16	0.49	0.14	168	1.05	1.01
-chr21	100	mummer	mum	1	3	14.55	14.14	0.40	610	1.09	1.01
-chr21	100	sporos	mumreference	1	3	0.38	0.30	0.07	148	1.05	1.06
-chr21	100	sporos	mumreference	10	3	0.16	0.46	0.17	168	1.05	1.06
-chr21	100	mummer	mumreference	1	3	14.53	14.12	0.40	610	1.05	1.06
-chr21	100	copmem2	maxmatch	1	3	2.08	1.08	0.99	2158	1.07	1.07
-chr21	100	copmem2 -mf	maxmatch	1	3	1.27	0.75	0.50	1132	0.34	1.06
-chr21	100	copmem2	maxmatch	10	3	2.08	1.09	0.98	2158	0.42	1.13
-chr21	100	copmem2 -mf	maxmatch	10	3	1.27	0.76	0.50	1132	0.28	1.12
-chr21	100	mumemto	mum (both strands)	1	1	165.57	163.26	2.17	3130	0.10	0.94
-chr21	100	bwa fastmap	SMEM (fwd+rc)	1	3	11.01	10.91	0.08	101	0.34	1.00
-chr21	100	ropebwt3 mem	SMEM (fwd+rc, no pos)	1	3	17.83	17.76	0.06	118	0.55	1.41
-chr21	100	ropebwt3 mem	SMEM (fwd+rc, no pos)	10	3	17.83	17.75	0.08	118	0.63	1.24
-chr1	-	bwa index	build	1	1	215.81	214.20	1.06	359	1.05	1.09
-chr1	-	ropebwt3 build	build	1	3	50.65	48.59	1.88	2614	0.08	1.09
-chr1	-	ropebwt3 build	build	10	3	41.14	49.42	1.80	2614	0.04	0.94
-chr1	50	sporos	maxmatch	1	3	20.05	17.76	2.27	2716	0.06	1.04
-chr1	50	sporos	maxmatch	10	3	3.81	19.80	2.63	2398	0.10	2.04
-chr1	50	mummer	maxmatch	1	1	159.59	154.05	5.50	6246	0.04	3.13
-chr1	50	sporos	mum	1	3	21.55	19.16	2.38	3082	0.06	1.59
-chr1	50	sporos	mum	10	3	4.14	24.26	2.75	3586	1.01	1.23
-chr1	50	mummer	mum	1	1	87.10	85.15	1.93	2923	0.67	2.51
-chr1	50	sporos	mumreference	1	3	18.70	16.58	2.11	2717	0.45	1.39
-chr1	50	sporos	mumreference	10	3	3.38	18.83	2.50	3081	1.05	1.20
-chr1	50	mummer	mumreference	1	1	87.27	85.36	1.89	2923	0.79	2.63
-chr1	50	copmem2	maxmatch	1	3	47.10	45.03	1.94	2794	0.94	1.39
-chr1	50	copmem2 -mf	maxmatch	1	3	46.49	44.96	1.40	1758	0.10	1.79
-chr1	50	copmem2	maxmatch	10	3	46.93	44.97	1.88	2794	0.08	1.79
-chr1	50	copmem2 -mf	maxmatch	10	3	46.39	44.84	1.42	1758	0.16	1.71
-chr1	50	mumemto	mum (both strands)	1	1	DNF (timeout 300 s)	NA	NA	NA	0.08	1.73
-chr1	50	bwa fastmap	SMEM (fwd+rc)	1	3	52.02	51.58	0.41	596	0.06	0.93
-chr1	50	ropebwt3 mem	SMEM (fwd+rc, no pos)	1	1	182.68	182.21	0.44	771	0.61	1.03
-chr1	50	ropebwt3 mem	SMEM (fwd+rc, no pos)	10	1	182.89	182.41	0.44	771	0.28	1.04
-chr1	100	sporos	maxmatch	1	3	5.50	4.93	0.56	1171	0.59	1.09
-chr1	100	sporos	maxmatch	10	3	1.13	6.12	1.29	1196	0.08	1.69
-chr1	100	mummer	maxmatch	1	1	126.13	123.85	2.25	3123	0.08	2.69
-chr1	100	sporos	mum	1	3	5.61	5.11	0.49	1171	0.08	1.17
-chr1	100	sporos	mum	10	3	1.21	6.68	1.21	1181	0.69	1.36
-chr1	100	mummer	mum	1	1	87.03	85.15	1.87	2923	0.67	1.41
-chr1	100	sporos	mumreference	1	3	5.34	4.82	0.52	1171	1.07	1.10
-chr1	100	sporos	mumreference	10	3	1.08	6.05	1.14	1181	0.53	1.14
-chr1	100	mummer	mumreference	1	1	87.64	85.76	1.86	2923	0.53	1.61
-chr1	100	copmem2	maxmatch	1	3	10.94	9.38	1.41	2723	0.26	1.09
-chr1	100	copmem2 -mf	maxmatch	1	3	10.82	9.79	0.95	1674	0.08	1.17
-chr1	100	copmem2	maxmatch	10	3	10.89	9.41	1.39	2723	0.06	1.09
-chr1	100	copmem2 -mf	maxmatch	10	3	10.83	9.80	0.94	1674	0.10	1.18
-chr1	100	mumemto	mum (both strands)	1	1	DNF (timeout 300 s)	NA	NA	NA	0.08	1.21
-chr1	100	bwa fastmap	SMEM (fwd+rc)	1	3	51.50	51.06	0.40	596	0.10	1.01
-chr1	100	ropebwt3 mem	SMEM (fwd+rc, no pos)	1	1	179.26	178.79	0.44	749	0.63	1.03
-chr1	100	ropebwt3 mem	SMEM (fwd+rc, no pos)	10	1	179.01	178.56	0.42	749	0.71	1.00
+ecoli	-	bwa index	build	1	3	1.75	1.65	0.03	49	0.04	3.74
+ecoli	-	ropebwt3 build	build	1	3	0.77	0.72	0.04	51	1.05	3.60
+ecoli	-	ropebwt3 build	build	10	3	0.54	0.74	0.03	51	0.24	3.39
+ecoli	50	sporos	maxmatch	1	3	0.09	0.07	0.02	59	0.26	3.20
+ecoli	50	sporos	maxmatch	10	3	0.05	0.10	0.06	85	0.95	3.20
+ecoli	50	mummer	maxmatch	1	3	1.97	1.92	0.04	71	1.07	3.20
+ecoli	50	sporos	mum	1	3	0.09	0.07	0.01	59	1.05	2.94
+ecoli	50	sporos	mum	10	3	0.05	0.09	0.06	88	1.10	2.94
+ecoli	50	mummer	mum	1	3	1.71	1.68	0.03	72	1.05	2.94
+ecoli	50	sporos	mumreference	1	3	0.09	0.07	0.01	59	1.14	2.86
+ecoli	50	sporos	mumreference	10	3	0.05	0.10	0.05	85	1.01	2.71
+ecoli	50	mummer	mumreference	1	3	1.69	1.65	0.03	71	1.17	2.71
+ecoli	50	copmem2	maxmatch	1	3	1.65	0.73	0.91	2095	1.05	2.57
+ecoli	50	copmem2 -mf	maxmatch	1	3	0.89	0.42	0.46	1071	1.09	2.53
+ecoli	50	copmem2	maxmatch	10	3	1.65	0.73	0.92	2094	1.05	2.41
+ecoli	50	copmem2 -mf	maxmatch	10	3	0.89	0.43	0.46	1071	1.07	2.37
+ecoli	50	mumemto	mum (both strands)	1	3	13.17	12.92	0.23	348	0.08	2.15
+ecoli	50	bwa fastmap	SMEM (fwd+rc)	1	3	1.29	1.27	0.01	15	1.25	1.99
+ecoli	50	ropebwt3 mem	SMEM (fwd+rc, no pos)	1	3	2.12	2.11	0.01	22	1.01	1.91
+ecoli	50	ropebwt3 mem	SMEM (fwd+rc, no pos)	10	3	2.11	2.10	0.01	22	0.89	1.77
+ecoli	100	sporos	maxmatch	1	3	0.05	0.04	0.01	41	1.07	1.71
+ecoli	100	sporos	maxmatch	10	3	0.03	0.05	0.03	53	1.09	1.65
+ecoli	100	mummer	maxmatch	1	3	1.90	1.87	0.03	72	0.79	1.65
+ecoli	100	sporos	mum	1	3	0.06	0.03	0.02	41	0.65	1.60
+ecoli	100	sporos	mum	10	3	0.03	0.05	0.03	53	1.03	1.60
+ecoli	100	mummer	mum	1	3	1.70	1.66	0.04	72	1.05	1.63
+ecoli	100	sporos	mumreference	1	3	0.05	0.04	0.01	41	0.30	1.66
+ecoli	100	sporos	mumreference	10	3	0.03	0.05	0.03	54	1.07	1.66
+ecoli	100	mummer	mumreference	1	3	1.68	1.64	0.03	72	0.79	1.66
+ecoli	100	copmem2	maxmatch	1	3	1.58	0.68	0.89	2092	1.07	1.64
+ecoli	100	copmem2 -mf	maxmatch	1	3	0.81	0.35	0.46	1068	1.07	1.67
+ecoli	100	copmem2	maxmatch	10	3	1.57	0.68	0.88	2092	0.55	1.61
+ecoli	100	copmem2 -mf	maxmatch	10	3	0.81	0.35	0.46	1068	0.89	1.56
+ecoli	100	mumemto	mum (both strands)	1	3	12.94	12.72	0.21	348	0.73	1.44
+ecoli	100	bwa fastmap	SMEM (fwd+rc)	1	3	1.28	1.25	0.00	15	0.55	1.20
+ecoli	100	ropebwt3 mem	SMEM (fwd+rc, no pos)	1	3	1.65	1.64	0.00	21	1.05	1.34
+ecoli	100	ropebwt3 mem	SMEM (fwd+rc, no pos)	10	3	1.65	1.64	0.01	21	0.95	1.31
+chr21	-	bwa index	build	1	3	33.32	32.96	0.22	74	1.07	1.34
+chr21	-	ropebwt3 build	build	1	3	8.33	7.99	0.30	493	0.18	1.43
+chr21	-	ropebwt3 build	build	10	3	6.60	8.08	0.33	493	0.06	1.18
+chr21	50	sporos	maxmatch	1	3	0.72	0.62	0.09	230	0.18	1.21
+chr21	50	sporos	maxmatch	10	3	0.23	0.92	0.23	302	1.07	1.21
+chr21	50	mummer	maxmatch	1	3	17.47	17.07	0.40	610	1.03	2.07
+chr21	50	sporos	mum	1	3	0.73	0.63	0.10	232	0.61	1.66
+chr21	50	sporos	mum	10	3	0.25	0.89	0.28	301	1.09	1.66
+chr21	50	mummer	mum	1	3	14.61	14.21	0.40	610	1.07	1.69
+chr21	50	sporos	mumreference	1	3	0.71	0.62	0.09	231	1.07	1.32
+chr21	50	sporos	mumreference	10	3	0.23	0.94	0.26	301	0.79	1.22
+chr21	50	mummer	mumreference	1	3	14.55	14.14	0.41	610	1.05	1.22
+chr21	50	copmem2	maxmatch	1	3	2.74	1.74	0.98	2203	1.15	1.10
+chr21	50	copmem2 -mf	maxmatch	1	3	1.95	1.41	0.53	1169	0.65	1.16
+chr21	50	copmem2	maxmatch	10	3	2.74	1.71	1.02	2203	1.15	1.15
+chr21	50	copmem2 -mf	maxmatch	10	3	1.95	1.41	0.53	1169	0.77	1.20
+chr21	50	mumemto	mum (both strands)	1	1	168.40	165.78	2.41	3130	0.04	1.08
+chr21	50	bwa fastmap	SMEM (fwd+rc)	1	3	11.53	11.42	0.08	101	0.89	1.00
+chr21	50	ropebwt3 mem	SMEM (fwd+rc, no pos)	1	3	25.01	24.92	0.07	130	0.54	1.05
+chr21	50	ropebwt3 mem	SMEM (fwd+rc, no pos)	10	3	24.99	24.90	0.08	130	0.57	1.01
+chr21	100	sporos	maxmatch	1	3	0.38	0.31	0.07	147	0.71	0.96
+chr21	100	sporos	maxmatch	10	3	0.16	0.44	0.17	168	1.13	0.96
+chr21	100	mummer	maxmatch	1	3	16.50	16.12	0.37	610	1.03	0.96
+chr21	100	sporos	mum	1	3	0.39	0.31	0.07	148	1.07	0.99
+chr21	100	sporos	mum	10	3	0.17	0.47	0.17	169	1.09	1.07
+chr21	100	mummer	mum	1	3	14.53	14.15	0.38	610	0.99	1.07
+chr21	100	sporos	mumreference	1	3	0.38	0.31	0.06	148	1.05	1.03
+chr21	100	sporos	mumreference	10	3	0.16	0.50	0.13	169	1.07	1.11
+chr21	100	mummer	mumreference	1	3	14.54	14.14	0.39	610	1.07	1.11
+chr21	100	copmem2	maxmatch	1	3	2.05	1.10	0.93	2158	1.05	1.05
+chr21	100	copmem2 -mf	maxmatch	1	3	1.25	0.76	0.49	1132	1.03	1.12
+chr21	100	copmem2	maxmatch	10	3	2.06	1.08	0.97	2158	1.09	1.11
+chr21	100	copmem2 -mf	maxmatch	10	3	1.26	0.76	0.50	1132	1.07	1.10
+chr21	100	mumemto	mum (both strands)	1	1	165.48	163.15	2.16	3130	0.85	1.09
+chr21	100	bwa fastmap	SMEM (fwd+rc)	1	3	10.99	10.90	0.06	101	1.07	1.20
+chr21	100	ropebwt3 mem	SMEM (fwd+rc, no pos)	1	3	17.85	17.77	0.07	118	0.69	1.17
+chr21	100	ropebwt3 mem	SMEM (fwd+rc, no pos)	10	3	17.84	17.78	0.06	118	0.61	1.13
+chr1	-	bwa index	build	1	1	216.29	214.80	1.06	359	1.11	1.05
+chr1	-	ropebwt3 build	build	1	3	50.50	48.55	1.77	2614	0.08	0.93
+chr1	-	ropebwt3 build	build	10	3	41.00	49.36	1.75	2614	0.06	1.00
+chr1	50	sporos	maxmatch	1	3	19.48	17.29	2.18	2717	0.08	1.39
+chr1	50	sporos	maxmatch	10	3	3.74	19.28	2.54	2382	0.28	2.10
+chr1	50	mummer	maxmatch	1	1	158.85	153.42	5.40	6246	0.18	3.00
+chr1	50	sporos	mum	1	3	20.97	18.57	2.39	3082	0.06	1.85
+chr1	50	sporos	mum	10	3	3.97	22.79	2.76	3561	0.89	1.33
+chr1	50	mummer	mum	1	1	87.54	85.61	1.91	2923	1.07	3.25
+chr1	50	sporos	mumreference	1	3	17.94	15.82	2.11	2717	1.05	1.61
+chr1	50	sporos	mumreference	10	3	3.25	17.96	2.40	3068	1.03	1.28
+chr1	50	mummer	mumreference	1	1	87.62	85.68	1.91	2923	0.85	2.77
+chr1	50	copmem2	maxmatch	1	3	47.04	45.03	1.89	2794	0.40	1.47
+chr1	50	copmem2 -mf	maxmatch	1	3	46.26	44.77	1.38	1758	0.06	1.79
+chr1	50	copmem2	maxmatch	10	3	46.79	44.85	1.92	2794	0.06	1.78
+chr1	50	copmem2 -mf	maxmatch	10	3	46.43	44.92	1.42	1758	0.06	1.98
+chr1	50	mumemto	mum (both strands)	1	1	DNF (timeout 300 s)	NA	NA	NA	0.08	1.98
+chr1	50	bwa fastmap	SMEM (fwd+rc)	1	3	52.06	51.62	0.39	596	0.06	0.97
+chr1	50	ropebwt3 mem	SMEM (fwd+rc, no pos)	1	1	183.53	183.07	0.43	771	0.61	1.07
+chr1	50	ropebwt3 mem	SMEM (fwd+rc, no pos)	10	1	183.75	183.30	0.42	771	0.57	1.04
+chr1	100	sporos	maxmatch	1	3	5.40	4.81	0.58	1171	0.26	1.02
+chr1	100	sporos	maxmatch	10	3	1.12	6.06	1.25	1196	0.06	1.17
+chr1	100	mummer	maxmatch	1	1	125.77	123.42	2.32	3123	0.08	1.89
+chr1	100	sporos	mum	1	3	5.52	5.02	0.49	1171	0.08	1.23
+chr1	100	sporos	mum	10	3	1.20	6.53	1.16	1182	1.05	1.25
+chr1	100	mummer	mum	1	1	87.00	85.13	1.85	2923	0.69	2.03
+chr1	100	sporos	mumreference	1	3	5.19	4.68	0.49	1171	0.18	1.35
+chr1	100	sporos	mumreference	10	3	1.10	6.21	1.21	1181	1.03	1.27
+chr1	100	mummer	mumreference	1	1	87.41	85.56	1.83	2923	1.03	2.13
+chr1	100	copmem2	maxmatch	1	3	10.96	9.46	1.35	2723	1.05	1.43
+chr1	100	copmem2 -mf	maxmatch	1	3	10.83	9.84	0.91	1674	0.04	1.38
+chr1	100	copmem2	maxmatch	10	3	10.92	9.45	1.39	2722	0.06	1.31
+chr1	100	copmem2 -mf	maxmatch	10	3	10.82	9.80	0.94	1674	0.06	1.63
+chr1	100	mumemto	mum (both strands)	1	1	DNF (timeout 300 s)	NA	NA	NA	0.08	1.56
+chr1	100	bwa fastmap	SMEM (fwd+rc)	1	3	51.47	51.05	0.38	596	0.10	1.12
+chr1	100	ropebwt3 mem	SMEM (fwd+rc, no pos)	1	1	178.54	178.05	0.45	749	0.63	1.09
+chr1	100	ropebwt3 mem	SMEM (fwd+rc, no pos)	10	1	178.49	178.03	0.43	749	0.61	1.07

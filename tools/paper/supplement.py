@@ -14,7 +14,9 @@ BODY = [
  'benchmarks and write the raw measurements that the main tables are made from. Each timed command ran under '
  '`/usr/bin/time -v` after the machine had kept at most 1.5 processors busy for half a second; wall time is the best '
  'of three runs (one for runs past 60 s), memory the largest peak resident set size of those runs. Kernel '
- 'benchmarks (Table 1, Table 2) time only the computation, inside each tool\'s own harness.'),
+ 'benchmarks (Table 1, Table 2) time only the computation, inside each tool\'s own harness; the minimizer and '
+ 'syncmer harnesses make one untimed run before timing, so that threads, memory pages and processor clocks are '
+ 'warm for every tool alike.'),
 ('table', 'versions'),
 ('p', 'The commands, with `R` and `Q` the reference and query FASTA files, `L` the minimum length and `T` the threads:'),
 ('bullets', [

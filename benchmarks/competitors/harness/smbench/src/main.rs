@@ -24,7 +24,7 @@ fn run_mode(mode: &str, seq: PackedSeq, k: usize, w: usize, out: &mut Vec<u32>) 
     }
 }
 
-fn bench(name: &str, mode: &str, pv: &PackedSeqVec, k: usize, w: usize, threads: usize, reps: usize) {
+fn bench(name: &str, mode: &str, pv: &PackedSeqVec, k: usize, w: usize, threads: usize, reps: usize, report: bool) {
     let seq = pv.as_slice();
     let n = seq.len();
     let mut best = f64::MAX;
@@ -62,6 +62,9 @@ fn bench(name: &str, mode: &str, pv: &PackedSeqVec, k: usize, w: usize, threads:
         let el = t.elapsed().as_secs_f64();
         best = best.min(el);
     }
+    if !report {
+        return;
+    }
     println!("{name:10} {mode:11} k={k:2} w={w:2} T={threads} n={n:>11} out={count:>10} density={:.4} time={:.4}s  {:.3} ns/bp  {:.3} Gbp/s",
         count as f64 / n as f64 * (w as f64 + 1.0) / 2.0 * 2.0 / (w as f64 + 1.0) * 1.0, best, best * 1e9 / n as f64, n as f64 / best / 1e9);
 }
@@ -81,12 +84,14 @@ fn main() {
         }
     };
     let reps: usize = std::env::var("REPS").ok().map(|s| s.parse().unwrap()).unwrap_or(7);
+    // One untimed run first, as the sporos harnesses do: threads, pages and clocks warmed before any timing.
+    bench(name, "fwd", &pv, 21, 11, threads, 1, false);
     for &(k, w) in &[(21usize, 11usize), (31, 19)] {
         for mode in ["fwd", "can", "closed-fwd", "closed-can"] {
-            bench(name, mode, &pv, k, w, threads, reps);
+            bench(name, mode, &pv, k, w, threads, reps, true);
         }
     }
     // strobealign default: K=20, s=16 => simd-minimizers k=16, w=5, open canonical
-    bench(name, "open-fwd", &pv, 16, 5, threads, reps);
-    bench(name, "open-can", &pv, 15, 5, threads, reps);
+    bench(name, "open-fwd", &pv, 16, 5, threads, reps, true);
+    bench(name, "open-can", &pv, 15, 5, threads, reps, true);
 }
