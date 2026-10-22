@@ -11,7 +11,7 @@ is implementation and may change.
 - Matches against a reference: `Reference` (`mems` -> `Match`, `smems` ->
   `Smems` of `Smem` and `SmemHit`).
 - Building blocks: `SeqText`, `MemParams`, `MemIndex`, `find_mems` -> `Mem`,
-  `sort_mems`, `filter_mums`, `filter_by_occurrences`, `find_smems` (MEM
+  `sort_mems`, `filter_mums`, `filter_by_occurrences`, `occurrence_counts`, `find_smems` (MEM
   engine); `FMIndex` (SMEMs of reads, saved and loaded indexes).
 - `default_threads()`: one thread per physical core.
 """
@@ -28,6 +28,7 @@ from .mems import (
     SmemHit,
     Smems,
     filter_by_occurrences,
+    occurrence_counts,
     filter_mums,
     find_mems,
     find_smems,

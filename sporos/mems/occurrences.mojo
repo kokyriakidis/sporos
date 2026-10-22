@@ -30,10 +30,7 @@ def filter_by_occurrences(
     reference: frequency-capped (and floored) MEMs, as Mumemto's `-F` caps
     multi-MEMs. With caps of 1 they are `filter_mums`'s MUMs.
 
-    The string of a MEM occurs in the reference once per MEM whose query
-    interval contains its own (itself included), and in the query once per
-    MEM whose reference interval does: sweeps that count containing
-    intervals, up to the cap, give both. `mems` must come from one
+    The counts are `occurrence_counts`'s. `mems` must come from one
     `find_mems` call (it is consumed: without limits it is returned as is);
     the result keeps its order."""
     if min_occurrences <= 1 and max_occurrences <= 1 and max_query_occurrences <= 1:
@@ -41,9 +38,37 @@ def filter_by_occurrences(
             return mems^
         if max_occurrences == 1:
             return filter_mums(mems, query, unique_in_query=max_query_occurrences == 1, threads=threads)
+    var counted = max_occurrences > 0 or min_occurrences > 1
+    var counts = occurrence_counts(
+        mems, query, max(max_occurrences, min_occurrences, 1) if counted else 0, max_query_occurrences, threads
+    )
     var keep = List[Bool](length=len(mems), fill=True)
+    for i in range(len(mems)):
+        var copies = Int(counts[0][i])
+        if counted and ((max_occurrences > 0 and copies > max_occurrences) or copies < min_occurrences):
+            keep[i] = False
+        if max_query_occurrences > 0 and Int(counts[1][i]) > max_query_occurrences:
+            keep[i] = False
     var workers = threads if len(mems) >= _PARALLEL_MEMS else 1
-    var ref_cap = max(max_occurrences, min_occurrences)
+    return _collect(mems, keep, workers)
+
+
+def occurrence_counts(
+    mems: List[Mem], query: SeqText, cap: Int, query_cap: Int = 0, threads: Int = 1
+) -> Tuple[List[UInt32], List[UInt32]]:
+    """How many times each MEM's string occurs in the reference and in its
+    query sequence, both strands as `find_mems` searched them: counted up to
+    `cap` and `query_cap` and reported up to one past (`cap + 1` stands for
+    more than `cap`); a cap of 0 leaves that side uncounted, 0.
+
+    The string of a MEM occurs in the reference once per MEM whose query
+    interval contains its own (itself included), and in the query once per
+    MEM whose reference interval does: sweeps that count containing
+    intervals, up to the cap, give both. `mems` must come from one
+    `find_mems` call, which lists every MEM containing another."""
+    var copies = List[UInt32](length=len(mems), fill=0)
+    var query_copies = List[UInt32](length=len(mems), fill=0)
+    var workers = threads if len(mems) >= _PARALLEL_MEMS else 1
     var lo = 0
     while lo < len(mems):
         var seq = query.sequence_of(Int(mems[lo].query_pos))
@@ -55,18 +80,16 @@ def filter_by_occurrences(
         var starts = List[UInt64](unsafe_uninit_length=count)
         var lengths = List[UInt32](unsafe_uninit_length=count)
         var others = List[UInt32](unsafe_uninit_length=count)
-        if max_occurrences > 0 or min_occurrences > 1:
+        if cap > 0:
             # Copies in the reference: MEMs containing it in query coordinates.
             var fill = _GroupFillTask(
                 mems.unsafe_ptr().unsafe_offset(lo), starts.unsafe_ptr(), lengths.unsafe_ptr(), count, by_ref=False
             )
             parallel_for(fill, _REF_ORDER_TASKS, workers)
-            _count_containing(starts, 0, lengths, max(ref_cap, 1), others, workers)
+            _count_containing(starts, 0, lengths, cap, others, workers)
             for i in range(count):
-                var copies = Int(others[i]) + 1
-                if (max_occurrences > 0 and copies > max_occurrences) or copies < min_occurrences:
-                    keep[lo + i] = False
-        if max_query_occurrences > 0:
+                copies[lo + i] = others[i] + 1
+        if query_cap > 0:
             # Copies in the query: MEMs containing it in reference coordinates.
             var keys = _GroupFillTask(
                 mems.unsafe_ptr().unsafe_offset(lo), starts.unsafe_ptr(), lengths.unsafe_ptr(), count, by_ref=True
@@ -77,12 +100,11 @@ def filter_by_occurrences(
                 mems.unsafe_ptr().unsafe_offset(lo), starts.unsafe_ptr().as_imm(), lengths.unsafe_ptr(), count
             )
             parallel_for(gather, _REF_ORDER_TASKS, workers)
-            _count_containing(starts, 32, lengths, max_query_occurrences, others, workers)
+            _count_containing(starts, 32, lengths, query_cap, others, workers)
             for i in range(count):
-                if Int(others[i]) + 1 > max_query_occurrences:
-                    keep[lo + Int(starts[i] & 0xFFFFFFFF)] = False
+                query_copies[lo + Int(starts[i] & 0xFFFFFFFF)] = others[i] + 1
         lo = hi
-    return _collect(mems, keep, workers)
+    return (copies^, query_copies^)
 
 
 struct _TopEnds(Copyable, Movable):

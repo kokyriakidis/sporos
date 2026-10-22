@@ -4,5 +4,5 @@ and query texts (`SeqText`). The high-level entry point is
 
 from .engine import Mem, MemIndex, MemParams, find_mems, match_backward, match_forward, mix64, sort_mems
 from .mums import filter_mums
-from .occurrences import filter_by_occurrences
+from .occurrences import filter_by_occurrences, occurrence_counts
 from .smems import Smem, SmemHit, Smems, find_smems

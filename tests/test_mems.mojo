@@ -1,7 +1,17 @@
 from std.collections import Set
 from std.testing import assert_equal, assert_true, TestSuite
 
-from sporos.mems import Mem, MemIndex, MemParams, SmemHit, filter_by_occurrences, filter_mums, find_mems, find_smems
+from sporos.mems import (
+    Mem,
+    MemIndex,
+    MemParams,
+    SmemHit,
+    filter_by_occurrences,
+    filter_mums,
+    find_mems,
+    find_smems,
+    occurrence_counts,
+)
 from sporos.sort import parallel_sort
 from sporos.text import SeqText
 from sporos.alphabet import encode_base
@@ -73,6 +83,52 @@ def test_mems_match_reference() raises:
                 if min_len - k + 1 >= 6:
                     _check_mems(reference, query, MemParams(min_len, k, 3, 2), 1)
                     _check_mems(reference, query, MemParams(min_len, k, 2, 3), 1)
+
+
+def _tandem(units: Int, unit: StringSlice, rng_seed: Int) -> List[UInt8]:
+    """`units` copies of `unit` between random flanks, one copy in five
+    with a substitution: a VNTR, whose strings occur a few times each."""
+    var out = random_dna(80, rng_seed)
+    var state = UInt64(rng_seed) * 0x9E3779B97F4A7C15 + 1
+    var bytes = unit.as_bytes()
+    for _ in range(units):
+        state ^= state >> 12
+        state ^= state << 25
+        state ^= state >> 27
+        var r = state * 0x2545F4914F6CDD1D
+        var at = len(out)
+        out.extend(bytes)
+        if r % 5 == 0:
+            out[at + Int((r >> 20) % UInt64(len(bytes)))] = UInt8(ord("ACGT"[byte=Int((r >> 40) % 4)]))
+    out.extend(random_dna(80, rng_seed + 1))
+    return out^
+
+
+def test_occurrence_counts_match_direct_counts() raises:
+    for case_id in range(6):
+        var reference = _tandem(24 + 7 * case_id, "GGTGGTTAGGGTCACGGT", case_id)
+        var query = _tandem(15 + 5 * case_id, "GGTGGTTAGGGTCACGGT", case_id + 100)
+        var seqs = List[Span[UInt8, origin_of(reference)]]()
+        seqs.append(Span(reference))
+        var rtext = SeqText(seqs)
+        var qseqs = List[Span[UInt8, origin_of(query)]]()
+        qseqs.append(Span(query))
+        var qtext = SeqText(qseqs)
+        for min_len in [12, 20, 40]:
+            var mems = find_mems(MemIndex(rtext, MemParams.choose(min_len, len(reference), len(query))), rtext, qtext)
+            for cap in [1, 3, 1000]:
+                for threads in [1, 4]:
+                    var counts = occurrence_counts(mems, qtext, cap, cap, threads)
+                    for i in range(len(mems)):
+                        var m = mems[i]
+                        var r = naive_count(reference, Int(m.query_pos), Int(m.length), query)
+                        var q = naive_count(query, Int(m.query_pos), Int(m.length), query)
+                        assert_equal(Int(counts[0][i]), min(r, cap + 1))
+                        assert_equal(Int(counts[1][i]), min(q, cap + 1))
+            var reference_only = occurrence_counts(mems, qtext, 5)
+            for i in range(len(mems)):
+                assert_true(reference_only[0][i] >= 1 and reference_only[1][i] == 0)
+            assert_true(len(mems) > 0)
 
 
 def test_reverse_complement_query() raises:
