@@ -20,11 +20,11 @@ ABSTRACT = [
   "exact matches between a query and a reference from which reads are mapped and genomes are aligned, has become a "
   "central step of sequence analysis. Many kinds of seeds are in use, from sampled k-mers such as minimizers to "
   "maximal exact matches, and each is computed by its own specialized tool, with its own index and output format. "
-  "And as processors gain wider vector units and more cores, the speed of seeding depends increasingly on how well "
-  "an implementation uses them, yet several widely used seeding tools process each query sequence on a "
-  "single core."),
+  "And as processors gain wider vector units and deeper memory hierarchies, the speed of seeding depends "
+  "increasingly on how well an implementation uses each core."),
  ("Results",
-  "We present sporos, one library that computes all of these seeds exactly, on every core and vector lane. Its "
+  "We present sporos, one library that computes all of these seeds exactly, built around each core's vector "
+  "units and memory parallelism. Its "
   "key contribution counts the copies of a MEM's string from the MEMs themselves: a "
   "string occurs in the reference once for every MEM whose query interval contains its own, so frequency-capped "
   "MEMs need no additional index. On one Intel Skylake-X processor, sporos "
@@ -71,10 +71,11 @@ BODY = [
  'often a match may occur, relaxing uniqueness to rare repeats, from a suffix array, LCP array and document array '
  'built over the whole collection [@Shivakumar2025]. f-SMEMs, the maximal query intervals that occur at least f '
  'times, are k-MEMs in MONI [@Tatarnikov2022], f-MEMs in Gagie\'s terms [@Gagie2026] and (L, f)-SMEMs in ropebwt3 '
- 'and minibwa, the two tools that compute them for whole read sets [@Li2024; @Li2026]. Several of these tools '
- 'also leave most of a processor idle on a single query: MUMmer4 divides its work only between query records, '
- 'copMEM2 gains nothing from more threads on one query sequence and the SMEM search of minibwa runs on one core '
- '(Supplementary Section S1).'),
+ 'and minibwa, the two tools that compute them for whole read sets [@Li2024; @Li2026]. Most of these tools '
+ 'parallelise across query sequences or reads and process each one on a single core, which is also how a program '
+ 'built on a library would divide its work. We therefore compare the tools first on one core, and report ten '
+ 'threads as well, which matter most where a single long query, such as a chromosome, leaves nothing to divide '
+ 'between sequences.'),
 ('p',
  'We present sporos, a library that computes all of these seeds exactly: minimizers and syncmers, an index of '
  'them for looking seeds up, MEMs, MUMs and frequency-capped MEMs between genomes, and SMEMs and f-SMEMs of reads. '
