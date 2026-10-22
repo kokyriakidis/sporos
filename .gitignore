@@ -7,3 +7,4 @@ build/
 # Rust harness builds
 benchmarks/competitors/harness/**/target/
 benchmarks/competitors/harness/**/Cargo.lock
+__pycache__/

@@ -43,7 +43,7 @@ run() {
         else if (a[i] ~ /^out=/) out = substr(a[i], 5)
         else if (a[i] ~ /^ns\/bp=/) ns = substr(a[i], 7)
         else if (a[i] == "ns/bp") ns = a[i - 1]
-        else if (a[i] ~ /^(fwd|can|closed-fwd|closed-can|open-fwd|open-can)$/) mode = a[i]
+        else if (a[i] ~ /^(fwd|can|closed-fwd|closed-can|open-fwd|open-can|fwd-ascii|can-ascii|open-set-fwd|open-set-can)$/) mode = a[i]
       }
       if (mode == "" && $1 == "mm_sketch") mode = "can"
       printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%.4f\t%s\t%s\n", tool, input, mode, k, w, t, len, out, ns, busy, ld

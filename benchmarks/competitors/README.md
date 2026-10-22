@@ -16,6 +16,9 @@ cd ~/sporos
 bash benchmarks/competitors/setup_xaros.sh   # idempotent; tools, harnesses, sporos builds, data, versions.tsv
 bash benchmarks/competitors/run_seeds.sh     # ~4 min
 bash benchmarks/competitors/run_mems.sh      # ~1 h 45 min; PAIRS="ecoli chr21" for the ~25 min subset
+bash benchmarks/competitors/run_lookups.sh   # ~10 min: seed-index lookups (sporos, minimap2, strobealign)
+bash benchmarks/competitors/run_capped.sh    # ~25 min: frequency-capped MEMs against Mumemto -f/-F
+bash benchmarks/competitors/run_smems.sh     # ~40 min: SMEMs and f-SMEMs against minibwa, bwa fastmap, ropebwt3
 python3 -I benchmarks/competitors/tables.py  # markdown tables from results/*.tsv
 ```
 

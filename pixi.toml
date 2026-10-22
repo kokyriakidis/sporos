@@ -69,3 +69,9 @@ test-c = { cmd = "c++ -std=c++17 -O2 -pthread -I build/c tests/test_c_api.cpp -L
 build-python = "bash scripts/build_python.sh"
 # Builds the Python package and runs its tests against it.
 test-python = { cmd = "PYTHONPATH=$PIXI_PROJECT_ROOT/build/python python3 tests/test_python.py build/api_expected.txt", depends-on = ["build-python", "api-expected"] }
+# The paper: tools/paper/ renders paper/ (the Overleaf project) and build/paper/ (HTML draft and PDFs) from the
+# competitor benchmark's results; paper-refs checks every DOI against Crossref; paper-sync pushes the committed
+# paper/ to the Overleaf remote (`pixi run paper-sync --force` the first time).
+paper = "python3 tools/paper/render.py"
+paper-refs = "python3 tools/paper/check_refs.py"
+paper-sync = "bash tools/paper/sync-overleaf.sh"
