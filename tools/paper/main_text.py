@@ -17,8 +17,9 @@ WIDE_TABLES = ("seeds", "mems", "capped", "smems")
 ABSTRACT = [
  ("Motivation",
   "Nearly every comparison of DNA sequences, from mapping reads to aligning genomes and building pangenomes, starts "
-  "by finding seeds: exact matches between a query and a reference. Seeding can dominate the running time, up to "
-  "60% of BWA-MEM's on short reads, and the data it runs on keep growing, from complete telomere-to-telomere "
+  "by finding seeds: exact matches between a query and a reference. Seeding is a substantial part of the work, "
+  "40% to 60% of single-threaded BWA-MEM's time on short reads, and the data it runs on keep growing, from complete "
+  "telomere-to-telomere "
   "genomes to pangenomes of many individuals. Yet seeds are computed by a patchwork of tools, one for each kind of "
   "seed, each with its own index and definitions; several use a single processor core per query sequence, and the "
   "newest kinds of seed, frequency-capped maximal exact matches and f-SMEMs, are offered by one or two tools each."),
