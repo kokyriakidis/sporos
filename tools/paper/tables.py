@@ -409,6 +409,10 @@ def quoted():
     V["seed_t1_min"], V["seed_t1_max"] = _range(one)
     ten = [seed_speedup(m, k, w, 10) for m, k, w, _ in SEED_SCHEMES]
     V["seed_t10_min"], V["seed_t10_max"] = _range(ten)
+    slow = [x for x in ten if x and x < 1]
+    # Phrased by the text: "from N times slower to M times faster", or "N–M times faster".
+    V["seed_t10_phrase"] = (f"between {1 / min(slow):.1f} times slower and {V['seed_t10_max']} times faster than"
+                            if slow else f"{span(V['seed_t10_min'], V['seed_t10_max'])} times faster than")
     eight = [seed(SMIN, "chm13_chr1", m, k, w, 1) / seed(SP8, "chm13_chr1", m, k, w, 1) for m, k, w, _ in SEED_SCHEMES
              if seed(SMIN, "chm13_chr1", m, k, w, 1) and seed(SP8, "chm13_chr1", m, k, w, 1)]
     V["seed8_min"], V["seed8_max"] = _range(eight)

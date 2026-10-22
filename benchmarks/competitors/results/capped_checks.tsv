@@ -1,0 +1,9 @@
+pair	L	mode	mumemto_lines	mumemto_fwd_pairs	sporos_fwd_pairs	common
+ecoli	50	per-genome cap 3	44798	23250	22592	22451
+ecoli	50	total cap 3	44306	22226	22694	22049
+ecoli	50	per-genome cap 10	45222	25813	23008	23007
+ecoli	50	total cap 10	45102	24318	23008	22743
+chr21	50	per-genome cap 3	534248	321345	266826	248705
+chr21	50	total cap 3	487844	249296	277485	231524
+chr21	50	per-genome cap 10	615994	944536	347026	304886
+chr21	50	total cap 10	582164	502978	355526	273850

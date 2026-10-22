@@ -1,0 +1,78 @@
+sporos k=19 w=12	build threads=1: 0.340124004 s wall, 6183920 seeds
+sporos k=19 w=12	build threads=8: 0.064958367 s wall, 6183920 seeds
+sporos k=19 w=12	lookup all k-mers, per read: 37.6826721039634 Mbp/s, 39.477421 hits/read
+sporos k=19 w=12	lookup all k-mers, batch: 36.32262990199068 Mbp/s, 39.477421 hits/read
+sporos k=19 w=12	lookup all k-mers, batch, 8 threads: 140.56939101248307 Mbp/s wall
+sporos k=19 w=12	lookup minimizers, per read: 46.96961977061969 Mbp/s, 27.676793 hits/read
+sporos k=19 w=12	lookup minimizers, batch: 136.47442034282324 Mbp/s, 27.676793 hits/read
+sporos k=19 w=12	lookup minimizers, batch, 8 threads: 557.8213079461567 Mbp/s wall
+minimap2 k=19 w=12	build threads=1: 1.643 s
+minimap2 k=19 w=12	lookup minimizers, per read: 34.6 Mbp/s, 27.63 hits/read (4.341 s)
+minimap2 k=19 w=12	build threads=8: 1.228 s
+sporos k=21 w=11	build threads=1: 0.35930163 s wall, 6684715 seeds
+sporos k=21 w=11	build threads=8: 0.067516847 s wall, 6684715 seeds
+sporos k=21 w=11	lookup all k-mers, per read: 37.76095260439244 Mbp/s, 39.152473 hits/read
+sporos k=21 w=11	lookup all k-mers, batch: 36.46904612322975 Mbp/s, 39.152473 hits/read
+sporos k=21 w=11	lookup all k-mers, batch, 8 threads: 140.96976194940973 Mbp/s wall
+sporos k=21 w=11	lookup minimizers, per read: 46.02267000326729 Mbp/s, 29.034893 hits/read
+sporos k=21 w=11	lookup minimizers, batch: 130.90999099858539 Mbp/s, 29.034893 hits/read
+sporos k=21 w=11	lookup minimizers, batch, 8 threads: 521.649221696579 Mbp/s wall
+minimap2 k=21 w=11	build threads=1: 1.667 s
+minimap2 k=21 w=11	lookup minimizers, per read: 32.5 Mbp/s, 29.15 hits/read (4.622 s)
+minimap2 k=21 w=11	build threads=8: 1.253 s
+strobealign defaults	build threads=1: 1.775 s
+strobealign defaults	build threads=8: 1.331 s
+strobealign defaults	lookup find_hits (one per seed): 14.6 Mbp/s, 51.04 per read (10.256 s)
+strobealign defaults	lookup find_hits + every position: 12.9 Mbp/s, 97.22 per read (11.589 s)
+sporos k=19 w=12	build threads=1: 0.339916571 s wall, 6183920 seeds
+sporos k=19 w=12	build threads=8: 0.065345638 s wall, 6183920 seeds
+sporos k=19 w=12	lookup all k-mers, per read: 37.668556771717334 Mbp/s, 39.477421 hits/read
+sporos k=19 w=12	lookup all k-mers, batch: 36.20038534195225 Mbp/s, 39.477421 hits/read
+sporos k=19 w=12	lookup all k-mers, batch, 8 threads: 141.46819384838838 Mbp/s wall
+sporos k=19 w=12	lookup minimizers, per read: 46.910063351974884 Mbp/s, 27.676793 hits/read
+sporos k=19 w=12	lookup minimizers, batch: 135.77727221542943 Mbp/s, 27.676793 hits/read
+sporos k=19 w=12	lookup minimizers, batch, 8 threads: 563.2515493585669 Mbp/s wall
+minimap2 k=19 w=12	build threads=1: 1.643 s
+minimap2 k=19 w=12	lookup minimizers, per read: 34.6 Mbp/s, 27.63 hits/read (4.333 s)
+minimap2 k=19 w=12	build threads=8: 1.223 s
+sporos k=21 w=11	build threads=1: 0.36092685 s wall, 6684715 seeds
+sporos k=21 w=11	build threads=8: 0.06782431 s wall, 6684715 seeds
+sporos k=21 w=11	lookup all k-mers, per read: 37.827698973058574 Mbp/s, 39.152473 hits/read
+sporos k=21 w=11	lookup all k-mers, batch: 36.47575531040168 Mbp/s, 39.152473 hits/read
+sporos k=21 w=11	lookup all k-mers, batch, 8 threads: 141.48899427527888 Mbp/s wall
+sporos k=21 w=11	lookup minimizers, per read: 46.29016919234594 Mbp/s, 29.034893 hits/read
+sporos k=21 w=11	lookup minimizers, batch: 130.22120307674714 Mbp/s, 29.034893 hits/read
+sporos k=21 w=11	lookup minimizers, batch, 8 threads: 528.5242028198098 Mbp/s wall
+minimap2 k=21 w=11	build threads=1: 1.664 s
+minimap2 k=21 w=11	lookup minimizers, per read: 32.6 Mbp/s, 29.15 hits/read (4.596 s)
+minimap2 k=21 w=11	build threads=8: 1.256 s
+strobealign defaults	build threads=1: 1.777 s
+strobealign defaults	build threads=8: 1.337 s
+strobealign defaults	lookup find_hits (one per seed): 14.6 Mbp/s, 51.04 per read (10.286 s)
+strobealign defaults	lookup find_hits + every position: 13.1 Mbp/s, 97.22 per read (11.425 s)
+sporos k=19 w=12	build threads=1: 0.338030461 s wall, 6183920 seeds
+sporos k=19 w=12	build threads=8: 0.064543972 s wall, 6183920 seeds
+sporos k=19 w=12	lookup all k-mers, per read: 37.49510638243316 Mbp/s, 39.477421 hits/read
+sporos k=19 w=12	lookup all k-mers, batch: 36.06830505964548 Mbp/s, 39.477421 hits/read
+sporos k=19 w=12	lookup all k-mers, batch, 8 threads: 141.48629788257466 Mbp/s wall
+sporos k=19 w=12	lookup minimizers, per read: 46.94280785907852 Mbp/s, 27.676793 hits/read
+sporos k=19 w=12	lookup minimizers, batch: 136.29698627000585 Mbp/s, 27.676793 hits/read
+sporos k=19 w=12	lookup minimizers, batch, 8 threads: 556.0876593601259 Mbp/s wall
+minimap2 k=19 w=12	build threads=1: 1.639 s
+minimap2 k=19 w=12	lookup minimizers, per read: 34.6 Mbp/s, 27.63 hits/read (4.330 s)
+minimap2 k=19 w=12	build threads=8: 1.220 s
+sporos k=21 w=11	build threads=1: 0.357461677 s wall, 6684715 seeds
+sporos k=21 w=11	build threads=8: 0.067680821 s wall, 6684715 seeds
+sporos k=21 w=11	lookup all k-mers, per read: 37.866479666439574 Mbp/s, 39.152473 hits/read
+sporos k=21 w=11	lookup all k-mers, batch: 36.4897984662787 Mbp/s, 39.152473 hits/read
+sporos k=21 w=11	lookup all k-mers, batch, 8 threads: 140.37136517357047 Mbp/s wall
+sporos k=21 w=11	lookup minimizers, per read: 46.403226889802305 Mbp/s, 29.034893 hits/read
+sporos k=21 w=11	lookup minimizers, batch: 131.34851989473773 Mbp/s, 29.034893 hits/read
+sporos k=21 w=11	lookup minimizers, batch, 8 threads: 524.9836223484255 Mbp/s wall
+minimap2 k=21 w=11	build threads=1: 1.663 s
+minimap2 k=21 w=11	lookup minimizers, per read: 32.6 Mbp/s, 29.15 hits/read (4.603 s)
+minimap2 k=21 w=11	build threads=8: 1.256 s
+strobealign defaults	build threads=1: 1.776 s
+strobealign defaults	build threads=8: 1.340 s
+strobealign defaults	lookup find_hits (one per seed): 14.7 Mbp/s, 51.04 per read (10.206 s)
+strobealign defaults	lookup find_hits + every position: 13.0 Mbp/s, 97.22 per read (11.533 s)

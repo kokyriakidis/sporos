@@ -1,0 +1,15 @@
+reads	L	f	check	n_sporos	n_other	only_sporos	only_other	other_through_N
+150bp	19	1	sporos vs minibwa	1220875	1220988	3	116	116
+150bp	19	1	sporos vs bwa fastmap	1220875	1220883	6	14	14
+150bp	19	1	sporos -t10=-t1	-	-	-	-	PASS
+150bp	19	2	sporos vs minibwa	2524708	2528183	93	3568	3563
+150bp	19	2	sporos -t10=-t1	-	-	-	-	PASS
+150bp	19	5	sporos vs minibwa	2215160	2215296	188	324	251
+150bp	19	5	sporos -t10=-t1	-	-	-	-	PASS
+10kb	19	1	sporos vs minibwa	80950	80992	1	43	43
+10kb	19	1	sporos vs bwa fastmap	80950	80954	2	6	6
+10kb	19	1	sporos -t10=-t1	-	-	-	-	PASS
+10kb	19	2	sporos vs minibwa	727491	728542	26	1077	1077
+10kb	19	2	sporos -t10=-t1	-	-	-	-	PASS
+10kb	19	5	sporos vs minibwa	662496	662535	55	94	70
+10kb	19	5	sporos -t10=-t1	-	-	-	-	PASS

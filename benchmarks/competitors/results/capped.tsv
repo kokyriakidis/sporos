@@ -1,0 +1,25 @@
+pair	L	tool	mode	threads	reps	wall_s	user_s	sys_s	max_rss_mb	busy_cpus	load1
+ecoli	50	sporos	per-genome cap 3	1	3	0.11	0.08	0.02	61	1.07	1.16
+ecoli	50	sporos	per-genome cap 3	10	3	0.06	0.12	0.05	87	1.01	1.16
+ecoli	50	mumemto	per-genome cap 3	1	3	13.34	13.02	0.31	348	1.03	1.15
+ecoli	50	sporos	total cap 3	1	3	0.10	0.08	0.02	61	0.24	1.25
+ecoli	50	sporos	total cap 3	10	3	0.05	0.11	0.05	90	1.05	1.25
+ecoli	50	mumemto	total cap 3	1	3	13.33	13.01	0.28	348	1.01	1.25
+ecoli	50	sporos	per-genome cap 10	1	3	0.11	0.08	0.02	61	0.20	1.16
+ecoli	50	sporos	per-genome cap 10	10	3	0.06	0.11	0.07	87	1.03	1.16
+ecoli	50	mumemto	per-genome cap 10	1	3	13.30	12.98	0.31	348	1.05	1.16
+ecoli	50	sporos	total cap 10	1	3	0.10	0.08	0.02	61	0.26	1.13
+ecoli	50	sporos	total cap 10	10	3	0.06	0.10	0.07	87	0.95	1.20
+ecoli	50	mumemto	total cap 10	1	3	13.29	12.98	0.30	348	1.07	1.20
+chr21	50	sporos	per-genome cap 3	1	3	1.02	0.91	0.10	257	1.36	1.22
+chr21	50	sporos	per-genome cap 3	10	3	0.31	1.36	0.30	313	0.87	1.28
+chr21	50	mumemto	per-genome cap 3	1	1	169.38	166.30	2.92	3130	1.07	1.26
+chr21	50	sporos	total cap 3	1	3	0.96	0.86	0.10	257	0.18	1.12
+chr21	50	sporos	total cap 3	10	3	0.28	1.34	0.23	314	0.85	1.19
+chr21	50	mumemto	total cap 3	1	1	169.02	165.92	2.94	3130	1.07	1.19
+chr21	50	sporos	per-genome cap 10	1	3	1.05	0.94	0.11	257	0.14	1.21
+chr21	50	sporos	per-genome cap 10	10	3	0.33	1.40	0.28	312	0.85	1.21
+chr21	50	mumemto	per-genome cap 10	1	1	170.12	166.84	3.09	3130	1.03	1.27
+chr21	50	sporos	total cap 10	1	3	0.98	0.88	0.10	257	0.20	1.30
+chr21	50	sporos	total cap 10	10	3	0.28	1.31	0.30	311	0.89	1.30
+chr21	50	mumemto	total cap 10	1	1	170.19	166.99	3.04	3130	1.09	1.27

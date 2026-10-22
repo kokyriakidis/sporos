@@ -1,9 +1,11 @@
 tool	version
-sporos	4db0ae6-dirty (mojo 1.2.0.dev2026102005)
+sporos	d973703 (mojo 1.2.0.dev2026102005)
 mummer	4.0.1
 mumemto	1.4.2
 bwa	0.7.19-r1273
 ropebwt3	3.10-r281
+strobealign	git e45e291 (rustc, target-cpu=native)
+minibwa	git 74bdd48 (gcc -O3)
 copMEM2	git 8040165 (g++ -O3 -march=native)
 minimap2 mm_sketch	git 3c28777 (gcc -O3 -march=native)
 simd-minimizers	git a173cbe (rustc 1.93.1, target-cpu=native)

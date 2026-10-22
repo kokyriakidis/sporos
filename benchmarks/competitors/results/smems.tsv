@@ -1,0 +1,40 @@
+reads	L	tool	mode	threads	reps	wall_s	user_s	sys_s	max_rss_mb	busy_cpus	load1
+chr21	-	sporos index	build	1	3	4.57	4.19	0.37	593	0.04	1.11
+chr21	-	minibwa index	build	1	3	5.28	5.20	0.08	525	0.16	1.15
+chr21	-	ropebwt3 build	build	1	3	8.32	7.96	0.32	493	0.06	1.12
+chr21	-	sporos index	build	10	3	2.10	10.64	0.65	595	0.18	1.08
+chr21	-	minibwa index	build	10	3	3.81	21.52	0.13	527	0.22	2.29
+chr21	-	ropebwt3 build	build	10	3	6.59	8.09	0.33	493	0.20	2.17
+chr21	-	bwa index	build	1	3	33.40	33.06	0.20	74	0.08	1.77
+150bp	19	sporos	SMEM	1	3	1.85	1.64	0.20	425	0.18	1.25
+150bp	19	sporos	SMEM	10	3	0.40	1.84	0.38	441	0.87	1.31
+150bp	19	minibwa	SMEM	1	3	8.95	8.80	0.13	145	1.13	1.36
+150bp	19	bwa fastmap	SMEM	1	3	27.52	27.25	0.22	69	0.08	1.24
+150bp	19	ropebwt3 mem	SMEM (no positions)	1	1	93.45	93.39	0.32	349	0.06	1.13
+150bp	19	ropebwt3 mem	SMEM (no positions)	10	3	9.64	91.71	0.49	350	0.14	1.09
+150bp	19	sporos	f-SMEM f=2	1	3	7.79	7.55	0.24	425	0.06	4.76
+150bp	19	sporos	f-SMEM f=2	10	3	1.09	7.84	0.41	455	1.13	3.54
+150bp	19	minibwa	f-SMEM f=2	1	3	17.59	17.29	0.27	145	1.13	4.06
+150bp	19	ropebwt3 mem	f-SMEM f=2 (no positions)	1	1	246.11	245.95	0.47	393	0.08	1.61
+150bp	19	ropebwt3 mem	f-SMEM f=2 (no positions)	10	3	24.91	242.58	0.83	393	0.06	1.09
+150bp	19	sporos	f-SMEM f=5	1	3	7.51	7.25	0.25	426	0.06	7.65
+150bp	19	sporos	f-SMEM f=5	10	3	1.10	7.45	0.45	464	0.87	5.44
+150bp	19	minibwa	f-SMEM f=5	1	3	17.46	17.07	0.36	145	1.09	6.13
+150bp	19	ropebwt3 mem	f-SMEM f=5 (no positions)	1	1	215.96	215.83	0.42	386	0.06	2.24
+150bp	19	ropebwt3 mem	f-SMEM f=5 (no positions)	10	3	21.95	213.30	0.78	386	0.08	1.10
+10kb	19	sporos	SMEM	1	3	0.37	0.27	0.09	260	0.06	6.41
+10kb	19	sporos	SMEM	10	3	0.14	0.30	0.16	275	1.08	6.41
+10kb	19	minibwa	SMEM	1	3	2.11	2.08	0.03	145	0.51	5.89
+10kb	19	bwa fastmap	SMEM	1	3	6.37	6.31	0.04	70	0.10	5.58
+10kb	19	ropebwt3 mem	SMEM (no positions)	1	3	24.09	24.02	0.06	85	0.06	4.35
+10kb	19	ropebwt3 mem	SMEM (no positions)	10	3	2.49	23.68	0.10	85	0.10	1.95
+10kb	19	sporos	f-SMEM f=2	1	3	2.45	2.34	0.11	265	0.06	3.27
+10kb	19	sporos	f-SMEM f=2	10	3	0.41	2.38	0.18	300	1.07	3.09
+10kb	19	minibwa	f-SMEM f=2	1	3	5.36	5.28	0.07	149	1.03	3.72
+10kb	19	ropebwt3 mem	f-SMEM f=2 (no positions)	1	1	73.75	73.61	0.11	115	0.10	2.79
+10kb	19	ropebwt3 mem	f-SMEM f=2 (no positions)	10	3	7.51	72.97	0.21	115	0.06	1.61
+10kb	19	sporos	f-SMEM f=5	1	3	2.41	2.29	0.11	267	0.04	3.99
+10kb	19	sporos	f-SMEM f=5	10	3	0.39	2.32	0.21	308	1.13	3.61
+10kb	19	minibwa	f-SMEM f=5	1	3	5.40	5.32	0.07	151	1.07	3.48
+10kb	19	ropebwt3 mem	f-SMEM f=5 (no positions)	1	1	64.99	64.88	0.09	111	0.10	2.62
+10kb	19	ropebwt3 mem	f-SMEM f=5 (no positions)	10	3	6.64	64.35	0.18	112	0.08	1.59

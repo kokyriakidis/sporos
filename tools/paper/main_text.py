@@ -257,7 +257,7 @@ BODY = [
  f'{V["seed16_vs_8_min"]}–{V["seed16_vs_8_max"]} times faster than the 8-lane one, where simd-minimizers found its '
  f'own kernel slower with AVX-512 [@GrootKoerkamp2025simd]. minimap2\'s `mm_sketch` was '
  f'{span(V["seed_mm2_min"], V["seed_mm2_max"])} times slower than sporos. On ten threads the race is closer: sporos was '
- f'{V["seed_t10_min"]}–{V["seed_t10_max"]} times faster than simd-minimizers, whose harness keeps each thread\'s '
+ f'{V["seed_t10_phrase"]} simd-minimizers, whose harness keeps each thread\'s '
  'positions apart and only counts them, while sporos returns one list in sequence order.'),
 ('table', 'seeds'),
 ('sub', 'Seed-index lookups'),

@@ -1,0 +1,27 @@
+tool	measure	value	hits_per_read
+sporos k=19 w=12	build, 1 threads	0.338030461	
+sporos k=19 w=12	build, 8 threads	0.064543972	
+sporos k=19 w=12	lookup all k-mers, per read	37.6826721039634	39.477421
+sporos k=19 w=12	lookup all k-mers, batch	36.32262990199068	39.477421
+sporos k=19 w=12	lookup all k-mers, batch, 8 threads	141.48629788257466	
+sporos k=19 w=12	lookup minimizers, per read	46.96961977061969	27.676793
+sporos k=19 w=12	lookup minimizers, batch	136.47442034282324	27.676793
+sporos k=19 w=12	lookup minimizers, batch, 8 threads	563.2515493585669	
+minimap2 k=19 w=12	build, 1 threads	1.639	
+minimap2 k=19 w=12	lookup minimizers, per read	34.6	27.63
+minimap2 k=19 w=12	build, 8 threads	1.22	
+sporos k=21 w=11	build, 1 threads	0.357461677	
+sporos k=21 w=11	build, 8 threads	0.067516847	
+sporos k=21 w=11	lookup all k-mers, per read	37.866479666439574	39.152473
+sporos k=21 w=11	lookup all k-mers, batch	36.4897984662787	39.152473
+sporos k=21 w=11	lookup all k-mers, batch, 8 threads	141.48899427527888	
+sporos k=21 w=11	lookup minimizers, per read	46.403226889802305	29.034893
+sporos k=21 w=11	lookup minimizers, batch	131.34851989473773	29.034893
+sporos k=21 w=11	lookup minimizers, batch, 8 threads	528.5242028198098	
+minimap2 k=21 w=11	build, 1 threads	1.663	
+minimap2 k=21 w=11	lookup minimizers, per read	32.6	29.15
+minimap2 k=21 w=11	build, 8 threads	1.253	
+strobealign defaults	build, 1 threads	1.775	
+strobealign defaults	build, 8 threads	1.331	
+strobealign defaults	lookup find_hits (one per seed)	14.7	51.04
+strobealign defaults	lookup find_hits + every position	13.1	97.22
