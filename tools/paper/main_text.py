@@ -17,16 +17,17 @@ WIDE_TABLES = ("seeds", "mems", "capped", "smems")
 ABSTRACT = [
  ("Motivation",
   "Read mapping, genome alignment and pangenome analysis all start by finding seeds, exact matches between a query "
-  "and a reference; on short reads, seeding takes 40% to 60% of single-threaded BWA-MEM's time. The tools that "
-  "compute seeds are fragmented: each kind of seed has its own program, index and output format, and the newest "
-  "kinds, frequency-capped maximal exact matches and f-SMEMs, are offered by one or two tools each. Few of these "
-  "tools are built for current processors, with their wide vector units and many cores: MUMmer4, copMEM2 and "
-  "minibwa's SMEM search use one core per query sequence."),
+  "and a reference; on short reads, seeding takes 40% to 60% of single-threaded BWA-MEM's time. However, seed "
+  "computation remains fragmented across specialized tools, each with its own index, coordinate conventions and "
+  "output format, and recently introduced seed types, such as frequency-capped maximal exact matches and f-SMEMs, "
+  "are supported by only one or two implementations. Moreover, few of these tools are designed for modern CPUs "
+  "with wide SIMD units and many cores; MUMmer4, copMEM2 and the SMEM search of minibwa, for example, process each "
+  "query sequence on a single core."),
  ("Results",
   "We present sporos, one library that computes all of these seeds exactly, on every core and vector lane. Its "
-  "main algorithmic contribution counts the copies of a MEM's string from the MEMs themselves: a "
+  "key contribution counts the copies of a MEM's string from the MEMs themselves: a "
   "string occurs in the reference once for every MEM whose query interval contains its own, so frequency-capped "
-  "MEMs need no index of the genomes beyond the one that finds the MEMs. On one Intel Skylake-X processor, sporos "
+  "MEMs need no additional index. On one Intel Skylake-X processor, sporos "
   f"computed minimizers and syncmers {V['seed_t1_min']}–{V['seed_t1_max']} times faster than simd-minimizers on "
   f"one core, looked seeds up {V['lookup_vs_mm2']} times faster than minimap2, found MEMs between two human "
   f"chromosomes 1 {V['copmem2_chr1_min']}–{V['copmem2_chr1_max']} times faster than copMEM2, MEMs and MUMs "
