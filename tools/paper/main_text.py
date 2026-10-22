@@ -16,22 +16,21 @@ WIDE_TABLES = ("seeds", "mems", "capped", "smems")
 
 ABSTRACT = [
  ("Motivation",
-  "Nearly every comparison of DNA sequences, from mapping reads to aligning genomes and building pangenomes, starts "
-  "by finding seeds: exact matches between a query and a reference. Seeding is a substantial part of the work, "
-  "40% to 60% of single-threaded BWA-MEM's time on short reads, and the data it runs on keep growing, from complete "
-  "telomere-to-telomere "
-  "genomes to pangenomes of many individuals. Yet seeds are computed by a patchwork of tools, one for each kind of "
-  "seed, each with its own index and definitions; several use a single processor core per query sequence, and the "
-  "newest kinds of seed, frequency-capped maximal exact matches and f-SMEMs, are offered by one or two tools each."),
+  "Read mapping, genome alignment and pangenome analysis all start by finding seeds, exact matches between a query "
+  "and a reference; on short reads, seeding takes 40% to 60% of single-threaded BWA-MEM's time. The tools that "
+  "compute seeds are fragmented: each kind of seed has its own program, index and output format, and the newest "
+  "kinds, frequency-capped maximal exact matches and f-SMEMs, are offered by one or two tools each. Few of these "
+  "tools are built for current processors, with their wide vector units and many cores: MUMmer4, copMEM2 and "
+  "minibwa's SMEM search use one core per query sequence."),
  ("Results",
-  "We present sporos, a library that computes all of these seeds exactly, with one set of definitions and one "
-  "interface. Its main algorithmic contribution counts the copies of a MEM's string from the MEMs themselves: a "
+  "We present sporos, one library that computes all of these seeds exactly, on every core and vector lane. Its "
+  "main algorithmic contribution counts the copies of a MEM's string from the MEMs themselves: a "
   "string occurs in the reference once for every MEM whose query interval contains its own, so frequency-capped "
   "MEMs need no index of the genomes beyond the one that finds the MEMs. On one Intel Skylake-X processor, sporos "
   f"computed minimizers and syncmers {V['seed_t1_min']}–{V['seed_t1_max']} times faster than simd-minimizers on "
   f"one core, looked seeds up {V['lookup_vs_mm2']} times faster than minimap2, found MEMs between two human "
-  f"chromosomes 1 {V['copmem2_chr1_min']}–{V['copmem2_chr1_max']} times faster than copMEM2 and MUMs up to "
-  f"{V['mummer_max']} times faster than MUMmer4 with identical output, frequency-capped MEMs "
+  f"chromosomes 1 {V['copmem2_chr1_min']}–{V['copmem2_chr1_max']} times faster than copMEM2, MEMs and MUMs "
+  f"{V['mummer_min']}–{V['mummer_max']} times faster than MUMmer4 with identical output, frequency-capped MEMs "
   f"{V['capped_min']}–{V['capped_max']} times faster than Mumemto, and SMEMs of short reads "
   f"{V['smem_150bp_mb']} times faster than minibwa."),
  ("Availability and implementation",
