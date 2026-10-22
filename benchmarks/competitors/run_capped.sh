@@ -10,6 +10,8 @@
 # copies on both strands of each, and prints each string once with all its copies; sporos finds the MEMs of
 # the query against the reference and counts a string's copies in the reference (and, with -mum, in the query
 # sequence). Mumemto -f N pairs with sporos -mum --max-occ N, and -F N with -maxmatch --max-occ N.
+# SPOROS_ONLY=1 times sporos alone, keeping Mumemto's rows, and measures the overlap against the Mumemto outputs
+# the last full run kept (an overlap row stays as it was when its output is missing).
 set -uo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
@@ -21,6 +23,7 @@ SPOROS=$SBIN/sporos
 TSV=$RES/capped.tsv
 CHK=$RES/capped_checks.tsv
 MUMEMTO_TIMEOUT=${MUMEMTO_TIMEOUT:-600}
+cached && drop_rows "$TSV" 3 '^sporos$'
 [ -f "$TSV" ] || printf "pair\tL\ttool\tmode\tthreads\treps\twall_s\tuser_s\tsys_s\tmax_rss_mb\tbusy_cpus\tload1\n" > "$TSV"
 [ -f "$CHK" ] || printf "pair\tL\tmode\tmumemto_lines\tmumemto_fwd_pairs\tsporos_fwd_pairs\tcommon\n" > "$CHK"
 
@@ -42,17 +45,22 @@ for pair in $PAIRS; do
         measure "$TSV" "$pair" "$L" sporos "$mode" "$T" -- "$P/sporos_${kind}_$N.txt" \
           "$SPOROS" mem "$sp_mode" -b --max-occ "$N" -l "$L" -t "$T" "$R" "$Q"
       done
-      rm -f "$P/mumemto_${kind}_$N.mems"
-      measure "$TSV" "$pair" "$L" mumemto "$mode" 1 -- - \
-        timeout "$MUMEMTO_TIMEOUT" "$ENVBIN/mumemto" -k 2 $mm_opts -l "$L" -o "$P/mumemto_${kind}_$N" "$R" "$Q"
+      cached || { rm -f "$P/mumemto_${kind}_$N.mems"
+        measure "$TSV" "$pair" "$L" mumemto "$mode" 1 -- - \
+          timeout "$MUMEMTO_TIMEOUT" "$ENVBIN/mumemto" -k 2 $mm_opts -l "$L" -o "$P/mumemto_${kind}_$N" "$R" "$Q"; }
+      # This pair and mode's overlap row, replaced (kept when SPOROS_ONLY=1 finds no Mumemto output).
+      if [ -s "$P/mumemto_${kind}_$N.mems" ] || ! cached; then
+        awk -F'\t' -v p="$pair" -v m="$mode" 'NR == 1 || !($1 == p && $3 == m)' "$CHK" > "$CHK.tmp" && mv "$CHK.tmp" "$CHK"
+      fi
       if [ -s "$P/mumemto_${kind}_$N.mems" ]; then
         python3 -I "$HERE/capped_overlap.py" "$P/mumemto_${kind}_$N.mems" "$P/sporos_${kind}_$N.txt" |
           awk -v OFS='\t' -v p="$pair" -v l="$L" -v m="$mode" '{print p, l, m, $0}' | tee -a "$CHK"
-      else
+      elif ! cached; then
         printf "%s\t%s\t%s\tDNF\tNA\tNA\tNA\n" "$pair" "$L" "$mode" | tee -a "$CHK"
       fi
     done
   done
-  rm -f "$P"/*.txt "$P"/*.mems
+  # Mumemto's outputs stay for SPOROS_ONLY=1.
+  rm -f "$P"/sporos_*.txt
 done
 echo "run_capped.sh done"

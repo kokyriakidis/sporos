@@ -6,6 +6,7 @@
 #
 # Each harness builds its index, then seeds every read and looks its seeds up on one thread, timing only the
 # read loop with the reads in memory. Writes results/lookups.tsv: the best of $REPS runs of each line.
+# SPOROS_ONLY=1 measures sporos alone, keeping the other tools' raw lines.
 set -uo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
@@ -16,18 +17,22 @@ RAW=$RES/lookups_raw.txt
 TSV=$RES/lookups.tsv
 MAX_OCC=${MAX_OCC:-20}
 { echo "== run_lookups.sh"; machine_info; } >> "$RES/machine.txt"
-: > "$RAW"
+if cached; then
+  grep -v '^sporos' "$RAW" > "$RAW.tmp"; mv "$RAW.tmp" "$RAW"
+else
+  : > "$RAW"
+fi
 
 for r in $(seq "$REPS"); do
   for kw in "19 12" "21 11"; do
     set -- $kw
     wait_idle
     "$SBIN/bench_index" "$R" "$Q" "$1" "$2" "$MAX_OCC" 2>&1 | sed "s/^/sporos k=$1 w=$2\t/" >> "$RAW"
-    wait_idle
-    "$LB/mm2_lookup" "$R" "$Q" "$1" "$2" "$MAX_OCC" 2>&1 | sed "s/^/minimap2 k=$1 w=$2\t/" >> "$RAW"
+    cached || { wait_idle
+      "$LB/mm2_lookup" "$R" "$Q" "$1" "$2" "$MAX_OCC" 2>&1 | sed "s/^/minimap2 k=$1 w=$2\t/" >> "$RAW"; }
   done
-  wait_idle
-  "$LB/sa_bench" "$R" "$Q" 2>&1 | sed "s/^/strobealign defaults\t/" >> "$RAW"
+  cached || { wait_idle
+    "$LB/sa_bench" "$R" "$Q" 2>&1 | sed "s/^/strobealign defaults\t/" >> "$RAW"; }
 done
 
 # Best of the runs: the highest throughput and the lowest build time of each line.

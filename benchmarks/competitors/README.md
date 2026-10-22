@@ -22,6 +22,12 @@ bash benchmarks/competitors/run_smems.sh     # ~40 min: SMEMs and f-SMEMs agains
 python3 -I benchmarks/competitors/tables.py  # markdown tables from results/*.tsv
 ```
 
+Or all of it in order, `bash benchmarks/competitors/run_all.sh` (about 3 h). After a change to sporos alone,
+`SPOROS_ONLY=1 bash benchmarks/competitors/run_all.sh` (about 20 min) times sporos again and keeps every other
+tool's rows from the last full run: each runner skips the other tools (`cached`, in `lib.sh`) and checks sporos
+against the outputs that run kept in `~/sporos-bench/out` (the sorted MEM sets, Mumemto's `.mems`, minibwa's
+and bwa's SMEMs). Run the full suite again when a tool's version, the machine or the data changes.
+
 `setup_xaros.sh` puts everything under `~/sporos-bench`: a pixi env with bioconda `mummer4`, `mumemto`, `bwa`
 and `ropebwt3` (bioconda has no linux-64 `e-mem`, so E-MEM is skipped); copMEM2, minimap2 and simd-minimizers
 at pinned commits, built with `-O3 -march=native` / `target-cpu=native`; the two seed harnesses in

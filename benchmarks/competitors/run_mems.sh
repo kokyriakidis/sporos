@@ -4,7 +4,8 @@
 #     bash benchmarks/competitors/run_mems.sh            # all pairs
 #     PAIRS="ecoli chr21" bash benchmarks/competitors/run_mems.sh
 #
-# Writes results/mems.tsv (timings) and results/mems_checks.tsv (output equality).
+# Writes results/mems.tsv (timings) and results/mems_checks.tsv (output equality). SPOROS_ONLY=1 times sporos
+# alone, keeping the other tools' rows, and checks it against their sorted outputs from the last full run.
 # Best wall time of $REPS runs (a first run over $REPEAT_UNDER s is not repeated).
 set -uo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
@@ -21,6 +22,7 @@ IDX=$BENCH/idx
 # mumemto needs > 300 s on the chr1 pair (> 5x the slowest other MEM tool); cap it.
 MUMEMTO_TIMEOUT=${MUMEMTO_TIMEOUT:-300}
 mkdir -p "$IDX"
+cached && { drop_rows "$TSV" 3 '^sporos$'; rm -f "$CHK"; }
 [ -f "$TSV" ] || printf "pair\tL\ttool\tmode\tthreads\treps\twall_s\tuser_s\tsys_s\tmax_rss_mb\tbusy_cpus\tload1\n" > "$TSV"
 [ -f "$CHK" ] || printf "pair\tL\tcheck\tn_a\tn_b\tonly_a\tonly_b\tresult\n" > "$CHK"
 
@@ -71,9 +73,9 @@ for pair in $PAIRS; do
   mkdir -p "$P"
 
   # FM-index builds, timed once (single thread for bwa; ropebwt3 at each thread count).
-  measure "$TSV" "$pair" - "bwa index" build 1 -- - "$ENVBIN/bwa" index -p "$IDX/$pair.bwa" "$R"
+  cached || measure "$TSV" "$pair" - "bwa index" build 1 -- - "$ENVBIN/bwa" index -p "$IDX/$pair.bwa" "$R"
   for T in $THREADS; do
-    measure "$TSV" "$pair" - "ropebwt3 build" build "$T" -- - "$ENVBIN/ropebwt3" build -t "$T" -do "$IDX/$pair.fmd" "$R"
+    cached || measure "$TSV" "$pair" - "ropebwt3 build" build "$T" -- - "$ENVBIN/ropebwt3" build -t "$T" -do "$IDX/$pair.fmd" "$R"
   done
 
   for L in $LS; do
@@ -85,18 +87,18 @@ for pair in $PAIRS; do
       done
       # MUMmer 4.0.1: -qthreads does not split a single query and -k>1 -threads aborts,
       # so it runs single-threaded.
-      measure "$TSV" "$pair" "$L" mummer "$mode" 1 -- "$P/mummer_${mode}_L$L.txt" \
+      cached || { measure "$TSV" "$pair" "$L" mummer "$mode" 1 -- "$P/mummer_${mode}_L$L.txt" \
         "$ENVBIN/mummer" -$mode -n -l "$L" "$R" "$Q"
-      norm "$P/mummer_${mode}_L$L.txt" "$P/mummer_${mode}_L$L.set"
+        norm "$P/mummer_${mode}_L$L.txt" "$P/mummer_${mode}_L$L.set"; }
       check "$pair" "$L" "sporos=mummer -$mode" "$P/sporos_${mode}_L${L}_T1.set" "$P/mummer_${mode}_L$L.set"
       check "$pair" "$L" "sporos -t10=-t1 -$mode" "$P/sporos_${mode}_L${L}_T10.set" "$P/sporos_${mode}_L${L}_T1.set"
     done
 
     for T in $THREADS; do
       for mf in "" "-mf"; do
-        measure "$TSV" "$pair" "$L" "copmem2${mf:+ $mf}" maxmatch "$T" -- - \
+        cached || { measure "$TSV" "$pair" "$L" "copmem2${mf:+ $mf}" maxmatch "$T" -- - \
           "$COPMEM2" -q $mf -t "$T" -l "$L" -o "$P/copmem2${mf}_L${L}_T$T.txt" "$R" "$Q"
-        norm "$P/copmem2${mf}_L${L}_T$T.txt" "$P/copmem2${mf}_L${L}_T$T.set"
+          norm "$P/copmem2${mf}_L${L}_T$T.txt" "$P/copmem2${mf}_L${L}_T$T.set"; }
         check "$pair" "$L" "sporos=copmem2${mf:+ $mf} -t$T" "$P/sporos_maxmatch_L${L}_T1.set" "$P/copmem2${mf}_L${L}_T$T.set"
       done
     done
@@ -104,28 +106,28 @@ for pair in $PAIRS; do
     # mumemto: multi-MUMs over both strands (unique among both strands of both inputs);
     # single-threaded; builds its index (PFP + SA/LCP) every run.
     # GNU timeout signals the whole process group (python wrapper and mumemto_exec).
-    rm -f "$P/mumemto_L$L.mums"
-    measure "$TSV" "$pair" "$L" mumemto "mum (both strands)" 1 -- - \
-      timeout "$MUMEMTO_TIMEOUT" "$ENVBIN/mumemto" -l "$L" -o "$P/mumemto_L$L" "$R" "$Q"
+    cached || { rm -f "$P/mumemto_L$L.mums"
+      measure "$TSV" "$pair" "$L" mumemto "mum (both strands)" 1 -- - \
+        timeout "$MUMEMTO_TIMEOUT" "$ENVBIN/mumemto" -l "$L" -o "$P/mumemto_L$L" "$R" "$Q"; }
     cut -f3- "$P/mummer_mum_L$L.set" | LC_ALL=C sort -u > "$P/mummer_mum_L$L.set3"
     if [ -s "$P/mumemto_L$L.mums" ]; then
       norm_mumemto "$P/mumemto_L$L.mums" "$P/mumemto_L$L.set"
       check "$pair" "$L" "mumemto(+,+) vs mummer -mum" "$P/mumemto_L$L.set" "$P/mummer_mum_L$L.set3" info
     else
-      mark_dnf "$TSV" "DNF (timeout $MUMEMTO_TIMEOUT s)"
+      cached || mark_dnf "$TSV" "DNF (timeout $MUMEMTO_TIMEOUT s)"
       printf "%s\t%s\tmumemto(+,+) vs mummer -mum\tNA\t%s\tNA\t%s\tDNF\n" "$pair" "$L" \
         "$(wc -l < "$P/mummer_mum_L$L.set3")" "$(wc -l < "$P/mummer_mum_L$L.set3")" | tee -a "$CHK"
     fi
 
     # SMEMs from prebuilt FM-indexes (index time above).
-    measure "$TSV" "$pair" "$L" "bwa fastmap" "SMEM (fwd+rc)" 1 -- "$P/bwa_fastmap_L$L.txt" \
+    cached || measure "$TSV" "$pair" "$L" "bwa fastmap" "SMEM (fwd+rc)" 1 -- "$P/bwa_fastmap_L$L.txt" \
       "$ENVBIN/bwa" fastmap -l "$L" "$IDX/$pair.bwa" "$Q"
     for T in $THREADS; do
-      measure "$TSV" "$pair" "$L" "ropebwt3 mem" "SMEM (fwd+rc, no pos)" "$T" -- "$P/ropebwt3_L${L}_T$T.txt" \
+      cached || measure "$TSV" "$pair" "$L" "ropebwt3 mem" "SMEM (fwd+rc, no pos)" "$T" -- "$P/ropebwt3_L${L}_T$T.txt" \
         "$ENVBIN/ropebwt3" mem -t "$T" -l "$L" "$IDX/$pair.fmd" "$Q"
     done
   done
-  # Raw outputs are large on chr1; the sorted sets are enough to re-check.
+  # Raw outputs are large on chr1; the sorted sets are enough to re-check (SPOROS_ONLY=1 checks against them).
   rm -f "$P"/*.txt
 done
 echo "run_mems.sh done"

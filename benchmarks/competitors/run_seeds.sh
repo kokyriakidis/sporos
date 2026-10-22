@@ -11,7 +11,8 @@
 # Single thread: best of 5-7 runs (thread CPU time for sporos, wall time for the others).
 # 10 threads: best wall time; simd-minimizers and mm_sketch split the sequence into chunks.
 # Also the end-to-end CLI: `sporos minimizers -k 21 -w 11 -t T chr1.fa > /dev/null`.
-# Writes results/seeds.tsv (parsed), results/seeds_raw.txt and results/seeds_cli.tsv.
+# Writes results/seeds.tsv (parsed), results/seeds_raw.txt and results/seeds_cli.tsv. SPOROS_ONLY=1 measures
+# sporos alone, keeping the other tools' rows and raw lines.
 set -uo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
@@ -21,8 +22,14 @@ MMB=$BENCH/mybench/mm2/mmbench
 TSV=$RES/seeds.tsv
 RAW=$RES/seeds_raw.txt
 CLI=$RES/seeds_cli.tsv
-printf "tool\tinput\tmode\tk\tw\tthreads\tn\tout\tns_per_bp\tbusy_cpus\tload1\n" > "$TSV"
-: > "$RAW"
+if cached; then
+  drop_rows "$TSV" 1 '^sporos'
+  # The raw sections of the other tools stay; sporos's go.
+  awk '/^## / { keep = ($2 != "sporos") } keep' "$RAW" > "$RAW.tmp" && mv "$RAW.tmp" "$RAW"
+else
+  printf "tool\tinput\tmode\tk\tw\tthreads\tn\tout\tns_per_bp\tbusy_cpus\tload1\n" > "$TSV"
+  : > "$RAW"
+fi
 { echo "== run_seeds.sh"; machine_info; } >> "$RES/machine.txt"
 
 # run <tool label> <input label> cmd...: raw lines to $RAW, key=value fields to $TSV.
@@ -54,20 +61,20 @@ run() {
 for lanes in 8 16; do
   run "sporos (lanes=$lanes)" random100M "$SBIN/bench_seeds_$lanes" 100000000
 done
-run simd-minimizers random100M "$SMB" random 1
-run "minimap2 mm_sketch" random100M "$MMB" random 1
+cached || run simd-minimizers random100M "$SMB" random 1
+cached || run "minimap2 mm_sketch" random100M "$MMB" random 1
 
 # Single thread, CHM13 chr1.
 for lanes in 8 16; do
   run "sporos (lanes=$lanes)" chm13_chr1 "$SBIN/bench_seeds_fasta_$lanes" "$CHR1" 1
 done
-run simd-minimizers chm13_chr1 "$SMB" "$CHR1" 1
-run "minimap2 mm_sketch" chm13_chr1 "$MMB" "$CHR1" 1
+cached || run simd-minimizers chm13_chr1 "$SMB" "$CHR1" 1
+cached || run "minimap2 mm_sketch" chm13_chr1 "$MMB" "$CHR1" 1
 
 # 10 threads, CHM13 chr1 (wall time).
 run "sporos (lanes=16)" chm13_chr1 "$SBIN/bench_seeds_fasta_16" "$CHR1" 10
-run simd-minimizers chm13_chr1 "$SMB" "$CHR1" 10
-run "minimap2 mm_sketch" chm13_chr1 "$MMB" "$CHR1" 10
+cached || run simd-minimizers chm13_chr1 "$SMB" "$CHR1" 10
+cached || run "minimap2 mm_sketch" chm13_chr1 "$MMB" "$CHR1" 10
 
 # End-to-end CLI (read FASTA, encode, compute, print name\tpos lines).
 printf "pair\tL\ttool\tmode\tthreads\treps\twall_s\tuser_s\tsys_s\tmax_rss_mb\tbusy_cpus\tload1\n" > "$CLI"

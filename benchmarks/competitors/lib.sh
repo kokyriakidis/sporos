@@ -12,6 +12,18 @@ REPS=${REPS:-3}
 REPEAT_UNDER=${REPEAT_UNDER:-60}
 mkdir -p "$OUT" "$RES"
 
+# SPOROS_ONLY=1 measures sporos alone: every other tool's rows stay as the last full run left them, and the
+# output checks run again against the outputs that run kept in $OUT.
+SPOROS_ONLY=${SPOROS_ONLY:-0}
+# True when other tools are not measured again: `cached || measure ...`.
+cached() { [ "$SPOROS_ONLY" = 1 ]; }
+# drop_rows <tsv> <column> <regex>: removes the rows whose column matches (the header stays), so they can be
+# measured again.
+drop_rows() {
+  [ -f "$1" ] || return 0
+  awk -F'\t' -v c="$2" -v re="$3" 'NR == 1 || $c !~ re' "$1" > "$1.tmp" && mv "$1.tmp" "$1"
+}
+
 # Busy CPUs over a short window, from /proc/stat (nothing of ours runs while it samples).
 busy_cpus() {
   local a b
