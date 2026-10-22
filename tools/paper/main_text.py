@@ -23,16 +23,16 @@ ABSTRACT = [
   "And as processors gain wider vector units and deeper memory hierarchies, the speed of seeding depends "
   "increasingly on how well an implementation uses each core."),
  ("Results",
-  "We present sporos, one library that computes all of these seeds exactly, built around each core's vector "
-  "units and memory parallelism. Its key contribution counts the copies of a MEM's string from the MEMs "
-  "themselves: a string occurs in the reference once for every MEM whose query interval contains its own, so "
-  "frequency-capped MEMs need no additional index. On a single core of an Intel Skylake-X processor, sporos "
-  f"computed minimizers and syncmers {V['seed_t1_min']}–{V['seed_t1_max']} times faster than simd-minimizers, looked "
-  f"up seeds {V['lookup_vs_mm2']} times faster than minimap2, found MEMs between two human chromosomes 1 "
-  f"{V['copmem2_chr1_min']}–{V['copmem2_chr1_max']} times faster than copMEM2, MEMs and MUMs "
-  f"{V['mummer_min']}–{V['mummer_max']} times faster than MUMmer4 with identical output, frequency-capped MEMs "
-  f"{V['capped_min']}–{V['capped_max']} times faster than Mumemto, and SMEMs of short reads "
-  f"{V['smem_150bp_mb']} times faster than minibwa."),
+  "We present sporos, a library that computes all of these seeds exactly, designed around each core's vector units "
+  "and memory parallelism. Its main idea is to count the occurrences of a MEM's string from "
+  "the MEMs themselves: the string occurs in the reference once for each MEM whose query interval contains it, so "
+  "frequency-capped MEMs require no index beyond the one that finds the MEMs. On one Intel Skylake-X core, "
+  f"sporos was {V['seed_t1_min']}–{V['seed_t1_max']}× faster than simd-minimizers for "
+  f"minimizers and syncmers, {V['lookup_vs_mm2']}× faster than minimap2 for seed lookups, "
+  f"{V['copmem2_chr1_min']}–{V['copmem2_chr1_max']}× faster than copMEM2 for MEMs between the GRCh38 and T2T-CHM13 "
+  f"chromosome 1, {V['mummer_min']}–{V['mummer_max']}× faster than MUMmer4 for MEMs and MUMs with identical output, "
+  f"{V['capped_min']}–{V['capped_max']}× faster than Mumemto at its closest settings for frequency-capped MEMs, and "
+  f"{V['smem_150bp_mb']}× faster than minibwa for SMEMs of short reads."),
  ("Availability and implementation",
   "sporos is free software under the MIT license, written in Mojo with C, Python and command-line interfaces, "
   "at https://github.com/kokyriakidis/sporos."),
