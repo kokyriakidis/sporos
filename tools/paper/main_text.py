@@ -7,7 +7,7 @@ Blocks: ("sec", title), ("sub", title), ("p", text), ("list", [items]) numbered,
 """
 from tables import TABLES, V, span
 
-TITLE = "sporos: one hardware-aware library to seed them all, from minimizers to maximal exact matches"
+TITLE = "sporos: one fast, hardware-aware library to seed them all"
 # Authors in order, each with an email; both are corresponding authors.
 AUTHORS = [("Konstantinos Kyriakidis", "kkyriaki@ucsc.edu"), ("Benedict Paten", "bpaten@ucsc.edu")]
 AFFILIATION = "UC Santa Cruz Genomics Institute, Santa Cruz, CA, USA"
