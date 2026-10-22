@@ -24,13 +24,12 @@ ABSTRACT = [
   "increasingly on how well an implementation uses each core."),
  ("Results",
   "We present sporos, one library that computes all of these seeds exactly, built around each core's vector "
-  "units and memory parallelism. Its "
-  "key contribution counts the copies of a MEM's string from the MEMs themselves: a "
-  "string occurs in the reference once for every MEM whose query interval contains its own, so frequency-capped "
-  "MEMs need no additional index. On one Intel Skylake-X processor, sporos "
-  f"computed minimizers and syncmers {V['seed_t1_min']}–{V['seed_t1_max']} times faster than simd-minimizers on "
-  f"one core, looked seeds up {V['lookup_vs_mm2']} times faster than minimap2, found MEMs between two human "
-  f"chromosomes 1 {V['copmem2_chr1_min']}–{V['copmem2_chr1_max']} times faster than copMEM2, MEMs and MUMs "
+  "units and memory parallelism. Its key contribution counts the copies of a MEM's string from the MEMs "
+  "themselves: a string occurs in the reference once for every MEM whose query interval contains its own, so "
+  "frequency-capped MEMs need no additional index. On a single core of an Intel Skylake-X processor, sporos "
+  f"computed minimizers and syncmers {V['seed_t1_min']}–{V['seed_t1_max']} times faster than simd-minimizers, looked "
+  f"up seeds {V['lookup_vs_mm2']} times faster than minimap2, found MEMs between two human chromosomes 1 "
+  f"{V['copmem2_chr1_min']}–{V['copmem2_chr1_max']} times faster than copMEM2, MEMs and MUMs "
   f"{V['mummer_min']}–{V['mummer_max']} times faster than MUMmer4 with identical output, frequency-capped MEMs "
   f"{V['capped_min']}–{V['capped_max']} times faster than Mumemto, and SMEMs of short reads "
   f"{V['smem_150bp_mb']} times faster than minibwa."),
@@ -42,148 +41,140 @@ ABSTRACT = [
 BODY = [
 ('sec', 'Introduction'),
 ('p',
- 'Almost every comparison of DNA sequences starts from seeds: exact matches between a query and a reference that '
- 'locate where the two may align. A read mapper chains the seeds of a read before aligning it [@Li2018; @Li2013], '
- 'a whole-genome aligner anchors its alignment on matches unique to both genomes [@Delcher1999; @Marcais2018], '
- 'and pangenome tools describe the shared structure of many genomes by the matches they have in common '
- '[@Shivakumar2025]. Two families of seeds serve these tasks. *Sampled k-mers* keep a subset of the k-mers of '
- 'each sequence, chosen by their content so that two copies of a region keep the same ones: minimizers, the '
- 'smallest k-mer of every window of w consecutive k-mers under a hash order [@Schleimer2003; @Roberts2004], and '
- 'syncmers, k-mers whose smallest s-mer lies at a chosen offset [@Edgar2021]. *Maximal exact matches* (MEMs) '
- 'extend a match in both directions until the sequences differ; their unique subset, the maximal unique matches '
- '(MUMs), anchors whole-genome alignment [@Delcher1999], and the super-maximal exact matches (SMEMs) of a read, '
- 'the MEMs no longer one contains, seed BWA-MEM [@Li2012; @Li2013]. Seeding is not a negligible step: on short '
- 'reads, single-threaded BWA-MEM spends 40% to 60% of its time finding SMEMs and locating their occurrences '
- '[@Vasimuddin2019], and accelerating that step has been the subject of dedicated hardware [@Subramaniyan2021]. '
- 'The data that seeding runs on keep growing: complete telomere-to-telomere assemblies [@Nurk2022] and pangenomes '
- 'of dozens of individuals [@Liao2023] make whole-genome comparisons and repeat-aware matching routine. The '
- 'processors that run it have changed too, with vector units of up to 512 bits and tens of cores, and a seeding '
- 'method keeps pace only if it uses both.'),
+ 'Most analyses that compare DNA sequences begin by finding seeds, exact matches that indicate where a query and a '
+ 'reference may align. Read mappers chain seeds before alignment [@Li2013; @Li2018], whole-genome aligners anchor '
+ 'on matches unique to both genomes [@Delcher1999; @Marcais2018], and pangenome tools summarize shared sequence '
+ 'through matches common to many genomes [@Shivakumar2025]. Two families of seeds are in wide use. *Sampled '
+ 'k-mers* retain a content-dependent subset of k-mers, so that copies of a region retain the same ones: minimizers, '
+ 'the k-mer of smallest hash in each window of w consecutive k-mers [@Schleimer2003; @Roberts2004], and syncmers, '
+ 'k-mers whose smallest s-mer lies at a fixed offset [@Edgar2021]. *Maximal exact matches* (MEMs) extend until the '
+ 'sequences differ; maximal unique matches (MUMs) anchor whole-genome alignment [@Delcher1999], and super-maximal '
+ 'exact matches (SMEMs), the MEMs of a read not contained in a longer one, seed BWA-MEM [@Li2012; @Li2013].'),
 ('p',
- 'Each kind of seed is computed by its own tool, on its own data structure. Minimizers are computed inside read '
- 'mappers such as minimap2 [@Li2018], with syncmers and strobemers in strobealign [@Sahlin2021; @Sahlin2022]; '
- 'simd-minimizers computes them with SIMD instructions several times faster than earlier code '
- '[@GrootKoerkamp2025simd]. MEMs and MUMs between genomes come from suffix trees and suffix arrays in MUMmer '
- '[@Kurtz2004; @Marcais2018], from sparse suffix arrays [@Khan2009; @Vyverman2013] and from hash tables of '
- 'sampled k-mers in E-MEM and copMEM [@Khiste2015; @Grabowski2019; @Grabowski2023]. SMEMs come from FM-indexes '
- '[@Ferragina2000] in BWA [@Li2013], bwa-mem2 [@Vasimuddin2019], ropebwt3 [@Li2024] and minibwa [@Li2026]. '
- 'Recent variants each live in a single tool. Mumemto finds multi-MEMs across a collection of genomes and caps how '
- 'often a match may occur, relaxing uniqueness to rare repeats, from a suffix array, LCP array and document array '
- 'built over the whole collection [@Shivakumar2025]. f-SMEMs, the maximal query intervals that occur at least f '
- 'times, are k-MEMs in MONI [@Tatarnikov2022], f-MEMs in Gagie\'s terms [@Gagie2026] and (L, f)-SMEMs in ropebwt3 '
- 'and minibwa, the two tools that compute them for whole read sets [@Li2024; @Li2026]. Most of these tools '
- 'parallelise across query sequences or reads and process each one on a single core, which is also how a program '
- 'built on a library would divide its work. We therefore compare the tools first on one core, and report ten '
- 'threads as well, which matter most where a single long query, such as a chromosome, leaves nothing to divide '
- 'between sequences.'),
+ 'Seeding is a substantial cost. On short reads, single-threaded BWA-MEM spends 40–60% of its time finding SMEMs '
+ 'and locating their occurrences [@Vasimuddin2019], and dedicated hardware has been proposed to accelerate this '
+ 'step [@Subramaniyan2021]. The inputs keep growing, from complete telomere-to-telomere assemblies [@Nurk2022] to '
+ 'pangenomes of dozens of individuals [@Liao2023], while the throughput of a processor core grows mainly through '
+ 'wider vector units and greater memory-level parallelism.'),
 ('p',
- 'We present sporos, a library that computes all of these seeds exactly: minimizers and syncmers, an index of '
- 'them for looking seeds up, MEMs, MUMs and frequency-capped MEMs between genomes, and SMEMs and f-SMEMs of reads. '
- 'It follows each established tool\'s definitions and output, so that it can replace them, and it was faster '
- 'than each of them on our benchmarks. Our contributions are:'),
+ 'Each kind of seed is computed by a different tool on a different data structure. Minimizers are computed within '
+ 'read mappers such as minimap2 [@Li2018], syncmers and strobemers within strobealign [@Sahlin2021; @Sahlin2022], '
+ 'and simd-minimizers computes random minimizers with SIMD instructions [@GrootKoerkamp2025simd]. MEMs and MUMs '
+ 'between genomes are found with suffix trees and suffix arrays in MUMmer [@Kurtz2004; @Marcais2018], with sparse '
+ 'suffix arrays [@Khan2009; @Vyverman2013] and with hash tables of sampled k-mers in E-MEM and copMEM '
+ '[@Khiste2015; @Grabowski2019; @Grabowski2023]. SMEMs are found with FM-indexes [@Ferragina2000] in BWA '
+ '[@Li2013], bwa-mem2 [@Vasimuddin2019], ropebwt3 [@Li2024] and minibwa [@Li2026]. Newer seed types are supported '
+ 'by few tools. Mumemto relaxes multi-MUMs to matches that occur at most a given number of times, using the suffix '
+ 'array, LCP array and document array of the whole collection [@Shivakumar2025]. f-SMEMs, the maximal query '
+ 'intervals that occur at least f times, were introduced as k-MEMs [@Tatarnikov2022] and f-MEMs [@Gagie2026], and '
+ 'ropebwt3 and minibwa compute them for read sets [@Li2024; @Li2026]. Most of these tools parallelize across query '
+ 'sequences and process each sequence on one core, as a program built on a library would. We therefore compare the '
+ 'tools primarily on a single core, and also report ten threads, which matter most when a single long query, such '
+ 'as a chromosome, cannot be divided across sequences.'),
+('p',
+ 'Here we present sporos, a library that computes all of these seeds exactly: minimizers and syncmers, a seed index '
+ 'for lookups, MEMs, MUMs and frequency-capped MEMs between genomes, and SMEMs and f-SMEMs of reads. It reproduces '
+ 'the definitions and output formats of the established tools, and on a single core it was faster than each of '
+ 'them. Our contributions are:'),
 ('list', [
- '**Frequency-capped MEMs from the MEMs themselves** (Section 3.4): a MEM\'s string occurs in the reference once '
- 'for every MEM whose query interval contains its own, and in the query once for every MEM whose reference '
- 'interval does (Lemma 1), so a sweep over the MEMs that keeps the N largest interval ends counts the copies up '
- 'to a cap N. This needs no suffix array, LCP or document array of the genomes.',
- '**MEMs found once from a sparse anchor index** (Section 3.3): sampled anchors as in copMEM [@Grabowski2019], '
- 'each MEM reported by exactly one anchor, so that no pass removes duplicates, with probes streamed through a '
- 'prefetching pipeline.',
- '**An SMEM search that skips unique stretches** (Section 3.5): once a match occurs once, its occurrence is '
- 'located and the match extended by comparing the reference 32 bases at a time, instead of one FM-index step per '
- 'base, with 16 reads searched together so that their memory accesses overlap.',
- '**SIMD sampled k-mers in order** (Section 3.2): minimizers and syncmers on 8 or 16 lanes with exact leftmost '
- 'ties, written in sequence order by many threads, and a seed index probed by whole batches of reads.',
- '**One tested library** ([#fig:overview]): one definition per seed for the Mojo, C, Python and command-line '
- 'interfaces, output identical to MUMmer4, copMEM2 and BWA, and every kernel checked against brute-force '
- 'oracles.']),
+ '**Frequency-capped MEMs without a collection index** (Section 3.4). The occurrences of a MEM\'s string in the '
+ 'reference correspond one to one to the MEMs whose query interval contains it (Lemma 1), so a sweep that retains the '
+ 'N largest interval ends counts occurrences up to a cap N.',
+ '**Duplicate-free MEM enumeration** (Section 3.3). With the sparse sampling of copMEM [@Grabowski2019], each MEM is '
+ 'reported by exactly one anchor, and anchor probes stream through a prefetching pipeline.',
+ '**SMEM search with direct extension of unique matches** (Section 3.5). A match that occurs once is located and '
+ 'extended by comparing 32 bases at a time against the reference, and 16 reads are searched in interleaved fashion '
+ 'so that their memory accesses overlap.',
+ '**Vectorized k-mer sampling** (Section 3.2). Minimizers and syncmers are computed on 8 or 16 SIMD lanes with exact '
+ 'leftmost tie-breaking and returned in sequence order from any number of threads; a seed index answers batched '
+ 'lookups through one prefetching pipeline.',
+ '**A tested library** ([#fig:overview]). One implementation per seed type serves the Mojo, C, Python and '
+ 'command-line interfaces; outputs equal those of MUMmer4 and copMEM2, and those of BWA except at ambiguous '
+ 'reference bases, and every kernel is tested against a brute-force oracle.']),
 ('p',
- f'On one Intel Skylake-X processor sporos was the fastest tool for every seed we measured ([#fig:speedups]), '
- f'from {V["seed_t1_min"]} times faster than simd-minimizers on minimizers to {V["capped_max"]} times faster than '
- 'Mumemto on frequency-capped MEMs.'),
+ f'On a single core of an Intel Skylake-X processor, sporos was faster than every other tool for every seed type we '
+ f'measured ([#fig:speedups]), from {V["seed_t1_min"]} times faster than simd-minimizers for minimizers to '
+ f'{V["capped_max"]} times faster than Mumemto for frequency-capped MEMs.'),
 
 ('sec', 'Definitions'),
 ('p',
- 'Sequences are strings over \\(\\{A, C, G, T\\}\\); any other symbol, such as N, matches nothing and ends every '
- 'k-mer and match that reaches it. The reference \\(R\\) may hold several sequences; a match never crosses from one '
- 'into the next. For a string \\(S\\), \\(S[i..j)\\) is its substring from position \\(i\\) up to but excluding '
- '\\(j\\), and \\(\\overline{S}\\) its reverse complement.'),
+ 'Sequences are strings over \\(\\{A, C, G, T\\}\\); any other symbol, such as N, matches nothing, so no k-mer or match '
+ 'spans it. The reference \\(R\\) may contain several sequences, and matches do not cross sequence boundaries. '
+ '\\(S[i..j)\\) denotes the substring of \\(S\\) from position \\(i\\) to \\(j - 1\\), and \\(\\overline{S}\\) its '
+ 'reverse complement.'),
 ('p',
- '**Sampled k-mers.** Given a hash \\(h\\) of k-mers, a (w, k)-minimizer is the k-mer of smallest hash in a window '
- 'of w consecutive k-mers, the leftmost one on ties; a sequence\'s minimizers are those of all its windows, each '
- 'position reported once [@Roberts2004]. A *canonical* minimizer orders k-mers by a hash that gives a k-mer and its '
- 'reverse complement the same value, so that both strands select the same positions. A k-mer is a *closed '
- 'syncmer* if its smallest s-mer starts at offset 0 or \\(k - s\\), and an *open syncmer* at offset t if it starts '
- 'at t [@Edgar2021]. Where we compare with simd-minimizers we follow its parameters: k is the length of the '
- 'smaller k-mers ranked and w their number, so that a syncmer spans \\(k + w - 1\\) bases [@GrootKoerkamp2025simd].'),
+ '**Sampled k-mers.** For a hash \\(h\\) on k-mers, the (w, k)-minimizer of a window of w consecutive k-mers is its '
+ 'k-mer of minimum hash, with ties broken towards the leftmost; the minimizers of a sequence are those of all its '
+ 'windows, each reported once [@Roberts2004]. Canonical minimizers use a hash that is invariant under reverse '
+ 'complementation. A k-mer is a *closed syncmer* if its minimal s-mer starts at offset 0 or \\(k - s\\), and an '
+ '*open syncmer* with offset t if it starts at t [@Edgar2021]. For comparison with simd-minimizers we use its '
+ 'parameterization, in which a syncmer is defined by the length k of the ranked substrings and their number w, and '
+ 'spans \\(k + w - 1\\) bases [@GrootKoerkamp2025simd].'),
 ('p',
- '**Exact matches between genomes.** A *MEM* of a query \\(Q\\) and the reference is a triple \\((r, q, \\ell)\\) with '
- '\\(R[r..r+\\ell) = Q[q..q+\\ell)\\) that extends neither left nor right, of length \\(\\ell\\) at least L. It is a '
- '*MUM* if its string occurs exactly once in \\(R\\) and once in \\(Q\\), and unique in the reference '
- '(MUMmer\'s `-mumreference`) if it occurs once in \\(R\\) [@Kurtz2004]. A MEM is *frequency-capped* at N if its string '
- 'occurs at most N times in \\(R\\), and, in the stricter form, at most N times in \\(Q\\) as well; a floor M asks for at '
- 'least M copies in \\(R\\). With N = 1 they are the MUMs. Matches of the reverse strand are those of \\(\\overline{Q}\\), '
- 'whose positions count along \\(\\overline{Q}\\), as MUMmer reports them.'),
+ '**Exact matches between genomes.** A *MEM* of a query sequence \\(Q\\) and \\(R\\) is a triple \\((r, q, \\ell)\\) '
+ 'with \\(R[r..r+\\ell) = Q[q..q+\\ell)\\) and \\(\\ell \\ge L\\) that cannot be extended to the left or right. It is a '
+ '*MUM* if its string occurs exactly once in \\(R\\) and once in \\(Q\\), and *reference-unique* (MUMmer\'s '
+ '`-mumreference`) if it occurs once in \\(R\\) [@Kurtz2004]. It is *frequency-capped* at N if its string occurs at most '
+ 'N times in \\(R\\) or, in the strict form, at most N times in both \\(R\\) and \\(Q\\); a floor M additionally requires '
+ 'at least M occurrences in \\(R\\). N = 1 yields the MUMs. Reverse-strand matches are those of \\(\\overline{Q}\\), with '
+ 'positions along \\(\\overline{Q}\\), as in MUMmer.'),
 ('p',
- '**Exact matches of reads.** An interval \\(Q[i..j)\\) of a read *occurs* if \\(Q[i..j)\\) or its reverse complement '
- 'is a substring of \\(R\\); an *SMEM* is an interval of length at least L that occurs and is contained in no longer '
- 'interval that occurs [@Li2012]. An *f-SMEM* replaces "occurs" by "occurs at least f times" [@Gagie2026]; f = 1 '
- 'gives the SMEMs. A cap N drops the SMEMs that occur more than N times.'),
+ '**Exact matches of reads.** An interval \\(Q[i..j)\\) of a read *occurs* if it or its reverse complement is a '
+ 'substring of \\(R\\). An *SMEM* is an interval of length at least L that occurs and is not contained in a longer '
+ 'occurring interval [@Li2012]. An *f-SMEM* replaces "occurs" by "occurs at least f times" [@Tatarnikov2022; '
+ '@Gagie2026]; f = 1 gives the SMEMs, and a cap N removes SMEMs that occur more than N times.'),
 
 ('sec', 'Methods'),
 ('sub', 'Overview'),
 ('p',
- 'sporos is written in Mojo [@Mojo], which compiles through MLIR [@Lattner2021] to native code and exposes '
- 'SIMD vectors of any width as ordinary types. Input is FASTA or FASTQ, plain, gzip or BGZF, inflated in parallel '
- 'block by block; bases are coded in two bits, one per byte, and any other symbol as a fifth code. Three engines '
- 'compute the seeds ([#fig:overview]), all multi-threaded by a small pool of POSIX threads, behind a Mojo '
- 'interface, a command-line tool whose MEM output is MUMmer\'s and SMEM output `bwa fastmap`\'s, and C and Python '
- 'bindings.'),
+ 'sporos is implemented in Mojo [@Mojo], which compiles through MLIR [@Lattner2021] to native code and exposes SIMD '
+ 'vectors as first-class types. Input may be FASTA or FASTQ, plain, gzip- or BGZF-compressed, with BGZF blocks '
+ 'decompressed in parallel. Bases are stored as 2-bit codes, one per byte, with a fifth code for other symbols. '
+ 'Three engines compute the seeds ([#fig:overview]); all are multithreaded with POSIX threads and exposed through a '
+ 'Mojo API, C and Python bindings and a command-line tool that writes MUMmer\'s MEM format and `bwa fastmap`\'s SMEM '
+ 'format.'),
 ('figure', 'overview'),
 ('sub', 'Minimizers and syncmers'),
 ('p',
- 'One kernel serves minimizers and syncmers. A sequence is split into 16 contiguous chunks on processors with '
- 'AVX-512 and 8 otherwise, each scanned by one lane of a SIMD register, as simd-minimizers does [@GrootKoerkamp2025simd]. '
- 'Each lane rolls a 32-bit ntHash [@Mohamadi2016] one base at a time; bases reach the lanes through a byte '
- 'transpose, and each hash update is a single byte shuffle that looks up the base\'s seed. Each k-mer is keyed in '
- 'one 32-bit word: the high bits of its hash, then its offset within a block of w consecutive k-mers. The minimum '
- 'of the last w keys follows from prefix and suffix minima of these blocks, three `min` instructions per k-mer '
- 'amortised, and within a block the offsets break ties to the leftmost k-mer, so that the result is exact. A '
- 'k-mer covering any other symbol than A, C, G and T is keyed above every valid one. Positions equal to the '
- 'previous window\'s are dropped in the loop with one vector compare, and every eight steps the surviving lanes '
- 'are appended by walking their bit mask. Syncmers use the same windows over s-mers.'),
+ 'A single kernel computes minimizers and syncmers. As in simd-minimizers [@GrootKoerkamp2025simd], the sequence is '
+ 'divided into contiguous chunks, one per SIMD lane: 16 with AVX-512 and 8 otherwise. Each lane rolls a 32-bit '
+ 'ntHash [@Mohamadi2016] with a rotation step of 7 instead of 1, which decorrelates the high bits of consecutive '
+ 'hashes; the canonical hash is the sum of the forward and reverse-complement hashes. Bases reach the lanes through '
+ 'a byte transpose, and each hash update is one byte-shuffle table lookup. Each k-mer is represented by a 32-bit key '
+ 'holding the high bits of its hash followed by its offset within a block of w consecutive k-mers, so that the '
+ 'sliding-window minimum, computed from prefix and suffix minima of these blocks with three `min` operations per '
+ 'k-mer (amortized), resolves ties to the leftmost k-mer exactly. k-mers containing other symbols receive a key above '
+ 'every valid one. Repeated minimizers are removed in the loop with one vector comparison, and surviving positions '
+ 'are collected every eight steps from a bit mask. Syncmers apply the same window minimum to s-mers.'),
 ('p',
- 'For many short reads, each read takes its own lane. For one long sequence on many threads, each thread takes '
- 'small segments in order and copies its positions into the final list once the previous segment has published '
- 'where its positions end, so that the result is one list in sequence order without a merge.'),
+ 'For batches of short reads, each read occupies its own lane. For a long sequence on several threads, threads '
+ 'process short segments in order, and each copies its positions into the output once its predecessor has published '
+ 'where its positions end, yielding a single position list in sequence order without a merge.'),
 ('p',
- '**Seed index.** The seed index holds the minimizers, syncmers or all k-mers (k at most 32) of a reference, keyed '
- 'by canonical k-mer through an invertible mixing of its 2k bits. The high bits of the mix choose a bucket and '
- 'the rest are kept as a fingerprint, so that the two identify the k-mer exactly whenever they hold 2k bits '
- 'together; otherwise a candidate is checked against the reference. The table is built by a parallel radix sort. '
- 'A batch of reads is seeded and probed through one software pipeline that hashes each seed, loads its bucket '
- 'bounds, compares fingerprints and prefetches the next probes, crossing read boundaries without draining. '
- 'Seeds may be skipped above an occurrence count, chosen as a quantile of the counts as in GraphAligner '
- '[@Rautiainen2020].'),
+ '**Seed index.** The seed index stores the minimizers, syncmers or all k-mers (k ≤ 32) of a reference, keyed by '
+ 'canonical k-mer through an invertible mixing of its 2k bits. The high bits of the mixed key select a bucket and the '
+ 'remaining bits form a fingerprint; when bucket and fingerprint together hold 2k bits they identify the k-mer '
+ 'exactly, and otherwise candidates are verified against the reference. The table is built by a parallel radix sort. '
+ 'A batch of reads passes through one software pipeline that computes seeds, loads bucket bounds, compares '
+ 'fingerprints and prefetches subsequent probes across read boundaries. Seeds above an occurrence threshold, chosen '
+ 'as a quantile of the count distribution as in GraphAligner [@Rautiainen2020], can be skipped.'),
 ('sub', 'MEMs and MUMs'),
 ('p',
- 'MEMs are found from short anchors, as in copMEM [@Grabowski2019]: the reference K-mers starting every \\(k_1\\) '
- 'bases (K at most 32) are indexed, and the query K-mers starting every \\(k_2\\) bases probe them, with \\(k_1\\) '
- 'and \\(k_2\\) coprime and \\(k_1 k_2 \\le L - K + 1\\). A MEM of length at least L then contains a pair of sampled '
- 'positions on its diagonal, since among any \\(k_1 k_2\\) consecutive query positions one is sampled in both '
- 'sequences (the Chinese remainder theorem). sporos chooses K, \\(k_1\\) and \\(k_2\\) for each L to minimise the '
- 'estimated work, one insertion per sampled reference position and three for each probe. Each anchor hit is '
- 'extended in both directions, 32 bases per comparison, as far as the match goes. Anchors of one MEM lie '
- '\\(k_1 k_2\\) apart on its diagonal, and only the anchor whose leftward extension does not reach that far '
- 'reports the MEM: each MEM is found exactly once, with no pass to remove duplicates. The anchor table is built '
- 'by a two-level radix sort with about four anchors per bucket, and probes stream through a pipeline that hashes, '
- 'loads bucket bounds, compares fingerprints in a vector and prefetches the reference text the extension will '
- 'read. MEMs are radix-sorted by query position.'),
+ 'Following copMEM [@Grabowski2019], reference K-mers (K ≤ 32) sampled every \\(k_1\\) positions are indexed and '
+ 'query K-mers sampled every \\(k_2\\) positions are looked up, with \\(k_1\\) and \\(k_2\\) coprime and \\(k_1 k_2 \\le '
+ 'L - K + 1\\). By the Chinese remainder theorem, any \\(k_1 k_2\\) consecutive positions of a diagonal include one '
+ 'sampled in both sequences, so every MEM of length at least L contains an anchor. K, \\(k_1\\) and \\(k_2\\) are '
+ 'chosen for each L to minimize the estimated work, counting one unit per sampled reference position and three per '
+ 'probe. Each anchor hit is extended in both directions, 32 bases per comparison. Because the anchors of a MEM lie '
+ '\\(k_1 k_2\\) apart along its diagonal, only the anchor whose leftward extension is shorter than \\(k_1 k_2\\) reports '
+ 'it, so each MEM is found exactly once without deduplication. The anchor table is built by a two-level radix sort '
+ 'with about four anchors per bucket, and probes are pipelined through hashing, bucket lookup, vectorized fingerprint '
+ 'comparison and prefetching of the reference text to be extended. MEMs are radix-sorted by query position.'),
 ('p',
- 'A MEM is unique in the reference unless another MEM of the same query contains it in query coordinates, and '
- 'unique in the query unless another contains it in reference coordinates (Lemma 1 below with N = 1). sporos '
- 'therefore finds MUMs by two linear sweeps over the MEMs, one in query order and one after a parallel radix sort '
- 'by reference position, each parallel over blocks of MEMs.'),
+ 'By Lemma 1 (Section 3.4) with N = 1, a MEM is unique in the reference unless another MEM of the same query sequence '
+ 'contains it in query coordinates, and unique in the query unless another contains it in reference coordinates. '
+ 'MUMs therefore follow from two linear sweeps, one in query order and one after a parallel radix sort by reference '
+ 'position, each parallelized over blocks of MEMs.'),
 ('sub', 'Frequency-capped MEMs'),
 ('p',
  '**Lemma 1.** Let \\(\\mathcal{M}\\) be the MEMs of length at least L of a query sequence \\(Q\\) against \\(R\\), and '
@@ -191,149 +182,144 @@ BODY = [
  'the MEMs \\((r\', q\', \\ell\') \\in \\mathcal{M}\\) with \\(q\' \\le q\\) and \\(q + \\ell \\le q\' + \\ell\'\\), and '
  'the occurrences of \\(R[r..r+\\ell)\\) in \\(Q\\) to those with \\(r\' \\le r\\) and \\(r + \\ell \\le r\' + \\ell\'\\).'),
 ('p',
- '*Proof.* An occurrence of \\(Q[q..q+\\ell)\\) at position \\(p\\) of \\(R\\) is a match on diagonal \\(p - q\\), '
- 'which extends left and right to a MEM whose query interval contains \\([q, q+\\ell)\\); it is at least \\(\\ell \\ge '
- 'L\\) long, so it belongs to \\(\\mathcal{M}\\). Distinct occurrences lie on distinct diagonals and give distinct '
- 'MEMs. Conversely, a MEM \\((r\', q\', \\ell\')\\) whose query interval contains \\(m\\)\'s holds an occurrence at '
- '\\(p = r\' + q - q\'\\). The second statement is symmetric. \\(\\square\\)'),
+ '*Proof.* An occurrence of \\(Q[q..q+\\ell)\\) at position \\(p\\) of \\(R\\) is a match on diagonal \\(p - q\\), which '
+ 'extends in both directions to a MEM whose query interval contains \\([q, q+\\ell)\\); its length is at least '
+ '\\(\\ell \\ge L\\), so it belongs to \\(\\mathcal{M}\\). Distinct occurrences lie on distinct diagonals and give '
+ 'distinct MEMs. Conversely, a MEM \\((r\', q\', \\ell\')\\) whose query interval contains that of \\(m\\) holds an '
+ 'occurrence at \\(p = r\' + q - q\'\\). The second statement is symmetric. \\(\\square\\)'),
 ('p',
- 'The copies of every MEM\'s string are therefore counts of containing intervals among the MEMs themselves. sporos '
- 'counts them, up to the cap N, in one sweep over the MEMs of a query sequence ordered by start, longest first '
- 'among equal starts. The sweep keeps the N largest interval ends seen so far in a sorted buffer, dropping those '
- 'that end before the current start; an interval\'s count of containing intervals, capped at N, is the number of '
- 'kept ends that reach its own end, found by binary search. With N = 1 the sweep is the MUM test. The query-side '
- 'count is the same sweep over reference coordinates. The sweep is parallel over blocks: each block starts from '
- 'the N largest ends of the blocks before it, which a first pass computes. Finding the MEMs and sorting them '
- 'dominates; the sweep takes \\(O(\\log N)\\) time per MEM, plus the insertions into the buffer of N ends. A floor M '
- 'counts up to \\(\\max(N, M)\\).'),
+ 'Occurrence counts thus reduce to counting containing intervals among the MEMs. sporos processes the MEMs of each '
+ 'query sequence in order of start position, handling equal starts together, and maintains the N largest interval '
+ 'ends seen so far in a sorted buffer, discarding ends at or before the current start. The number of intervals '
+ 'containing an interval, capped at N, is the number of retained ends at or beyond its own end, found by binary '
+ 'search; with N = 1 this is the MUM test. Query-side counts use the same sweep in reference coordinates. The sweep is '
+ 'parallelized over blocks of MEMs, each block starting from the N largest ends of the preceding blocks, computed in '
+ 'a first pass. Each MEM costs \\(O(\\log N)\\) for the search and at most \\(O(N)\\) for an insertion into the buffer. '
+ 'A floor M is handled by counting up to \\(\\max(N, M)\\).'),
 ('p',
- 'Mumemto instead builds the suffix array, LCP array and document array of the whole collection by prefix-free '
- 'parsing and scans them [@Shivakumar2025]; it defines matches across all genomes at once and counts copies on '
- 'both strands of each, so its matches are not exactly sporos\'s (Section 4.4).'),
+ 'Mumemto instead traverses the suffix array, LCP array, BWT and document array of the whole collection, built by '
+ 'prefix-free parsing [@Shivakumar2025]. It defines matches over all genomes jointly and counts occurrences on both '
+ 'strands, so its output differs from that of sporos by definition (Section 4.5).'),
 ('sub', 'SMEMs and f-SMEMs'),
 ('p',
- '**Index.** sporos builds an FMD-index [@Li2012]: the Burrows–Wheeler transform [@BurrowsWheeler1994] of the reference\'s '
- 'runs of A, C, G and T and their reverse complements, each run ended by a separator, so that the interval of a '
- 'pattern comes with that of its reverse complement and no match crosses a sequence end or a non-ACGT base. The '
- 'suffix array is built in parallel by libsais [@libsais]. The transform is stored as in minibwa, in 64-byte '
- 'blocks of 128 rows holding four cumulative counts and 128 two-bit symbols [@Li2026]; separators are stored as '
- 'A and listed apart, and a flag marks the few blocks that hold one. Ranks of all four bases take three popcounts '
- 'per word without branches. The index also holds the two-bit reference, suffix-array samples of 40 bits and the '
- 'interval of every k-mer up to a length of 12, which starts every search with one lookup.'),
+ '**Index.** sporos builds an FMD-index [@Li2012]: the Burrows–Wheeler transform [@BurrowsWheeler1994] of the maximal '
+ 'ACGT runs of the reference and their reverse complements, each terminated by a separator, so that the interval of '
+ 'a pattern is obtained together with that of its reverse complement and no match crosses a sequence end or a '
+ 'non-ACGT base. The suffix array is constructed in parallel with libsais [@libsais]. As in minibwa [@Li2026], the '
+ 'transform is stored in 64-byte blocks of 128 rows, each holding four cumulative counts and 128 two-bit symbols; '
+ 'separators are stored as A and listed separately, with a flag on the few blocks that contain one. The ranks of all '
+ 'four bases are computed without branches using three population counts per word. The index also stores the 2-bit '
+ 'reference, 40-bit suffix-array samples and the interval of every k-mer for a k of up to 12, chosen by reference '
+ 'size, so that each search starts with one table lookup.'),
 ('p',
- '**Search.** SMEMs are found by the forward–backward algorithm of ropebwt3 and minibwa [@Gagie2024; @Li2024; @Li2026]: '
- 'from each start, a backward search over L bases, a forward extension, and a backward pass from the match end '
- 'that finds the next start. A match that occurs once is not followed further in the index: sporos locates its '
- 'occurrence, which the output needs in any case, and extends it in both directions by comparing 32 bases at a '
- 'time against the two-bit reference. Most of a read lies in such unique stretches, which other FM-index tools '
- 'walk one base at a time. Sixteen reads are searched together, their steps interleaved round-robin, each step '
- 'prefetching the block the next will read, and the occurrences of repeated SMEMs are located in batches in the '
- 'same way. f-SMEMs replace every test that an interval is empty by a test that it holds fewer than f rows, and a '
- 'cap N drops SMEMs with more than N. Threads take slices of reads.'),
+ '**Search.** SMEMs are found with the forward–backward algorithm [@Gagie2024] used by ropebwt3 and minibwa '
+ '[@Li2024; @Li2026]: from each start position, a backward search over L bases, a forward extension and a backward '
+ 'pass from the end of the match that determines the next start. When a match occurs only once, sporos stops '
+ 'traversing the index: it locates the occurrence, which the output requires anyway, and extends the match in both '
+ 'directions by comparing 32 bases at a time against the 2-bit reference. Sixteen reads are searched concurrently, '
+ 'their steps interleaved round-robin and each step prefetching the block its successor will access; occurrences of '
+ 'repeated SMEMs are located in batches in the same way. For f-SMEMs, each test for an empty interval becomes a test '
+ 'for fewer than f rows, and a cap N removes SMEMs with more than N occurrences. Threads process slices of reads.'),
 ('p',
- 'The same SMEMs also follow from the MEM engine without an index: computed on both strands, the SMEMs are the '
- 'MEM query intervals that no other one contains. This suits a single long query, such as a genome.'),
+ 'The MEM engine yields the same SMEMs without an index: computed on both strands, the SMEMs are the MEM query '
+ 'intervals not contained in another, which suits single long queries such as whole chromosomes.'),
 ('sub', 'Validation'),
 ('p',
- 'Every kernel is checked in continuous integration against brute-force oracles that share no code with the '
- 'library: minimizers and syncmers against a direct scan of every window, MEMs, MUMs and capped MEMs against '
- 'enumeration of all pairs of starts on repetitive inputs, and SMEMs and f-SMEMs against string search for each '
- 'interval. The C and Python bindings are checked against the Mojo library\'s output. On the benchmarks below, '
- 'every output of sporos equalled MUMmer4\'s, its MEMs equalled copMEM2\'s, and ten threads gave the same output as '
- 'one.'),
+ 'All kernels are tested in continuous integration against brute-force oracles that share no code with the library: '
+ 'minimizers and syncmers against exhaustive window scans, MEMs, MUMs and frequency-capped MEMs against enumeration '
+ 'of all pairs of start positions on repetitive sequences, and SMEMs and f-SMEMs against direct string search. The C '
+ 'and Python bindings are tested against the Mojo library.'),
 
 ('sec', 'Results'),
 ('sub', 'Experimental setup'),
 ('p',
- f'All measurements were taken on an {V["machine_cpu"]} (Skylake-X, AVX-512, ten cores, hyper-threading and turbo boost off, so at a fixed clock) with '
- '91 GB of memory, under Ubuntu Linux. '
- 'sporos, simd-minimizers, minimap2, copMEM2 and strobealign were compiled for the native instruction set, minibwa '
- 'with its own build, and MUMmer4, Mumemto, BWA and ropebwt3 installed from Bioconda. The genome pairs are '
- '*Escherichia coli* K-12 MG1655 '
- 'against O157:H7 Sakai [@Blattner1997; @Hayashi2001], human chromosome 21 of GRCh38 [@Schneider2017] against '
- 'chimpanzee chromosome 21 of the complete Clint assembly [@Yoo2025], and chromosome 1 of GRCh38 against that of '
- 'T2T-CHM13 [@Nurk2022]. Reads were simulated from GRCh38 chromosome 21: one million of 150 bp and 4,000 of 10 kbp, '
- 'each base substituted with probability 0.002 and half the reads reverse-complemented. Each command was run '
- 'three times and its best wall time kept (once when it exceeded 60 s), after waiting for the machine to be idle; '
- 'every tool wrote its output to a file. Supplementary Section S1 gives the versions and commands.'),
+ f'Benchmarks ran on an {V["machine_cpu"]} (Skylake-X, AVX-512, ten cores) with turbo boost and hyper-threading '
+ 'disabled and 91 GB of memory, under Ubuntu Linux. sporos, simd-minimizers, minimap2, copMEM2 and strobealign were '
+ 'compiled for the native instruction set, minibwa with its default build, and MUMmer4, Mumemto, BWA and ropebwt3 '
+ 'were installed from Bioconda. The genome pairs were *Escherichia coli* K-12 MG1655 and O157:H7 Sakai '
+ '[@Blattner1997; @Hayashi2001], human (GRCh38 [@Schneider2017]) and chimpanzee (Clint [@Yoo2025]) chromosome 21, '
+ 'and GRCh38 and T2T-CHM13 [@Nurk2022] chromosome 1. Reads were simulated from GRCh38 chromosome 21: 1,000,000 of '
+ '150 bp and 4,000 of 10 kbp, each base replaced by a random base with probability 0.002 and half of the reads '
+ 'reverse-complemented. Unless stated otherwise, each command was run three times (once if it exceeded 60 s) after '
+ 'the machine became idle, and the best wall time is reported; MEM and SMEM tools wrote their output to files, '
+ 'except ropebwt3, whose output was discarded. Supplementary Section S1 lists versions and commands.'),
 ('sub', 'Minimizers and syncmers'),
 ('p',
- f'sporos computed minimizers and closed syncmers {V["seed_t1_min"]}–{V["seed_t1_max"]} times faster than '
- f'simd-minimizers on one thread, over every scheme on CHM13 chromosome 1 and on random DNA ([#tab:seeds]; '
- f'Supplementary Table S2), at {V["seed_chr1_ns"]} ns per base for canonical (21, 11)-minimizers of chromosome 1, '
- f'or {V["seed_chr1_gbps"]} Gbp per second. Restricted to 8 lanes, the vector width simd-minimizers uses, it was '
- f'{V["seed8_min"]}–{V["seed8_max"]} times faster on chromosome 1, and the 16-lane build was '
- f'{V["seed16_vs_8_min"]}–{V["seed16_vs_8_max"]} times faster than the 8-lane one, where simd-minimizers found its '
- f'own kernel slower with AVX-512 [@GrootKoerkamp2025simd]. minimap2\'s `mm_sketch` was '
- f'{span(V["seed_mm2_min"], V["seed_mm2_max"])} times slower than sporos. On ten threads the race is closer: sporos was '
- f'{V["seed_t10_phrase"]} simd-minimizers, whose harness keeps each thread\'s '
- 'positions apart and only counts them, while sporos returns one list in sequence order.'),
+ f'On one thread, sporos computed minimizers and closed syncmers {V["seed_t1_min"]}–{V["seed_t1_max"]} times faster '
+ 'than simd-minimizers across all schemes on CHM13 chromosome 1 and on random DNA ([#tab:seeds]; Supplementary '
+ f'Table S2); canonical (21, 11)-minimizers of chromosome 1 took {V["seed_chr1_ns"]} ns per base '
+ f'({V["seed_chr1_gbps"]} Gbp/s). With 8 lanes, the vector width of simd-minimizers, sporos was '
+ f'{V["seed8_min"]}–{V["seed8_max"]} times faster on chromosome 1, and the 16-lane AVX-512 build was another '
+ f'{V["seed16_vs_8_min"]}–{V["seed16_vs_8_max"]} times faster, whereas simd-minimizers reported a slowdown with '
+ f'AVX-512 [@GrootKoerkamp2025simd]. minimap2\'s `mm_sketch` was {span(V["seed_mm2_min"], V["seed_mm2_max"])} times '
+ f'slower than sporos. On ten threads, sporos was {V["seed_t10_phrase"]} simd-minimizers; our harness for '
+ 'simd-minimizers only counts each thread\'s positions, whereas sporos returns one ordered list.'),
 ('table', 'seeds'),
 ('sub', 'Seed-index lookups'),
 ('p',
- f'Seeding 150 bp reads and looking their minimizers up, sporos processed {V["lookup_sporos"]} Mbp of reads per '
- f'second on one thread, {V["lookup_vs_mm2"]} times minimap2\'s {V["lookup_mm2"]} Mbp/s for the same minimizers '
- f'and occurrence limit, and {V["lookup_vs_sa"]} times strobealign\'s rate for its randstrobes ([#tab:lookups]). '
- f'Probed one read per call, sporos was still {V["lookup_one_vs_mm2"]} times faster than minimap2.'),
+ f'Seeding 150 bp reads and looking up their minimizers, sporos processed {V["lookup_sporos"]} Mbp per second on one '
+ f'thread, {V["lookup_vs_mm2"]} times the throughput of minimap2 ({V["lookup_mm2"]} Mbp/s) for the same minimizers '
+ f'and occurrence cap, and {V["lookup_vs_sa"]} times that of strobealign for its randstrobes ([#tab:lookups]). With '
+ f'one read per call, sporos remained {V["lookup_one_vs_mm2"]} times faster than minimap2.'),
 ('table', 'lookups'),
 ('sub', 'MEMs and MUMs'),
 ('p',
- f'sporos found every MEM of the three genome pairs {V["copmem2_t1_min"]}–{V["copmem2_t1_max"]} times faster than '
- f'copMEM2 on one thread, and {V["copmem2_chr1_min"]}–{V["copmem2_chr1_max"]} times faster on the pair of human '
- f'chromosomes 1 ([#tab:mems]; Supplementary Table S3). copMEM2 and MUMmer4 do not divide a single query sequence '
- f'among threads, so on ten threads sporos was {V["copmem2_chr1_t10_min"]}–{V["copmem2_chr1_t10_max"]} times '
- f'faster than copMEM2 on chromosome 1, finding its {V["checks_max_mems"]} million MEMs of at least 50 bp in {V["chr1_mems_t10"]} s. '
- f'Against MUMmer4, sporos was {V["mummer_min"]}–{V["mummer_max"]} times faster on one thread for MEMs, MUMs and '
- 'MEMs unique in the reference (Supplementary Table S4); the smallest margin is for MUMs of the chromosome 1 pair, '
- f'where MUMmer4 never enumerates the {V["checks_max_mems"]} million MEMs that sporos filters. In all '
- f'{V["checks_total"]} comparisons, every output of sporos equalled MUMmer4\'s or copMEM2\'s match for match. '
- f'sporos used {V["chr1_rss_gb"]} GB at most on chromosome 1 (Supplementary Table S5).'),
+ f'On one thread, sporos found all MEMs of the three genome pairs {V["copmem2_t1_min"]}–{V["copmem2_t1_max"]} times '
+ f'faster than copMEM2, and {V["copmem2_chr1_min"]}–{V["copmem2_chr1_max"]} times faster on the chromosome 1 pair '
+ '([#tab:mems]; Supplementary Table S3). As neither copMEM2 nor MUMmer4 divides a single query sequence among '
+ f'threads, sporos was {V["copmem2_chr1_t10_min"]}–{V["copmem2_chr1_t10_max"]} times faster than copMEM2 on ten '
+ f'threads, finding the {V["checks_max_mems"]} million MEMs of at least 50 bp between the chromosomes 1 in '
+ f'{V["chr1_mems_t10"]} s. sporos was {V["mummer_min"]}–{V["mummer_max"]} times faster than MUMmer4 for MEMs, MUMs '
+ 'and reference-unique MEMs (Supplementary Table S4); the smallest margin was for MUMs of the chromosome 1 pair, for '
+ f'which sporos first enumerates all {V["checks_max_mems"]} million MEMs. All {V["checks_total"]} output checks '
+ 'passed: the outputs of sporos equalled those of MUMmer4 and copMEM2, and its ten-thread outputs its one-thread '
+ f'outputs. Peak memory on chromosome 1 was at most {V["chr1_rss_max_gb"]} GB (Supplementary Table S5).'),
 ('table', 'mems'),
 ('sub', 'Frequency-capped MEMs'),
 ('p',
  f'sporos computed frequency-capped MEMs {V["capped_min"]}–{V["capped_max"]} times faster than Mumemto on one '
- 'thread, and in a small fraction of its memory ([#tab:capped]). The comparison is between the closest settings of '
- 'tools whose definitions differ: Mumemto treats the two genomes as one collection, counts copies on both strands '
- 'of each and calls a match maximal if its copies cannot all be extended together, whereas sporos reports the '
- 'MEMs of the query against the reference, MUMmer\'s pairs of positions, and counts copies in the reference as '
- 'given. On the *E. coli* pair the outputs largely agree: sporos reported '
- f'{span(V["share_mm_ecoli_min"], V["share_mm_ecoli_max"])}% of Mumemto\'s forward-strand position pairs and Mumemto '
- f'{span(V["share_sp_ecoli_min"], V["share_sp_ecoli_max"])}% of sporos\'s. On chromosome 21 the shares were '
- f'{span(V["share_mm_chr21_min"], V["share_mm_chr21_max"])}% and {span(V["share_sp_chr21_min"], V["share_sp_chr21_max"])}%: '
- 'in repeats, two copies of a string that is maximal across the collection often extend further as a pair, and '
- 'sporos then reports that longer match instead ([#tab:capped]).'),
+ f'thread, using {V["capped_mem_pct_min"]}–{V["capped_mem_pct_max"]}% of its memory ([#tab:capped]). The definitions '
+ 'differ, so the comparison is between the closest settings: Mumemto treats both genomes as one collection, counts '
+ 'occurrences on both strands and considers a match maximal if its occurrences cannot all be extended together, '
+ 'whereas sporos reports MUMmer-style position pairs of the query against the reference and counts occurrences in '
+ 'the reference as given. On the *E. coli* pair, sporos reported '
+ f'{span(V["share_mm_ecoli_min"], V["share_mm_ecoli_max"])}% of the forward-strand position pairs of Mumemto, and '
+ f'Mumemto {span(V["share_sp_ecoli_min"], V["share_sp_ecoli_max"])}% of those of sporos. On chromosome 21 these '
+ f'shares were {span(V["share_mm_chr21_min"], V["share_mm_chr21_max"])}% and '
+ f'{span(V["share_sp_chr21_min"], V["share_sp_chr21_max"])}%, which we attribute to the two notions of maximality: in '
+ 'repeats, two copies of a string that is maximal across the collection can extend further as a pair, and sporos '
+ 'then reports the longer match.'),
 ('table', 'capped'),
 ('sub', 'SMEMs and f-SMEMs'),
 ('p',
  f'On one thread, sporos found the SMEMs of 150 bp reads {V["smem_150bp_mb"]} times faster than minibwa, '
- f'{V["smem_150bp_bwa"]} times faster than `bwa fastmap` and {V["smem_150bp_rb"]} times faster than ropebwt3 '
- f'without positions, and those of 10 kbp reads {V["smem_10kb_mb"]}, {V["smem_10kb_bwa"]} and '
- f'{V["smem_10kb_rb"]} times faster ([#tab:smems]). For f-SMEMs it was {V["fsmem2_mb"]} times faster than minibwa '
- f'at f = 2 and {V["fsmem5_mb"]} times at f = 5, and {V["fsmem2_rb"]} and {V["fsmem5_rb"]} times faster than '
- f'ropebwt3. Asking for two copies made the search {V["fsmem_cost"]} times slower than for SMEMs, since a match '
- 'of one copy no longer ends the search. The SMEMs of sporos equalled those of `bwa fastmap` except where BWA, '
- 'which replaces each N of the reference by a random base, matched through one (Supplementary Section S3).'),
+ f'{V["smem_150bp_bwa"]} times faster than `bwa fastmap` and {V["smem_150bp_rb"]} times faster than ropebwt3 without '
+ f'position output, and those of 10 kbp reads {V["smem_10kb_mb"]}, {V["smem_10kb_bwa"]} and {V["smem_10kb_rb"]} '
+ f'times faster ([#tab:smems]). For f-SMEMs, sporos was {V["fsmem2_mb"]} times faster than minibwa at f = 2 and '
+ f'{V["fsmem5_mb"]} times at f = 5, and {V["fsmem2_rb"]} and {V["fsmem5_rb"]} times faster than ropebwt3. Requiring '
+ f'two occurrences slowed the search {V["fsmem_cost"]} times relative to SMEMs, since a match that occurs once no '
+ f'longer ends it. sporos and `bwa fastmap` differed in {V["bwa_diff_total"]} of {V["bwa_smems_m"]} million SMEMs of '
+ f'the short reads; all {V["bwa_only_bwa"]} reported only by BWA pass through an N of the reference, which BWA '
+ 'replaces with random bases (Supplementary Section S3). Ten threads gave the same SMEMs as one.'),
 ('table', 'smems'),
 ('figure', 'speedups'),
 
 ('sec', 'Discussion'),
 ('p',
- 'sporos computes the seeds that read mappers, genome aligners and pangenome tools start from, exactly as the '
- 'established tools define them and faster than each of them on our benchmarks. Its frequency-capped MEMs show '
- 'that a property of a set of matches, how often each match\'s string occurs, can follow from the matches alone: '
- 'counting containing intervals replaces an index of every genome, which makes capped matches between two '
- 'chromosomes a matter of seconds.'),
+ 'sporos computes the seeds used by read mappers, genome aligners and pangenome tools, following the established '
+ 'definitions, and on a single core it was faster than each tool it can replace. Its frequency-capped MEMs show that '
+ 'how often each match\'s string occurs can be derived from the set of matches itself: counting containing intervals '
+ 'replaces an index of the genomes and reduces capped matching between two chromosomes to about a second.'),
 ('p',
- 'One library also removes the conversions between tools. A pipeline can index a reference once and ask it for '
- 'MEMs, MUMs or SMEMs, from Mojo, C or Python, with one coordinate system and one set of occurrence limits, and '
- 'the command-line tool writes MUMmer\'s and `bwa fastmap`\'s formats for existing scripts.'),
+ 'A single library also avoids converting between tools. A pipeline loads a reference once and requests MEMs, MUMs '
+ 'or SMEMs from Mojo, C or Python, with one coordinate system and one set of occurrence limits, and the command-line '
+ 'tool writes the MUMmer and `bwa fastmap` formats that existing scripts expect.'),
 ('p',
- '**Limitations.** All measurements come from one x86-64 processor; the 8-lane rows of [#tab:seeds] show the '
- 'kernel at the width of AVX2, but other processors, including ARM, were not measured. The comparison with '
- 'Mumemto covers pairs of genomes, not the collections of many genomes Mumemto was designed for, and the two '
- 'tools\' definitions differ. Positions are 32-bit, so each sequence and the concatenated reference must be shorter '
- 'than \\(2^{32}\\) bases, and building an FM-index takes about ten bytes of memory per reference base. '
- f'{V["seed_t10_limit"]}.'),
+ '**Limitations.** All measurements were taken on one x86-64 processor; the 8-lane rows of [#tab:seeds] indicate '
+ 'performance at AVX2 width, but other processors, including ARM, were not benchmarked. Mumemto was compared on '
+ 'pairs of genomes rather than the large collections it targets, and its definitions differ from those of sporos. '
+ 'Positions are 32-bit, limiting each sequence and the concatenated reference to fewer than \\(2^{32}\\) bases, and '
+ f'FM-index construction needs about ten bytes of memory per reference base. {V["seed_t10_limit"]}.'),
 ]
 
 BACK = [
@@ -350,11 +336,12 @@ BACK = [
 ]
 
 FIGURES = {
-"overview": "The sporos library. Input is parsed and coded once; three engines compute sampled k-mers and the seed "
+"overview": "The sporos library. Input is parsed and encoded once; three engines compute sampled k-mers and the seed "
             "index that looks them up (top), MEMs, MUMs and frequency-capped MEMs between genomes (middle), and SMEMs "
             "and f-SMEMs of reads (bottom), behind Mojo, command-line, C and Python interfaces.",
-"speedups": "Speedup of sporos over the fastest other tool for each task, on one thread (filled) and ten "
-            "(hollow), on a log scale; the dashed line marks parity, and the values are at the right (Tables 1 to 5). "
-            "Each tool runs at its best on that many threads: copMEM2, MUMmer4, minibwa, BWA and Mumemto do not gain "
-            "from more threads on these inputs, and the seed-lookup harnesses run on one.",
+"speedups": "Speedup of sporos over the fastest other tool for each task, on one thread (filled) and ten threads "
+            "(hollow), on a log scale; the dashed line marks parity and the values are listed on the right (Tables 1 "
+            "to 5). Each tool uses its best setting for the thread count: copMEM2 and MUMmer4 gain nothing from threads "
+            "on a single query, the SMEM searches of minibwa and BWA have no threads option, Mumemto ran on one "
+            "thread, and the seed-lookup harnesses run on one.",
 }

@@ -66,5 +66,5 @@
 \fill[black] (1.706,0.230) circle (2.4pt);
 \node[anchor=east, font=\footnotesize] at (10.250,0.230) {2.3$\times$};\node[anchor=east, font=\footnotesize] at (12.150,0.230) {16$\times$};
 \end{tikzpicture}}
-\caption{Speedup of sporos over the fastest other tool for each task, on one thread (filled) and ten (hollow), on a log scale; the dashed line marks parity, and the values are at the right (Tables 1 to 5). Each tool runs at its best on that many threads: copMEM2, MUMmer4, minibwa, BWA and Mumemto do not gain from more threads on these inputs, and the seed-lookup harnesses run on one.}\label{fig:speedups}
+\caption{Speedup of sporos over the fastest other tool for each task, on one thread (filled) and ten threads (hollow), on a log scale; the dashed line marks parity and the values are listed on the right (Tables 1 to 5). Each tool uses its best setting for the thread count: copMEM2 and MUMmer4 gain nothing from threads on a single query, the SMEM searches of minibwa and BWA have no threads option, Mumemto ran on one thread, and the seed-lookup harnesses run on one.}\label{fig:speedups}
 \end{figure*}

@@ -25,7 +25,7 @@
 {\large Konstantinos Kyriakidis and Benedict Paten}\par\bigskip
 \section{Setup}
 
-\texttt{benchmarks/competitors/setup\_xaros.sh} in the sporos repository installs every tool at the version of Table S1, downloads the genomes from NCBI and UCSC, simulates the reads (\texttt{sim\_reads.py}, fixed seeds) and builds the harnesses; \texttt{run\_seeds.sh}, \texttt{run\_lookups.sh}, \texttt{run\_mems.sh}, \texttt{run\_capped.sh} and \texttt{run\_smems.sh} run the benchmarks and write the raw measurements that the main tables are made from. Each timed command ran under \texttt{/usr/bin/time -v} after the machine had kept at most 1.5 processors busy for half a second; wall time is the best of three runs (one for runs past 60~s), memory the largest peak resident set size of those runs. Kernel benchmarks (Table 1, Table 2) time only the computation, inside each tool's own harness; the minimizer and syncmer harnesses make one untimed run before timing, so that threads, memory pages and processor clocks are warm for every tool alike.
+In the sporos repository, \texttt{benchmarks/competitors/setup\_xaros.sh} installs every tool at the version listed in Table S1, downloads the genomes from NCBI and UCSC, simulates the reads (\texttt{sim\_reads.py}, fixed seeds) and builds the benchmark harnesses; \texttt{run\_all.sh} runs every benchmark and writes the raw measurements from which all tables are generated. Each timed command ran under \texttt{/usr/bin/time -v} once at most 1.5 processors had been busy over the preceding half second. Wall time is the best of three runs (one for runs exceeding 60~s), and memory the largest peak resident set size. The kernel benchmarks of main Tables 1 and 2 time only the computation, within each tool's harness; the minimizer and syncmer harnesses perform one untimed run first, so that threads, memory pages and clock frequency are warm for every tool.
 
 \begin{table}[H]
 \caption{Versions of the tools compared. Tools built from source were compiled for the benchmark machine; MUMmer4, Mumemto, BWA and ropebwt3 are Bioconda packages.}\label{tab:versions}
@@ -49,17 +49,17 @@ GCC & 15.2.0 \\
 \end{tabular}
 \end{table}
 
-The commands, with \texttt{R} and \texttt{Q} the reference and query FASTA files, \texttt{L} the minimum length and \texttt{T} the threads:
+Commands, with \texttt{R} and \texttt{Q} the reference and query FASTA files, \texttt{L} the minimum length and \texttt{T} the threads:
 
 \begin{itemize}
   \item sporos: \texttt{sporos mem -maxmatch|-mum|-mumreference -l L -n -t T R Q}; capped: \texttt{sporos mem -maxmatch|-mum -b -{}-max-occ N -l 50 -t T R Q}; SMEMs: \texttt{sporos index -t T R}, then \texttt{sporos smem -l 19 -s f -t T R reads.fa}.
-  \item MUMmer4: \texttt{mummer -maxmatch|-mum|-mumreference -n -l L R Q}. Its \texttt{-qthreads} divides only between query records, and \texttt{-threads} requires \texttt{-k} above 1, which aborted, so it ran on one thread.
-  \item copMEM2: \texttt{copmem2 -q [-mf] -t T -l L -o out R Q}; \texttt{-t 10} did not change its time on a single query record.
+  \item MUMmer4: \texttt{mummer -maxmatch|-mum|-mumreference -n -l L R Q}. \texttt{-qthreads} divides work only between query records, and \texttt{-threads} requires \texttt{-k} > 1, a combination that aborted in our runs; MUMmer4 therefore ran on one thread.
+  \item copMEM2: \texttt{copmem2 -q [-mf] -t T -l L -o out R Q}; \texttt{-t 10} did not reduce its time on a single query record.
   \item Mumemto: \texttt{mumemto -k 2 -f N -l 50} (per-genome cap) and \texttt{mumemto -k 2 -f 0 -F N -l 50} (total cap); MUMs: \texttt{mumemto -l L}.
-  \item minibwa: \texttt{minibwa index -t T R prefix}, then \texttt{minibwa fastmap -l 19 -s f -b 64 prefix reads.fa} (batches of 64, its fastest setting).
+  \item minibwa: \texttt{minibwa index -t T R prefix}, then \texttt{minibwa fastmap -l 19 -s f -b 64 prefix reads.fa}.
   \item BWA: \texttt{bwa index}, then \texttt{bwa fastmap -l 19 index reads.fa}.
   \item ropebwt3: \texttt{ropebwt3 build -t T -do index.fmd R}, then \texttt{ropebwt3 mem -t T -l 19 -c f index.fmd reads.fa}.
-  \item Minimizers and syncmers: \texttt{benchmarks/bench\_seeds.mojo} and \texttt{bench\_seeds\_fasta.mojo} (sporos), the \texttt{harness/smbench} program on simd-minimizers' packed sequences, and \texttt{harness/mm2} on minimap2's \texttt{mm\_sketch}.
+  \item Minimizers and syncmers: \texttt{benchmarks/bench\_seeds.mojo} and \texttt{bench\_seeds\_fasta.mojo} (sporos), \texttt{harness/smbench} on packed sequences (simd-minimizers) and \texttt{harness/mm2} (minimap2's \texttt{mm\_sketch}).
   \item Seed lookups: \texttt{benchmarks/bench\_index.mojo} (sporos), \texttt{harness/lookup/mm2\_lookup.c} (minimap2's \texttt{mm\_sketch} and \texttt{mm\_idx\_get}) and \texttt{harness/lookup/sa\_bench} (strobealign's \texttt{randstrobes\_query} and \texttt{find\_hits}).
 \end{itemize}
 
@@ -89,7 +89,7 @@ Closed syncmers, canonical & 31, 19 & \textbf{1.01} & 1.39 & 2.35 & -- \\
 
 \subsection{MEMs and MUMs}
 
-Tables S3 to S5 complete main Table 3: MEMs and MUMs of at least 100~bp, MEMs unique in the reference, and peak memory. copMEM2 takes at least 1.0~GB whatever the input size, and setting up its tables dominates its time on the small pair; sporos's anchor index grows with the reference and the sampling, and its peak on chromosome 1 at L = 50 comes from the 65.6 million MEMs it holds before filtering.
+Tables S3 to S5 complement main Table 3 with MEMs and MUMs of at least 100~bp, reference-unique MEMs and peak memory. copMEM2 used at least 1.0~GB on every input. The memory of sporos grows with the reference and with the number of MEMs it holds, 65.6 million on chromosome 1 at L = 50.
 
 \begin{table}[H]
 \caption{MEMs and MUMs of at least 100~bp, as main Table 3.}\label{tab:mems100}
@@ -143,7 +143,7 @@ chr1, L = 100 & 1{,}171 & 2{,}723 & 1{,}674 & 3{,}123 & 1{,}171 & 2{,}923 \\
 \end{tabular}
 \end{table}
 
-\subsection{FM-index builds}
+\subsection{FM-index construction}
 
 \begin{table}[H]
 \caption{Building the FM-indexes of hg38 chr21 for Table 5: wall time in seconds on 1 and 10 threads, and the larger peak memory in MB. BWA's index builds on one thread.}\label{tab:builds}
@@ -163,7 +163,7 @@ BWA & 33.4 & -- & 74 \\
 
 \section{SMEM outputs}
 
-Table S7 compares the SMEMs of sporos with those of \texttt{bwa fastmap} and minibwa, by read, interval, number of occurrences and listed positions. Of the 5{,}242 SMEMs that only the other tool reports, 5{,}140 list a position whose reference span holds an N, which BWA and minibwa replace by random bases when they build their index and sporos never matches, and 102 list no positions, so that this check cannot tell; 0 remain. Ten threads gave the same output as one for every read set and f.
+Table S7 compares the SMEMs of sporos with those of \texttt{bwa fastmap} and minibwa by read, interval, number of occurrences and listed positions. Of the 5{,}242 SMEMs reported only by the other tool, 5{,}140 list a position whose reference span contains an N, which BWA and minibwa replace with random bases during indexing and sporos never matches; 102 list no positions, as they have more than 20 occurrences, and cannot be checked this way; 0 remain. Ten threads gave the same output as one for every read set and f.
 
 \begin{table}[H]
 \caption{SMEM outputs compared, by read, interval, number of occurrences and listed positions. Through N counts the other tool's own SMEMs that list a position whose reference span holds a non-ACGT base (BWA and minibwa replace each N of the reference by a random base, and match through it); No positions counts those of the rest that list no positions, having more than 20 occurrences.}\label{tab:smem_checks}

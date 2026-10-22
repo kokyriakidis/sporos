@@ -546,7 +546,7 @@ TABLES = {
                    "Mumemto (one thread) finds the multi-MEMs of the two genomes as one collection, capped per genome (`-k 2 -f N`) "
                    "or in total (`-k 2 -f 0 -F N`); sporos finds the MEMs of the query against the reference whose string occurs at "
                    "most N times in the reference (`-maxmatch --max-occ N`, for the total cap) or in the reference and the query "
-                   "(`-mum --max-occ N`, per genome). The definitions differ (Section 4.4): the last column gives the share of "
+                   "(`-mum --max-occ N`, per genome). The definitions differ (Section 4.5): the last column gives the share of "
                    "Mumemto's forward-strand position pairs that sporos also reports, and of sporos's that Mumemto reports.",
         "header": ["Pair and cap", "sporos, 1 thr.", "sporos, 10 thr.", "Mumemto", "Speedup", "sporos MB", "Mumemto MB", "Shared (%)"],
         "align": "lrrrrrrr",
@@ -556,7 +556,7 @@ TABLES = {
     "smems": {
         "caption": "SMEMs (f = 1) and f-SMEMs of at least 19 bp of simulated reads against hg38 chr21, both strands: wall time in "
                    "seconds, the best of three runs, the index loaded from disk. sporos, minibwa and bwa fastmap list the positions of "
-                   "SMEMs with at most 20 hits; ropebwt3 is run without positions, its default, which favours it. minibwa and bwa "
+                   "SMEMs with at most 20 hits; ropebwt3 runs without position output, its default, and its output is discarded, both of which favour it. minibwa and bwa "
                    "fastmap are single-threaded; bwa computes no f-SMEMs. Bold: fastest at each thread count.",
         "header": ["Reads", "sporos", "minibwa", "bwa", "ropebwt3", "sporos", "ropebwt3"],
         "groups": [("One thread", 1, 4), ("Ten threads", 5, 6)],
@@ -674,6 +674,18 @@ STABLES["smem_checks"] = {
     "rows": smem_checks_table(),
 }
 V["smem_threads_same"] = threads_same()
+_chr1 = [float(r["max_rss_mb"]) for r in MEMS if r["pair"] == "chr1" and r["tool"] == "sporos" and r["max_rss_mb"].isdigit()]
+V["chr1_rss_max_gb"] = f"{max(_chr1) / 1024:.1f}" if _chr1 else "?"
+_share = []
+for r in CAPPED:
+    if r["tool"] == "sporos" and r["threads"] == "1":
+        m = rss(CAPPED, pair=r["pair"], tool="mumemto", mode=r["mode"], threads=1)
+        if m:
+            _share.append(100 * float(r["max_rss_mb"]) / m)
+V["capped_mem_pct_min"], V["capped_mem_pct_max"] = (f"{min(_share):.0f}", f"{max(_share):.0f}") if _share else ("?", "?")
+_b = smem_check("150bp", 1, "sporos vs bwa fastmap")
+V["bwa_diff_total"] = f"{int(_b['only_sporos']) + int(_b['only_other'])}" if _b else "?"
+V["bwa_smems_m"] = f"{int(_b['n_other']) / 1e6:.2f}" if _b else "?"
 _cm = [rss(MEMS, pair=p, L=L, tool=t, mode="maxmatch", threads=1) for p, _ in PAIRS for L in ("50", "100")
        for t in ("copmem2", "copmem2 -mf")]
 V["copmem2_rss_min"] = f"{min(m for m in _cm if m) / 1024:.1f}" if any(_cm) else "?"
