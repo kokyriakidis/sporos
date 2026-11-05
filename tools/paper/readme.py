@@ -184,7 +184,7 @@ def results():
     if c and c10:
         out.append(f"  - Its SMEMs equal minibwa's except where minibwa matches through reference `N`s: "
                    f"{int(c['only_other']):,} of minibwa's {int(c['n_other']) / 1e6:.2f} M SMEMs on the short reads "
-                   f"({int(c['only_sporos'])} of sporos's differ in turn), and {int(c10['only_other']):,} on the long reads.")
+                   f"(and {int(c['only_sporos'])} of sporos's are not in minibwa's), and {int(c10['only_other']):,} on the long reads.")
     return "\n".join(out)
 
 
