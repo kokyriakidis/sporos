@@ -276,6 +276,8 @@ def main() raises:
     write_seeds(out, refs, reads, 17, 8, 1, -1, 0, False, 1)
     write_seeds(out, refs, reads, 17, 9, 1, 2, 0, False, 1)
     write_seeds(out, refs, reads, 13, 1, 2, -1, 0, False, 3)
+    write_seeds(out, refs, reads, 51, 15, 0, -1, 0, False, 2)  # k > 32: 128-bit k-mers
+    write_seeds(out, refs, reads, 40, 1, 2, -1, 3, False, 1)
     write_cutoff(out, refs, 15, 10, 0, -1, 0.9)
     write_cutoff(out, refs, 13, 1, 2, -1, 0.999)
 

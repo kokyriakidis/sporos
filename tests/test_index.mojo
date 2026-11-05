@@ -1,4 +1,4 @@
-from std.testing import assert_equal, assert_true, TestSuite
+from std.testing import assert_equal, assert_raises, assert_true, TestSuite
 
 from sporos.index import (
     ALL_KMERS,
@@ -119,11 +119,25 @@ def test_reverse_complement_kmer() raises:
         rc |= UInt64(3 - codes[6 - i]) << UInt64(2 * i)
     assert_equal(reverse_complement(fwd, 7), rc)
     assert_equal(reverse_complement(reverse_complement(fwd, 7), 7), fwd)
+    # A 64-base k-mer in a UInt128, and a 51-base one.
+    var state = UInt64(12345)
+    for k in [51, 64]:
+        var codes64 = List[UInt8]()
+        for _ in range(k):
+            state = state * 6364136223846793005 + 1442695040888963407
+            codes64.append(UInt8((state >> 33) & 3))
+        var f = UInt128(0)
+        var r = UInt128(0)
+        for i in range(k):
+            f |= UInt128(codes64[i]) << UInt128(2 * i)
+            r |= UInt128(3 - codes64[k - 1 - i]) << UInt128(2 * i)
+        assert_equal(reverse_complement(f, k), r)
+        assert_equal(reverse_complement(r, k), f)
 
 
 def test_seed_index_matches_reference() raises:
     var case_id = 500
-    for cfg in [(15, 10), (19, 12), (21, 11), (31, 19), (32, 5), (12, 6)]:
+    for cfg in [(15, 10), (19, 12), (21, 11), (31, 19), (32, 5), (12, 6), (33, 10), (40, 12), (51, 51), (64, 7)]:
         for n in [200, 3000]:
             case_id += 3
             _check(MINIMIZER_SEEDS, cfg[0], cfg[1], n, case_id, False, 0)
@@ -159,8 +173,16 @@ def test_lookup_batch_matches_lookup() raises:
             at = (r * 7919) % 1000
         reads.append(Span(noisy)[at : at + length])
         at += 37 + length // 3
-    for scheme in [MINIMIZER_SEEDS, SYNCMER_SEEDS, ALL_KMERS]:
-        var index = SeedIndex(seqs, 19, 12 if scheme != SYNCMER_SEEDS else 15, scheme, threads=2)
+    for scheme_k in [
+        (MINIMIZER_SEEDS, 19),
+        (SYNCMER_SEEDS, 19),
+        (ALL_KMERS, 19),
+        (MINIMIZER_SEEDS, 51),
+        (ALL_KMERS, 40),
+    ]:
+        var scheme = scheme_k[0]
+        var k = scheme_k[1]
+        var index = SeedIndex(seqs, k, 12 if scheme != SYNCMER_SEEDS else 15, scheme, threads=2)
         for all_kmers in [False, True]:
             for max_occ in [0, 3]:
                 for threads in [1, 3]:
@@ -215,6 +237,30 @@ def test_no_hits_for_absent_kmers() raises:
     assert_equal(len(hits), 0)
     index.lookup(Span(reference), hits, True)
     assert_equal(len(hits), 1)
+
+
+def test_long_kmers_verified_against_the_text() raises:
+    # k > 32: the 64-bit hash cannot identify a k-mer, so every hit is checked against the text. A 70-base
+    # repeat planted three times, once reverse-complemented, gives each of its 51-mers three occurrences.
+    var reference = random_dna(4000, 902)
+    var piece = List[UInt8](Span(reference)[100:170])
+    for i in range(70):
+        reference[1000 + i] = piece[i]
+        var c = piece[69 - i] | 0x20  # random_dna mixes cases
+        reference[2000 + i] = UInt8(ord("T")) if c == UInt8(ord("a")) else (
+            UInt8(ord("G")) if c == UInt8(ord("c")) else (UInt8(ord("C")) if c == UInt8(ord("g")) else UInt8(ord("A")))
+        )
+    var seqs = List[Span[UInt8, origin_of(reference)]]()
+    seqs.append(Span(reference))
+    var index = SeedIndex(seqs, 51, 1, ALL_KMERS)
+    assert_true(index.verify)
+    var hits = List[SeedHit]()
+    index.lookup(Span(piece), hits, True)
+    assert_equal(len(hits), 3 * (70 - 51 + 1))
+    for h in hits:
+        assert_equal(Int(h.occurrences), 3)
+    with assert_raises():
+        _ = SeedIndex(seqs, 65, 1, ALL_KMERS)
 
 
 def test_occurrence_cutoff() raises:

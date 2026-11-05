@@ -109,7 +109,7 @@ def test_known() -> None:
         (lambda: sporos.FMIndex(["ACGTACGT"]).smems("ACGT", 3), TypeError),
         (lambda: sporos.FMIndex(["ACGTACGT"]).smems(["ACGT"], 0), ValueError),
         (lambda: sporos.FMIndex.load("/nonexistent/dir/x.sfm"), ValueError),
-        (lambda: sporos.SeedIndex(["ACGTACGT"], 33, 1, scheme="kmers"), ValueError),
+        (lambda: sporos.SeedIndex(["ACGTACGT"], 65, 1, scheme="kmers"), ValueError),
         (lambda: sporos.SeedIndex(["ACGTACGT"], 5, 1, scheme="strobemers"), ValueError),
         (lambda: sporos.SeedIndex(["ACGTACGT"], 5, 1).lookup(["ACGT"], max_occurrences=-1), ValueError),
     ]:

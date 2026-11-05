@@ -184,7 +184,7 @@ void sporos_smems_free(sporos_smems *smems);
 #define SPOROS_SYNCMER_SEEDS 1   /* Syncmers, with `w` the s-mer length. */
 #define SPOROS_ALL_KMERS 2       /* Every k-mer. */
 
-/* A hash index of reference k-mers (k <= 32), probed with reads' seeds. */
+/* A hash index of reference k-mers (k <= 64), probed with reads' seeds. */
 typedef struct sporos_seed_index sporos_seed_index;
 
 /*

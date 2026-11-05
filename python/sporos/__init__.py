@@ -262,7 +262,7 @@ class FMIndex:
 
 
 class SeedIndex:
-    """A hash index of reference k-mers (k <= 32) for seed lookups: the (w, k)-minimizers
+    """A hash index of reference k-mers (k <= 64) for seed lookups: the (w, k)-minimizers
     (`scheme` "minimizers"), the syncmers with s-mer length `w` ("syncmers": closed, or open at
     `open_offset`, an offset or a list of them), or every k-mer ("kmers"). The sequences are copied
     in; fewer than 2^32 bases in all."""

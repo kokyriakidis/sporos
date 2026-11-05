@@ -292,7 +292,7 @@ static void known() {
           hits[0] == std::vector<SeedHit>({SeedHit(0, 0, 8, 2, 0), SeedHit(0, 0, 7, 2, 1), SeedHit(1, 0, 9, 1, 0),
                                            SeedHit(2, 0, 10, 1, 0)}));
     sporos_seed_index_free(seeds);
-    CHECK(sporos_seed_index_new(many.seqs.data(), many.lens.data(), 1, 33, 1, SPOROS_ALL_KMERS, -1, 1) == nullptr);
+    CHECK(sporos_seed_index_new(many.seqs.data(), many.lens.data(), 1, 65, 1, SPOROS_ALL_KMERS, -1, 1) == nullptr);
     CHECK(sporos_seed_index_new(many.seqs.data(), many.lens.data(), 1, 5, 1, 3, -1, 1) == nullptr);
     sporos_seed_index_free(nullptr);
     sporos_smems_free(nullptr);

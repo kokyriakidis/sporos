@@ -6,13 +6,16 @@ occurrences on both strands. Lookups take the query's minimizers (or every
 query k-mer), probe the table through a software prefetch pipeline, and
 return hits with occurrence counts for abundance filtering.
 
-K-mers are hashed by `kmer_hash`, a bijection on 2k bits: its top bits pick
-the bucket and its low 31 bits are the fingerprint. Entries are
-`fingerprint << 33 | reverse << 32 | position`, where `reverse` says the
-reference k-mer is the reverse complement of its canonical form. Buckets are
-sorted, so the occurrences of one k-mer are contiguous. Bucket and
-fingerprint identify a k-mer exactly when `bucket bits + 31 >= 2k`;
-otherwise (`verify`) candidates are checked against the text.
+K-mers of up to 32 bases are held in a `UInt64` and hashed by `kmer_hash`,
+a bijection on 2k bits: its top bits pick the bucket and its low 31 bits are
+the fingerprint. Longer k-mers, up to 64 bases, are held in a `UInt128` and
+hashed to 64 bits by `wide_kmer_hash`, which no bucket and fingerprint can
+invert. Entries are `fingerprint << 33 | reverse << 32 | position`, where
+`reverse` says the reference k-mer is the reverse complement of its canonical
+form. Buckets are sorted, so the occurrences of one k-mer are contiguous.
+Bucket and fingerprint identify a k-mer exactly when `k <= 32` and
+`bucket bits + 31 >= 2k`; otherwise (`verify`) candidates are checked against
+the text.
 """
 
 from std.bit import bit_reverse, count_trailing_zeros, pop_count
@@ -20,6 +23,7 @@ from std.math import ceildiv, iota
 from std.memory import pack_bits
 
 from std.os import abort
+from std.sys import size_of
 
 from sporos.alphabet import CodeBuffer, N_CODE, encode_into
 from sporos.batch import SeedBatch, minimizers_batch, syncmers_batch
@@ -41,7 +45,6 @@ comptime _BUCKET_LOAD = 4
 """Entries per bucket: a quarter of the offsets keeps more of them cached,
 and a vector compare scans a bucket (measured best on hg38 chr21)."""
 comptime _RING = 64
-comptime _PAIRS: UInt64 = 0x5555555555555555
 comptime _TASK_BASES = 1 << 20
 comptime _TASK_READS = 1 << 12
 """A lookup task's reads: up to this many bases or reads."""
@@ -81,18 +84,26 @@ comptime SYNCMER_SEEDS = 1
 comptime ALL_KMERS = 2
 
 
-@inline(.always)
-def kmer_mask(k: Int) -> UInt64:
-    return UInt64.MAX if k == 32 else (UInt64(1) << UInt64(2 * k)) - 1
+comptime MAX_K = 64
+"""The longest seed-index k-mer: 32 bases fit a `UInt64`, 64 a `UInt128`."""
 
 
 @inline(.always)
-def reverse_complement(kmer: UInt64, k: Int) -> UInt64:
+def kmer_mask[D: DType = DType.uint64](k: Int) -> Scalar[D]:
+    """The low 2k bits of a `Scalar[D]` (all of them when they hold k bases)."""
+    comptime bits = size_of[Scalar[D]]() * 8
+    return ~Scalar[D](0) if 2 * k >= bits else (Scalar[D](1) << Scalar[D](2 * k)) - 1
+
+
+@inline(.always)
+def reverse_complement[D: DType, //](kmer: Scalar[D], k: Int) -> Scalar[D]:
     """Reverse complement of a 2-bit k-mer (base i in bits 2i, A=0..T=3)."""
+    comptime bits = size_of[Scalar[D]]() * 8
+    comptime pairs = ~Scalar[D](0) // 3  # 0x55...5: the low bit of every base
     var r = bit_reverse(~kmer)
     # bit_reverse also swapped the two bits of every base; swap them back.
-    r = ((r >> 1) & _PAIRS) | ((r & _PAIRS) << 1)
-    return r >> UInt64(64 - 2 * k)
+    r = ((r >> 1) & pairs) | ((r & pairs) << 1)
+    return r >> Scalar[D](bits - 2 * k)
 
 
 @inline(.always)
@@ -113,19 +124,71 @@ def kmer_hash(kmer: UInt64, k: Int) -> UInt64:
 
 
 @inline(.always)
-def fingerprint(hash: UInt64, k: Int) -> UInt64:
-    """The low 31 bits of a `kmer_hash` value's 2k-bit mix."""
-    return (hash >> UInt64(64 - 2 * k)) & 0x7FFFFFFF
+def wide_kmer_hash(kmer: UInt128) -> UInt64:
+    """A 64-bit hash of a k-mer of more than 32 bases (MurmurHash3's finalizer
+    over both halves). It is not invertible, so lookups check candidates
+    against the text."""
+    var h = UInt64(kmer >> 64) ^ 0x9E3779B97F4A7C15
+    h = _murmur_mix(h) ^ UInt64(kmer & 0xFFFFFFFFFFFFFFFF)
+    return _murmur_mix(h)
 
 
 @inline(.always)
-def canonical(kmer: UInt64, k: Int) -> Tuple[UInt64, Bool]:
+def _murmur_mix(x: UInt64) -> UInt64:
+    var h = x
+    h ^= h >> 33
+    h *= 0xFF51AFD7ED558CCD
+    h ^= h >> 33
+    h *= 0xC4CEB9FE1A85EC53
+    h ^= h >> 33
+    return h
+
+
+@inline(.always)
+def fingerprint(hash: UInt64, k: Int) -> UInt64:
+    """The low 31 bits of a `kmer_hash` value's 2k-bit mix, or of a
+    `wide_kmer_hash` value."""
+    return (hash >> UInt64(max(0, 64 - 2 * k))) & 0x7FFFFFFF
+
+
+@inline(.always)
+def canonical[D: DType, //](kmer: Scalar[D], k: Int) -> Tuple[Scalar[D], Bool]:
     """The smaller of a k-mer and its reverse complement, and whether it was
     the reverse complement."""
     var rc = reverse_complement(kmer, k)
     if rc < kmer:
         return (rc, True)
     return (kmer, False)
+
+
+@inline(.always)
+def _hash[D: DType, //](kmer: Scalar[D], k: Int) -> UInt64:
+    """The table hash of a canonical k-mer: `kmer_hash` up to 32 bases, else
+    `wide_kmer_hash`."""
+    comptime if D == DType.uint64:
+        return kmer_hash(rebind[UInt64](kmer), k)
+    else:
+        return wide_kmer_hash(rebind[UInt128](kmer))
+
+
+@inline(.always)
+def _kmer[D: DType](text: SeqText, pos: Int, k: Int) -> Scalar[D]:
+    """The k-mer at `pos` of `text`: one 32-base window, or two for `UInt128`."""
+    comptime if D == DType.uint64:
+        return rebind[Scalar[D]](text.window(pos) & kmer_mask(k))
+    else:
+        var both = UInt128(text.window(pos)) | (UInt128(text.window(pos + 32)) << 64)
+        return rebind[Scalar[D]](both & kmer_mask[DType.uint128](k))
+
+
+@inline(.always)
+def _covers_masked[D: DType](text: SeqText, pos: Int, k: Int) -> Bool:
+    """Whether the k-mer at `pos` covers a non-ACGT base."""
+    comptime if D == DType.uint64:
+        return text.mask(pos) & kmer_mask(k) != 0
+    else:
+        var both = UInt128(text.mask(pos)) | (UInt128(text.mask(pos + 32)) << 64)
+        return both & kmer_mask[DType.uint128](k) != 0
 
 
 def select_positions[
@@ -165,9 +228,10 @@ def select_positions[
     return out^
 
 
-struct _SelectedKmers[origin: ImmOrigin](AnchorSource):
+struct _SelectedKmers[D: DType, origin: ImmOrigin](AnchorSource):
     """The selected reference positions as table anchors (tracked, so the
-    positions stay alive while the table is built)."""
+    positions stay alive while the table is built), their k-mers held in
+    `Scalar[D]`."""
 
     var text: ImmPointer[SeqText, ImmUntrackedOrigin]
     var positions: ImmPointer[UInt32, Self.origin]
@@ -198,19 +262,18 @@ struct _SelectedKmers[origin: ImmOrigin](AnchorSource):
         hashes: MutPointer[UInt64, MutUntrackedOrigin],
         entries: MutPointer[UInt64, MutUntrackedOrigin],
     ) -> Int:
-        var mask = kmer_mask(self.k)
         var lo = chunk * _CHUNK
         for i in range(lo, lo + self.capacity(chunk)):
             var pos = Int(self.positions[unsafe_offset=i])
-            var form = canonical(self.text[].window(pos) & mask, self.k)
-            var h = kmer_hash(form[0], self.k)
+            var form = canonical(_kmer[Self.D](self.text[], pos, self.k), self.k)
+            var h = _hash(form[0], self.k)
             hashes[unsafe_offset=i - lo] = h
             entries[unsafe_offset=i - lo] = (fingerprint(h, self.k) << 33) | (UInt64(Int(form[1])) << 32) | UInt64(pos)
         return self.capacity(chunk)
 
 
 struct SeedIndex(Movable):
-    """Selected reference k-mers (k <= 32), keyed by canonical k-mer."""
+    """Selected reference k-mers (k <= 64), keyed by canonical k-mer."""
 
     var text: SeqText
     """The packed reference; `ref_pos` values are offsets into it, and
@@ -239,8 +302,8 @@ struct SeedIndex(Movable):
         """Indexes the (w, k)-minimizers, the syncmers with s-mer length `w`
         (closed, or open at `open_offset` or any of `open_offsets`), or (`ALL_KMERS`) every k-mer of
         `seqs`."""
-        if k < 1 or k > 32:
-            raise Error(t"seed index k must be in [1, 32], got {k}")
+        if k < 1 or k > MAX_K:
+            raise Error(t"seed index k must be in [1, {MAX_K}], got {k}")
         self.k = k
         self.w = w
         self.scheme = scheme
@@ -253,15 +316,13 @@ struct SeedIndex(Movable):
         if len(self.text) >= Int(UInt32.MAX):
             raise Error("reference text must be shorter than 2^32")
         var positions = select_positions(seqs, k, w, scheme, threads, open_offsets=self.open_offsets)
-        var source = _SelectedKmers(
-            Pointer(to=self.text).unsafe_origin_cast[MutUntrackedOrigin](),
-            positions.unsafe_ptr().as_imm(),
-            len(positions),
-            k,
-        )
-        self.table = HashTable(source, threads, sort_buckets=True, bucket_load=_BUCKET_LOAD)
+        var text = Pointer(to=self.text).unsafe_origin_cast[MutUntrackedOrigin]()
+        if k <= 32:
+            self.table = _table[DType.uint64](text, positions, k, threads)
+        else:
+            self.table = _table[DType.uint128](text, positions, k, threads)
         var bucket_bits = 64 - Int(self.table.shift)
-        self.verify = 2 * k > bucket_bits + 31
+        self.verify = k > 32 or 2 * k > bucket_bits + 31
 
     def occurrence_cutoff(self, keep_fraction: Float64) -> Int:
         """The smallest occurrence count such that `keep_fraction` of the
@@ -370,6 +431,23 @@ struct SeedIndex(Movable):
         counts: MutPointer[Int, _],
     ) raises:
         """Appends the hits of `count` reads, counting each read's hits."""
+        if self.k <= 32:
+            self._lookup_reads_of[DType.uint64](reads, count, all_kmers, max_occurrences, hits, counts)
+        else:
+            self._lookup_reads_of[DType.uint128](reads, count, all_kmers, max_occurrences, hits, counts)
+
+    def _lookup_reads_of[
+        mut: Bool, //, D: DType, origin: Origin[mut=mut]
+    ](
+        self,
+        reads: ImmPointer[Span[UInt8, origin], _],
+        count: Int,
+        all_kmers: Bool,
+        max_occurrences: Int,
+        mut hits: List[SeedHit],
+        counts: MutPointer[Int, _],
+    ) raises:
+        """`_lookup_reads` with k-mers held in `Scalar[D]`."""
         var spans = List[Span[UInt8, origin]](capacity=count)
         for r in range(count):
             spans.append(reads[unsafe_offset=r])
@@ -382,9 +460,8 @@ struct SeedIndex(Movable):
                 seeds = syncmers_batch(spans, self.k, self.w, True, None, open_offsets=self.open_offsets)
         var selected = seeds.positions.unsafe_ptr()
         var text = SeqText(spans)
-        var ring = Array[_Probe, _RING](fill=_Probe(0, 0, 0, 0, False, 0, 0))
+        var ring = Array[_Probe[D], _RING](fill=_Probe[D](0, 0, 0, 0, False, 0, 0))
         var off = self.table.offsets.unsafe_ptr()
-        var mask = kmer_mask(self.k)
         var n = 0
         for r in range(count):
             counts[unsafe_offset=r] = 0
@@ -394,13 +471,13 @@ struct SeedIndex(Movable):
                 var start: Int
                 if every:
                     start = i
-                    if text.mask(base + start) & mask != 0:
-                        continue  # covers a non-ACGT base
+                    if _covers_masked[D](text, base + start, self.k):
+                        continue
                 else:
                     start = Int(selected[unsafe_offset=seeds.offsets[r] + i])
-                var form = canonical(text.window(base + start) & mask, self.k)
-                var h = kmer_hash(form[0], self.k)
-                ring[n & (_RING - 1)] = _Probe(r, UInt32(start), form[0], h, form[1], 0, 0)
+                var form = canonical(_kmer[D](text, base + start, self.k), self.k)
+                var h = _hash(form[0], self.k)
+                ring[n & (_RING - 1)] = _Probe[D](r, UInt32(start), form[0], h, form[1], 0, 0)
                 prefetch[_AHEAD](off.unsafe_offset(self.table.bucket(h)))
                 if n >= _LAG:
                     self._bounds(ring[(n - _LAG) & (_RING - 1)])
@@ -413,7 +490,7 @@ struct SeedIndex(Movable):
             self._report(ring[m & (_RING - 1)], max_occurrences, hits, counts)
 
     @inline(.always)
-    def _bounds(self, mut probe: _Probe):
+    def _bounds[D: DType](self, mut probe: _Probe[D]):
         var b = self.table.bucket(probe.hash)
         var off = self.table.offsets.unsafe_ptr()
         probe.low = off[unsafe_offset=b]
@@ -424,7 +501,9 @@ struct SeedIndex(Movable):
         prefetch[_AHEAD](first.unsafe_offset(_SCAN - 1))
 
     @inline(.always)
-    def _report(self, probe: _Probe, max_occurrences: Int, mut hits: List[SeedHit], counts: MutPointer[Int, _]):
+    def _report[
+        D: DType
+    ](self, probe: _Probe[D], max_occurrences: Int, mut hits: List[SeedHit], counts: MutPointer[Int, _]):
         var ent = self.table.entries.unsafe_ptr()
         var fp = fingerprint(probe.hash, self.k)
         # Entries are sorted, so this k-mer's occurrences are one run.
@@ -455,13 +534,12 @@ struct SeedIndex(Movable):
                 last += 1
             if first == last:
                 return
-        var mask = kmer_mask(self.k)
         var occurrences = last - first
         if self.verify:
             occurrences = 0
             for e in range(first, last):
                 var pos = Int(ent[unsafe_offset=e] & 0xFFFFFFFF)
-                occurrences += Int(canonical(self.text.window(pos) & mask, self.k)[0] == probe.kmer)
+                occurrences += Int(canonical(_kmer[D](self.text, pos, self.k), self.k)[0] == probe.kmer)
             if occurrences == 0:
                 return
         if max_occurrences > 0 and occurrences > max_occurrences:
@@ -470,11 +548,19 @@ struct SeedIndex(Movable):
         for e in range(first, last):
             var entry = ent[unsafe_offset=e]
             var pos = Int(entry & 0xFFFFFFFF)
-            if self.verify and canonical(self.text.window(pos) & mask, self.k)[0] != probe.kmer:
+            if self.verify and canonical(_kmer[D](self.text, pos, self.k), self.k)[0] != probe.kmer:
                 continue
             var ref_reverse = Bool((entry >> 32) & 1)
             hits.append(SeedHit(probe.qpos, UInt32(pos), UInt32(occurrences), ref_reverse != probe.reverse))
         counts[unsafe_offset=probe.read] += len(hits) - before
+
+
+def _table[
+    D: DType
+](text: ImmPointer[SeqText, ImmUntrackedOrigin], positions: List[UInt32], k: Int, threads: Int) raises -> HashTable:
+    """The hash table of the k-mers at `positions`, held in `Scalar[D]`."""
+    var source = _SelectedKmers[D](text, positions.unsafe_ptr().as_imm(), len(positions), k)
+    return HashTable(source, threads, sort_buckets=True, bucket_load=_BUCKET_LOAD)
 
 
 def _prefix_sums(counts: List[Int]) -> List[Int]:
@@ -487,12 +573,12 @@ def _prefix_sums(counts: List[Int]) -> List[Int]:
 
 
 @fieldwise_init
-struct _Probe(ImplicitlyCopyable, TrivialRegisterPassable):
+struct _Probe[D: DType](ImplicitlyCopyable, TrivialRegisterPassable):
     """A query k-mer in the probe pipeline."""
 
     var read: Int
     var qpos: UInt32
-    var kmer: UInt64
+    var kmer: Scalar[Self.D]
     """The canonical query k-mer."""
     var hash: UInt64
     var reverse: Bool

@@ -154,7 +154,7 @@ sporos seeds -k K [-w W | --syncmers -s S [--open T[,T...]] | --all-kmers] [--qu
              [--max-occ N | --keep F] [-t threads] [-v] <reference.fa> <reads.fa>
 ```
 
-- **Index:** `seeds` indexes the reference's minimizers by default (k ≤ 32, default k=19, w=12).
+- **Index:** `seeds` indexes the reference's minimizers by default (k ≤ 64, default k=19, w=12).
 - **Lookups:** every read's seeds are looked up, or every read k-mer with `--query-kmers`.
 - **Cutoffs:** `--max-occ N` skips seeds that occur more than `N` times in the reference. `--keep F` sets that
   cutoff at the `F` quantile of the indexed k-mers.
@@ -506,8 +506,10 @@ Every number below comes from that suite's last run and is written into this REA
   containers instead of marking them, keeping only the N largest ends seen: no suffix array, LCP or
   document array as in Mumemto.
 - **Seed index** (`sporos/index.mojo`).
-  - Canonical k-mers are hashed by a bijection on 2k bits. Bucket and fingerprint therefore identify a k-mer
-    exactly whenever their bits suffice; otherwise candidates are checked against the text.
+  - Canonical k-mers of up to 32 bases are hashed by a bijection on 2k bits. Bucket and fingerprint therefore
+    identify a k-mer exactly whenever their bits suffice; otherwise candidates are checked against the text.
+  - Longer k-mers (up to 64 bases) are held in 128 bits and hashed to 64, and their candidates are always
+    checked against the text.
   - Batched lookups stream every read through one prefetch pipeline.
 - **Input** (`sporos/fasta.mojo`).
   - FASTA is parsed in place.
@@ -553,7 +555,7 @@ Every number below comes from that suite's last run and is written into this REA
   needs 64-bit suffix arrays there). The index takes 3.8 bytes per base at the default sampling up to 2^29
   bases, 2.5 up to 2^31 and 1.9 beyond, plus its k-mer cache (67 MB for chr21, 268 MB at most).
 - MEMs and MUMs can be any length up to that. The minimum length `L` can be any value of at least 1.
-- Minimizer and syncmer k-mers are at most 64 bases, and seed-index k-mers at most 32.
+- Minimizer, syncmer and seed-index k-mers are at most 64 bases.
 - Open-syncmer offsets must be below 64.
 - The benchmarks above are from x86-64 Linux. Apple-silicon performance has not been re-measured since the
   latest optimizations.

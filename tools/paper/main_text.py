@@ -151,10 +151,12 @@ BODY = [
  'process short segments in order, and each copies its positions into the output once its predecessor has published '
  'where its positions end, yielding a single position list in sequence order without a merge.'),
 ('p',
- '**Seed index.** The seed index stores the minimizers, syncmers or all k-mers (k ≤ 32) of a reference, keyed by '
- 'canonical k-mer through an invertible mixing of its 2k bits. The high bits of the mixed key select a bucket and the '
- 'remaining bits form a fingerprint; when bucket and fingerprint together hold 2k bits they identify the k-mer '
- 'exactly, and otherwise candidates are verified against the reference. The table is built by a parallel radix sort. '
+ '**Seed index.** The seed index stores the minimizers, syncmers or all k-mers (k ≤ 64) of a reference, keyed by '
+ 'canonical k-mer. A k-mer of up to 32 bases, held in 64 bits, is hashed by an invertible mixing of its 2k bits, '
+ 'whose high bits select a bucket and whose remaining bits form a fingerprint; when bucket and fingerprint together '
+ 'hold 2k bits they identify the k-mer exactly. Longer k-mers, held in 128 bits, are hashed to 64 bits, and their '
+ 'candidates, like those of shorter k-mers whose bits do not fit, are verified against the reference. The table is '
+ 'built by a parallel radix sort. '
  'A batch of reads passes through one software pipeline that computes seeds, loads bucket bounds, compares '
  'fingerprints and prefetches subsequent probes across read boundaries. Seeds above an occurrence threshold, chosen '
  'as a quantile of the count distribution as in GraphAligner [@Rautiainen2020], can be skipped.'),
