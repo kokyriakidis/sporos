@@ -290,6 +290,24 @@ def test_packed_reads_extend() raises:
             assert_equal(a[i], b[i])
 
 
+def test_packed_reads_decode_range() raises:
+    """Every range of a few reads decodes as the same slice of the whole read."""
+    var reads = PackedReads()
+    for r in range(4):
+        var seq = yak_test_sequence(70 + 61 * r, 90 + r)
+        reads.append(String(t"r{r}"), Span(seq))
+    var whole = List[UInt8](length=512, fill=0)
+    var part = List[UInt8](length=512, fill=0)
+    for r in range(len(reads)):
+        reads.decode(r, whole.unsafe_ptr())
+        var n = reads.lengths[r]
+        for start in range(n):
+            for length in range(0, min(n - start, 80) + 1, 7):
+                reads.decode_range(r, start, length, part.unsafe_ptr())
+                for i in range(length):
+                    assert_equal(part[i], whole[start + i])
+
+
 def _table_reads() -> PackedReads:
     var seqs = List[List[UInt8]]()
     var shared = yak_test_sequence(4000, 41)

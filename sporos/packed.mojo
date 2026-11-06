@@ -143,6 +143,35 @@ struct PackedReads(Movable, Sized):
         for j in range(self.ambiguous_starts[r], self.ambiguous_starts[r + 1]):
             dst[unsafe_offset=Int(self.ambiguous[j])] = AMBIGUOUS
 
+    def decode_range(self, r: Int, start: Int, length: Int, dst: MutPointer[UInt8, _]):
+        """Writes the codes of read `r`'s letters `start ..< start + length` to `dst`, which must hold `length +
+        2 * BASES_PER_WORD` bytes (whole words are decoded around the range; `dst[0]` is letter `start`)."""
+        if length <= 0:
+            return
+        var first = start // BASES_PER_WORD
+        var last = (start + length - 1) // BASES_PER_WORD
+        var skip = start - first * BASES_PER_WORD
+        var words = self.words.unsafe_ptr().unsafe_offset(self.word_starts[r])
+        # Decode into place shifted back by `skip`, then the first word's head is overwritten by nothing past dst.
+        var out = dst
+        var w = first
+        if skip > 0:
+            var codes = unpack_word(words[unsafe_offset=w])
+            for i in range(skip, BASES_PER_WORD):
+                out[unsafe_offset=i - skip] = codes[i]
+            w += 1
+        var at = BASES_PER_WORD - skip if skip > 0 else 0
+        while w <= last:
+            out.unsafe_store(at, unpack_word(words[unsafe_offset=w]))
+            at += BASES_PER_WORD
+            w += 1
+        var lo = self.ambiguous_starts[r]
+        var hi = self.ambiguous_starts[r + 1]
+        for j in range(lo, hi):
+            var pos = Int(self.ambiguous[j])
+            if pos >= start and pos < start + length:
+                out[unsafe_offset=pos - start] = AMBIGUOUS
+
     def bytes_used(self) -> Int:
         """The sequence storage: the words and the ambiguous positions."""
         return 8 * len(self.words) + 4 * len(self.ambiguous)
