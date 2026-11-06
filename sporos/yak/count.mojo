@@ -11,7 +11,7 @@ from sporos.fasta import FastaRecords
 from sporos.parallel import ParallelTask, parallel_for
 
 from sporos.yak.bloom import BF_N_HASHES, DEFAULT_BF_SHIFT, BloomFilters
-from sporos.yak.hash import HASH_LANES, Kmer, nt4, yak_hash64_64, yak_hash64_64_lanes
+from sporos.yak.hash import HASH_LANES, Kmer, hpc_run_starts, nt4, yak_hash64_64, yak_hash64_64_lanes
 
 
 comptime YAK_COUNTER_BITS = 12
@@ -52,6 +52,23 @@ struct CountTable(Movable):
                 var i = self._slot(key >> YAK_COUNTER_BITS)
                 while self.keys[i] != EMPTY:
                     i = (i + 1) & (len(self.keys) - 1)
+                self.keys[i] = key
+
+    def reserve(mut self, entries: Int):
+        """Grows the table, if needed, to hold `entries` at most half full."""
+        var capacity = len(self.keys)
+        while 2 * entries > capacity:
+            capacity *= 2
+        if capacity == len(self.keys):
+            return
+        var old = self.keys^
+        self.keys = List[UInt64](length=capacity, fill=EMPTY)
+        self.shift = UInt64(64 - log2_floor(capacity))
+        for key in old:
+            if key != EMPTY:
+                var i = self._slot(key >> YAK_COUNTER_BITS)
+                while self.keys[i] != EMPTY:
+                    i = (i + 1) & (capacity - 1)
                 self.keys[i] = key
 
     def add(mut self, hash: UInt64):
@@ -114,36 +131,57 @@ def log2_floor(n: Int) -> Int:
 
 def hpc_kmer_hashes(seq: Span[UInt8, _], k: Int, mut out: List[UInt64]):
     """`count_seq_buf_HPC`: the canonical hash of every homopolymer-compressed k-mer of `seq` (symmetric k-mers
-    included), appended to `out`. The k-mers' canonical planes are collected first, then hashed
+    included), appended to `out`."""
+    var scratch = HpcScratch()
+    hpc_kmer_hashes(seq, k, out, scratch)
+
+
+struct HpcScratch(Movable):
+    """What hashing a read's compressed k-mers needs besides its output, kept by a caller hashing many reads."""
+
+    var codes: List[UInt8]
+    var starts: List[UInt32]
+    var planes: List[UInt64]
+
+    def __init__(out self):
+        self.codes = List[UInt8]()
+        self.starts = List[UInt32]()
+        self.planes = List[UInt64]()
+
+
+@no_inline
+def hpc_kmer_hashes(seq: Span[UInt8, _], k: Int, mut out: List[UInt64], mut scratch: HpcScratch):
+    """`hpc_kmer_hashes` through `scratch`. The read's homopolymer runs are found a vector at a time
+    (`hpc_run_starts`), the rolling k-mer steps once per run, and the k-mers' canonical planes are hashed
     `HASH_LANES` at a time."""
-    var length = len(seq)
+    var runs = hpc_run_starts(seq, scratch.codes, scratch.starts)
     var start = len(out)
-    out.resize(start + length, 0)
-    var planes = List[UInt64](length=2 * length + 2 * HASH_LANES, fill=0)
-    var pp = planes.unsafe_ptr()
+    out.resize(unsafe_uninit_length=start + runs)
+    var need = 2 * runs + 2 * HASH_LANES
+    if len(scratch.planes) < need:
+        scratch.planes.resize(unsafe_uninit_length=need)
+    var pp = scratch.planes.unsafe_ptr()
+    var codes = scratch.codes.unsafe_ptr().unsafe_offset(1)
+    var starts = scratch.starts.unsafe_ptr()
+    var half = runs + HASH_LANES
     var kmer = Kmer.empty(k)
     var l = 0
     var n = 0
-    var last: UInt8 = 255
-    var src = seq.unsafe_ptr()
-    for i in range(length):
-        var c = nt4(src[unsafe_offset=i])
+    for r in range(runs):
+        var c = codes[unsafe_offset=Int(starts[unsafe_offset=r])]
         if c < 4:
-            if c != last:
-                kmer.push(c)
-                l += 1
-                if l >= k:
-                    var canonical = kmer.canonical()
-                    pp[unsafe_offset=n] = canonical[0]
-                    pp[unsafe_offset=length + HASH_LANES + n] = canonical[1]
-                    n += 1
-                last = c
+            kmer.push(c)
+            l += 1
+            if l >= k:
+                var canonical = kmer.canonical()
+                pp[unsafe_offset=n] = canonical[0]
+                pp[unsafe_offset=half + n] = canonical[1]
+                n += 1
         else:
             l = 0
-            last = 255
             kmer.clear()
     var p0 = pp
-    var p1 = pp.unsafe_offset(length + HASH_LANES)
+    var p1 = pp.unsafe_offset(half)
     var dst = out.unsafe_ptr().unsafe_offset(start)
     var i = 0
     while i + HASH_LANES <= n:
@@ -156,19 +194,31 @@ def hpc_kmer_hashes(seq: Span[UInt8, _], k: Int, mut out: List[UInt64]):
     while i < n:
         dst[unsafe_offset=i] = yak_hash64_64(p0[unsafe_offset=i]) + yak_hash64_64(p1[unsafe_offset=i])
         i += 1
-    out.resize(start + n, 0)
+    out.resize(unsafe_uninit_length=start + n)
 
 
-struct _ScanTask[records_origin: ImmOrigin, buffers_origin: MutOrigin](ParallelTask):
-    """Hashes the k-mers of one run of reads into this thread's partition buffers. Tracked origins keep the
-    inputs alive while the task runs."""
+struct _Block(Movable):
+    """One thread's share of a block of reads: the hashes of its k-mers grouped by partition, each group in read
+    order (`hashes[offsets[p] : offsets[p + 1]]` for partition `p`)."""
+
+    var hashes: List[UInt64]
+    var offsets: List[Int]
+
+    def __init__(out self):
+        self.hashes = List[UInt64]()
+        self.offsets = List[Int]()
+
+
+struct _ScanTask[records_origin: ImmOrigin, blocks_origin: MutOrigin](ParallelTask):
+    """Hashes the k-mers of one run of reads, then groups them by partition with a counting sort, which keeps
+    each partition's hashes in read order. Tracked origins keep the inputs alive while the task runs."""
 
     var records: ImmPointer[FastaRecords, Self.records_origin]
     var first: Int
     var last: Int
     var runs: Int
     var k: Int
-    var buffers: MutPointer[List[List[UInt64]], Self.buffers_origin]
+    var blocks: MutPointer[_Block, Self.blocks_origin]
 
     def __init__(
         out self,
@@ -177,36 +227,93 @@ struct _ScanTask[records_origin: ImmOrigin, buffers_origin: MutOrigin](ParallelT
         last: Int,
         runs: Int,
         k: Int,
-        buffers: MutPointer[List[List[UInt64]], Self.buffers_origin],
+        blocks: MutPointer[_Block, Self.blocks_origin],
     ):
         self.records = records
         self.first = first
         self.last = last
         self.runs = runs
         self.k = k
-        self.buffers = buffers
+        self.blocks = blocks
+
+    def _share(self, index: Int) -> Tuple[Int, Int]:
+        """Run `index`'s reads: the contiguous range whose bases are its equal share of the block's (a range
+        starts at the first read starting at or past its share), so the runs take the same time however the
+        read lengths vary, and the runs in order are the block's reads in order."""
+        ref lengths = self.records[].lengths
+        var total = 0
+        for r in range(self.first, self.last):
+            total += lengths[r]
+        var lo = self.last
+        var hi = self.last
+        var before = 0
+        var r = self.first
+        while r < self.last:
+            if before * self.runs >= total * index:
+                lo = r
+                break
+            before += lengths[r]
+            r += 1
+        while r < self.last:
+            if before * self.runs >= total * (index + 1):
+                hi = r
+                break
+            before += lengths[r]
+            r += 1
+        if index == self.runs - 1:
+            hi = self.last
+        return (lo, hi)
 
     def run(self, index: Int):
-        var n = self.last - self.first
-        var lo = self.first + n * index // self.runs
-        var hi = self.first + n * (index + 1) // self.runs
-        var hashes = List[UInt64]()
-        ref mine = self.buffers[unsafe_offset=index]
+        var range_ = self._share(index)
+        var lo = range_[0]
+        var hi = range_[1]
+        # A read has at most as many k-mers as letters: room for all of them up front, as `List.resize` grows
+        # to exactly the length asked for and would copy the list once per read.
+        var bases = 0
         for r in range(lo, hi):
-            hashes.clear()
-            hpc_kmer_hashes(self.records[].seq(r), self.k, hashes)
-            for h in hashes:
-                mine[Int(h & (PARTITIONS - 1))].append(h)
+            bases += self.records[].lengths[r]
+        var hashes = List[UInt64](capacity=bases)
+        var scratch = HpcScratch()
+        # The partition sizes are counted read by read, while each read's hashes are still in cache.
+        var offsets = List[Int](length=PARTITIONS + 1, fill=0)
+        var op = offsets.unsafe_ptr()
+        for r in range(lo, hi):
+            var before = len(hashes)
+            hpc_kmer_hashes(self.records[].seq(r), self.k, hashes, scratch)
+            var fresh = hashes.unsafe_ptr()
+            for i in range(before, len(hashes)):
+                op[unsafe_offset=Int(fresh[unsafe_offset=i] & (PARTITIONS - 1)) + 1] += 1
+        var total = len(hashes)
+        var src = hashes.unsafe_ptr()
+        for p in range(PARTITIONS):
+            op[unsafe_offset=p + 1] += op[unsafe_offset=p]
+        var grouped = List[UInt64](unsafe_uninit_length=total)
+        var dst = grouped.unsafe_ptr()
+        var at = offsets.copy()
+        var ap = at.unsafe_ptr()
+        for i in range(total):
+            var h = src[unsafe_offset=i]
+            var p = Int(h & (PARTITIONS - 1))
+            dst[unsafe_offset=ap[unsafe_offset=p]] = h
+            ap[unsafe_offset=p] += 1
+        ref block = self.blocks[unsafe_offset=index]
+        block.hashes = grouped^
+        block.offsets = offsets^
 
 
-struct _InsertTask[tables_origin: MutOrigin, bloom_origin: ImmOrigin, buffers_origin: ImmOrigin](ParallelTask):
-    """Inserts every thread's buffer of one partition into that partition's table, through the partition's
-    Bloom filter when there is one."""
+comptime _AHEAD = 16
+"""How many inserts ahead the insert loop prefetches."""
+
+
+struct _InsertTask[tables_origin: MutOrigin, bloom_origin: ImmOrigin, blocks_origin: ImmOrigin](ParallelTask):
+    """Inserts every thread's hashes of one partition into that partition's table, in read order, through the
+    partition's Bloom filter when there is one."""
 
     var tables: MutPointer[CountTable, Self.tables_origin]
     var blooms: ImmPointer[BloomFilters, Self.bloom_origin]
     var with_bloom: Bool
-    var buffers: ImmPointer[List[List[UInt64]], Self.buffers_origin]
+    var blocks: ImmPointer[_Block, Self.blocks_origin]
     var runs: Int
 
     def __init__(
@@ -214,25 +321,39 @@ struct _InsertTask[tables_origin: MutOrigin, bloom_origin: ImmOrigin, buffers_or
         tables: MutPointer[CountTable, Self.tables_origin],
         blooms: ImmPointer[BloomFilters, Self.bloom_origin],
         with_bloom: Bool,
-        buffers: ImmPointer[List[List[UInt64]], Self.buffers_origin],
+        blocks: ImmPointer[_Block, Self.blocks_origin],
         runs: Int,
     ):
         self.tables = tables
         self.blooms = blooms
         self.with_bloom = with_bloom
-        self.buffers = buffers
+        self.blocks = blocks
         self.runs = runs
 
     def run(self, partition: Int):
         ref table = self.tables[unsafe_offset=partition]
-        if self.with_bloom:
-            for t in range(self.runs):
-                for h in self.buffers[unsafe_offset=t][partition]:
-                    table.add_seen_twice(h, self.blooms[], partition)
-            return
+        var incoming = 0
         for t in range(self.runs):
-            for h in self.buffers[unsafe_offset=t][partition]:
-                table.add(h)
+            ref block = self.blocks[unsafe_offset=t]
+            incoming += block.offsets[partition + 1] - block.offsets[partition]
+        if not self.with_bloom:
+            # Room for a quarter of the incoming k-mers being new, at most half full; growth covers the rest.
+            table.reserve(table.size + incoming // 4)
+        for t in range(self.runs):
+            ref block = self.blocks[unsafe_offset=t]
+            var hashes = block.hashes.unsafe_ptr()
+            var end = block.offsets[partition + 1]
+            # Each Bloom insert is a cache miss in the partition's 4 MB filter: the block `_AHEAD` inserts on
+            # is started now. (The table itself stays in L2, where prefetching it only costs.)
+            if self.with_bloom:
+                ref bloom = self.blooms[]
+                for i in range(block.offsets[partition], end):
+                    if i + _AHEAD < end:
+                        bloom.prefetch(partition, hashes[unsafe_offset=i + _AHEAD] >> YAK_COUNTER_BITS)
+                    table.add_seen_twice(hashes[unsafe_offset=i], bloom, partition)
+            else:
+                for i in range(block.offsets[partition], end):
+                    table.add(hashes[unsafe_offset=i])
 
 
 struct KmerCounts(Movable):
@@ -269,16 +390,13 @@ struct KmerCounts(Movable):
             while last < n and bases < block:
                 bases += records.lengths[last]
                 last += 1
-            var buffers = List[List[List[UInt64]]](capacity=runs)
+            var blocks = List[_Block](capacity=runs)
             for _ in range(runs):
-                var mine = List[List[UInt64]](capacity=PARTITIONS)
-                for _ in range(PARTITIONS):
-                    mine.append(List[UInt64]())
-                buffers.append(mine^)
-            var scan = _ScanTask(Pointer(to=records), first, last, runs, k, buffers.unsafe_ptr())
+                blocks.append(_Block())
+            var scan = _ScanTask(Pointer(to=records), first, last, runs, k, blocks.unsafe_ptr())
             parallel_for(scan, runs, threads)
             var insert = _InsertTask(
-                self.tables.unsafe_ptr(), Pointer(to=blooms).as_imm(), with_bloom, buffers.unsafe_ptr().as_imm(), runs
+                self.tables.unsafe_ptr(), Pointer(to=blooms).as_imm(), with_bloom, blocks.unsafe_ptr().as_imm(), runs
             )
             parallel_for(insert, PARTITIONS, threads)
             first = last
@@ -292,11 +410,51 @@ struct KmerCounts(Movable):
             total += self.tables[p].size
         return total
 
-    def histogram(self) -> List[Int]:
-        """`ha_ct_hist`: how many distinct k-mers have each count, 0 .. 4095."""
+    def histogram(self, threads: Int = 1) -> List[Int]:
+        """`ha_ct_hist`: how many distinct k-mers have each count, 0 .. 4095; the partitions in groups, one
+        histogram per group, in parallel."""
+        return partition_histogram(self.tables, threads)
+
+
+struct _HistogramTask[tables_origin: ImmOrigin, out_origin: MutOrigin](ParallelTask):
+    """One group of partitions' histogram."""
+
+    var tables: ImmPointer[CountTable, Self.tables_origin]
+    var groups: Int
+    var out: MutPointer[List[Int], Self.out_origin]
+
+    def __init__(
+        out self,
+        tables: ImmPointer[CountTable, Self.tables_origin],
+        groups: Int,
+        out_ptr: MutPointer[List[Int], Self.out_origin],
+    ):
+        self.tables = tables
+        self.groups = groups
+        self.out = out_ptr
+
+    def run(self, g: Int):
         var cnt = List[Int](length=YAK_N_COUNTS, fill=0)
-        for p in range(len(self.tables)):
-            for key in self.tables[p].keys:
+        for p in range(PARTITIONS * g // self.groups, PARTITIONS * (g + 1) // self.groups):
+            ref table = self.tables[unsafe_offset=p]
+            var keys = table.keys.unsafe_ptr()
+            for i in range(len(table.keys)):
+                var key = keys[unsafe_offset=i]
                 if key != EMPTY:
                     cnt[Int(key & YAK_MAX_COUNT)] += 1
-        return cnt^
+        self.out[unsafe_offset=g] = cnt^
+
+
+def partition_histogram(tables: List[CountTable], threads: Int) -> List[Int]:
+    """The count histogram of `PARTITIONS` count tables, summed from per-group histograms made in parallel."""
+    var groups = max(1, min(PARTITIONS, 4 * threads))
+    var parts = List[List[Int]](capacity=groups)
+    for _ in range(groups):
+        parts.append(List[Int]())
+    var task = _HistogramTask(tables.unsafe_ptr(), groups, parts.unsafe_ptr())
+    parallel_for(task, groups, threads)
+    var cnt = List[Int](length=YAK_N_COUNTS, fill=0)
+    for g in range(groups):
+        for c in range(YAK_N_COUNTS):
+            cnt[c] += parts[g][c]
+    return cnt^

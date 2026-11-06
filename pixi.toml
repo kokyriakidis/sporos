@@ -56,6 +56,9 @@ bench-reads = { cmd = "./build/bench_reads", depends-on = ["build-bench-reads"] 
 build-bench-yak = { cmd = "mojo build -D ASSERT=none -I . -I tests -I benchmarks benchmarks/bench_yak.mojo -o build/bench_yak", depends-on = ["prepare"] }
 # Single-thread sporos.yak hashing and sketch, with checksums for comparing builds: `pixi run bench-yak [length]`.
 bench-yak = { cmd = "./build/bench_yak", depends-on = ["build-bench-yak"] }
+build-bench-yak-stages = { cmd = "mojo build -D ASSERT=none -I . -I tests -I benchmarks benchmarks/bench_yak_stages.mojo -o build/bench_yak_stages", depends-on = ["prepare"] }
+# Every sporos.yak stage on a read file, wall time each: `pixi run bench-yak-stages <reads> [threads] [bloom 0/1]`.
+bench-yak-stages = { cmd = "./build/bench_yak_stages", depends-on = ["build-bench-yak-stages"] }
 build-bench-index = { cmd = "mojo build -D ASSERT=none -I . -I tests -I benchmarks benchmarks/bench_index.mojo -o build/bench_index", depends-on = ["prepare"] }
 # Seed-index build and lookup throughput: `pixi run bench-index <reference.fa> <reads.fa> [k] [w] [max_occ]`.
 bench-index = { cmd = "./build/bench_index", depends-on = ["build-bench-index"] }

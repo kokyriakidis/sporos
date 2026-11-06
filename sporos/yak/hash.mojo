@@ -6,7 +6,11 @@ letter in bit k-1). The canonical hash is `yak_hash64_64` of the two planes of t
 """
 
 
+from std.bit import count_trailing_zeros
+from std.memory import pack_bits
 from std.sys import get_defined_int, simd_width_of
+
+from sporos.alphabet import encode_into
 
 
 comptime _LETTERS: UInt32 = (1 << 0) | (1 << 2) | (1 << 6) | (1 << 19) | (1 << 20)
@@ -111,3 +115,49 @@ struct Kmer(ImplicitlyCopyable, TrivialRegisterPassable):
         if self.x1 < self.x3:
             return yak_hash64_64(self.x0) + yak_hash64_64(self.x1)
         return yak_hash64_64(self.x2) + yak_hash64_64(self.x3)
+
+
+comptime _RUN_WIDTH = 32
+
+
+def hpc_run_starts(seq: Span[UInt8, _], mut codes: List[UInt8], mut starts: List[UInt32], is_hpc: Bool = True) -> Int:
+    """The runs a homopolymer-compressed scan of `seq` steps through: `codes[1 + i]` is base `i`'s yak code (4
+    for anything but A/C/G/T/U), and `starts[r]` where run `r` begins, `starts[runs] = len(seq)`; returns the
+    number of runs. A run is a stretch of one letter (with `is_hpc`; else every base is its own run), and every
+    ambiguous base is a run of its own, as hifiasm steps over them one by one. The codes are decoded
+    `_RUN_WIDTH` bases at a time, and a run starts wherever a code differs from the one before it (or is 4),
+    found as the bits of a vector comparison."""
+    var n = len(seq)
+    if len(codes) < n + 1 + _RUN_WIDTH:
+        codes.resize(unsafe_uninit_length=n + 1 + _RUN_WIDTH)
+    if len(starts) < n + 1:
+        starts.resize(unsafe_uninit_length=n + 1)
+    var cp = codes.unsafe_ptr()
+    # A sentinel no code equals, so the first base starts a run.
+    cp[unsafe_offset=0] = 255
+    encode_into(seq, cp.unsafe_offset(1), 4)
+    var sp = starts.unsafe_ptr()
+    var runs = 0
+    if not is_hpc:
+        for i in range(n):
+            sp[unsafe_offset=i] = UInt32(i)
+        sp[unsafe_offset=n] = UInt32(n)
+        return n
+    var i = 0
+    while i + _RUN_WIDTH <= n:
+        var cur = cp.unsafe_load[width=_RUN_WIDTH](i + 1)
+        var prev = cp.unsafe_load[width=_RUN_WIDTH](i)
+        var bits = pack_bits[DType.uint32](cur.ne(prev) | cur.eq(4))
+        while bits != 0:
+            sp[unsafe_offset=runs] = UInt32(i) + UInt32(count_trailing_zeros(bits))
+            runs += 1
+            bits &= bits - 1
+        i += _RUN_WIDTH
+    while i < n:
+        var c = cp[unsafe_offset=i + 1]
+        if c != cp[unsafe_offset=i] or c == 4:
+            sp[unsafe_offset=runs] = UInt32(i)
+            runs += 1
+        i += 1
+    sp[unsafe_offset=runs] = UInt32(n)
+    return runs

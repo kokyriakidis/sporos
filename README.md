@@ -312,8 +312,8 @@ from sporos import FilterTable, KmerCounts, PositionTable, analyze_count, read_f
 def main() raises:
     var reads = read_fasta("reads.fq.gz", threads=8)
     var counts = KmerCounts(reads, 51, threads=8)  # bf_shift=37: yak's Bloom filter, 16 GB; 0 counts exactly
-    var peaks = analyze_count(counts.histogram(), 5)  # peaks.hom, peaks.het
-    var filter = FilterTable(counts, cutoff=peaks.hom * 5)  # hifiasm drops k-mers over 5x the coverage
+    var peaks = analyze_count(counts.histogram(threads=8), 5)  # peaks.hom, peaks.het
+    var filter = FilterTable(counts, cutoff=peaks.hom * 5, threads=8)  # hifiasm drops k-mers over 5x the coverage
     var sketches = sketch_all(reads, filter, w=51, k=51, threads=8, sample_dist=500, rewin=1000)
     var table = PositionTable(sketches, threads=8)
     for m in sketches[0].mz:  # read 0's minimizers: END position, span, strand, hash

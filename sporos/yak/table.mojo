@@ -6,12 +6,22 @@ the hashes occurring 2 to 4094 times; the second lays the occurrences out contig
 (`ha_idxpos_t`) packs the read, the END position, the strand and the span.
 """
 
+from std.atomic import Atomic
+
 from sporos.fasta import FastaRecords
 from sporos.parallel import ParallelTask, parallel_for
-from sporos.yak.count import EMPTY, PARTITIONS, YAK_COUNTER_BITS, YAK_MAX_COUNT, YAK_N_COUNTS, CountTable, log2_floor
+from sporos.yak.count import (
+    EMPTY,
+    PARTITIONS,
+    YAK_COUNTER_BITS,
+    YAK_MAX_COUNT,
+    CountTable,
+    log2_floor,
+    partition_histogram,
+)
 from sporos.yak.filter import FilterTable
 from sporos.yak.histogram import Peaks, analyze_count
-from sporos.yak.sketch import Minimizer, Sketch, sketch_read
+from sporos.yak.sketch import Minimizer, Sketch, SketchScratch, sketch_read
 
 
 @inline(.always)
@@ -40,11 +50,21 @@ def position_span(p: UInt64) -> Int:
     return Int(p & 0xFF)
 
 
-struct _SketchTask[records_origin: ImmOrigin, filter_origin: ImmOrigin, out_origin: MutOrigin](ParallelTask):
-    """Sketches one read. Tracked origins keep the inputs alive while the task runs."""
+struct _SketchTask[
+    records_origin: ImmOrigin,
+    filter_origin: ImmOrigin,
+    order_origin: ImmOrigin,
+    next_origin: MutOrigin,
+    out_origin: MutOrigin,
+](ParallelTask):
+    """One worker's share of the sketching: it takes reads off a shared counter, longest first so that no long
+    read is left for the end, and sketches them in one working memory. Tracked origins keep the inputs alive
+    while the task runs."""
 
     var records: ImmPointer[FastaRecords, Self.records_origin]
     var filter: ImmPointer[FilterTable, Self.filter_origin]
+    var order: ImmPointer[Int, Self.order_origin]
+    var next: MutPointer[Atomic[Int64], Self.next_origin]
     var w: Int
     var k: Int
     var is_hpc: Bool
@@ -56,6 +76,8 @@ struct _SketchTask[records_origin: ImmOrigin, filter_origin: ImmOrigin, out_orig
         out self,
         records: ImmPointer[FastaRecords, Self.records_origin],
         filter: ImmPointer[FilterTable, Self.filter_origin],
+        order: ImmPointer[Int, Self.order_origin],
+        next: MutPointer[Atomic[Int64], Self.next_origin],
         w: Int,
         k: Int,
         is_hpc: Bool,
@@ -65,6 +87,8 @@ struct _SketchTask[records_origin: ImmOrigin, filter_origin: ImmOrigin, out_orig
     ):
         self.records = records
         self.filter = filter
+        self.order = order
+        self.next = next
         self.w = w
         self.k = k
         self.is_hpc = is_hpc
@@ -72,14 +96,41 @@ struct _SketchTask[records_origin: ImmOrigin, filter_origin: ImmOrigin, out_orig
         self.rewin = rewin
         self.out = out_ptr
 
-    def run(self, r: Int):
-        var sketch = Sketch()
-        sketch_read(
-            self.records[].seq(r), self.w, self.k, self.is_hpc, self.filter[], self.sample_dist, self.rewin, sketch
-        )
-        for i in range(len(sketch.mz)):
-            sketch.mz[i].rid = UInt32(r)
-        self.out[unsafe_offset=r] = sketch^
+    def run(self, worker: Int):
+        var n = len(self.records[])
+        var scratch = SketchScratch()
+        while True:
+            var i = Int(self.next[].fetch_add(1))
+            if i >= n:
+                break
+            var r = self.order[unsafe_offset=i]
+            ref sketch = self.out[unsafe_offset=r]
+            sketch_read(
+                self.records[].seq(r),
+                self.w,
+                self.k,
+                self.is_hpc,
+                self.filter[],
+                self.sample_dist,
+                self.rewin,
+                sketch,
+                scratch,
+            )
+            for j in range(len(sketch.mz)):
+                sketch.mz[j].rid = UInt32(r)
+
+
+def _longest_first(records: FastaRecords) -> List[Int]:
+    """The reads' indices by length, longest first."""
+    var n = len(records)
+    var keys = List[UInt64](capacity=n)
+    for r in range(n):
+        keys.append((UInt64(records.lengths[r]) << 32) | UInt64(n - 1 - r))
+    sort(keys)
+    var order = List[Int](capacity=n)
+    for i in range(n - 1, -1, -1):
+        order.append(n - 1 - Int(keys[i] & 0xFFFFFFFF))
+    return order^
 
 
 def sketch_all(
@@ -98,20 +149,36 @@ def sketch_all(
     var out = List[Sketch](capacity=n)
     for _ in range(n):
         out.append(Sketch())
-    var task = _SketchTask(Pointer(to=records), Pointer(to=filter), w, k, is_hpc, sample_dist, rewin, out.unsafe_ptr())
-    parallel_for(task, n, threads)
+    var order = _longest_first(records)
+    var next = Atomic[Int64](0)
+    var workers = max(1, min(threads, n))
+    var task = _SketchTask(
+        Pointer(to=records),
+        Pointer(to=filter),
+        order.unsafe_ptr().as_imm(),
+        Pointer(to=next),
+        w,
+        k,
+        is_hpc,
+        sample_dist,
+        rewin,
+        out.unsafe_ptr(),
+    )
+    parallel_for(task, workers, threads)
     return out^
 
 
 struct _Partition(Movable):
     """One of 4096 maps from a hash's high bits to its occurrences: `keys` hold `high << 12 | filled` while the
-    occurrences are inserted, `starts` and `counts` where in `positions` a hash's occurrences lie."""
+    occurrences are inserted, `starts` and `counts` where in `positions` a hash's occurrences lie. A slot is in
+    use when its count is (a kept hash occurs at least twice), so no key value is reserved."""
 
     var keys: List[UInt64]
     var starts: List[UInt32]
     var counts: List[UInt16]
     var positions: List[UInt64]
     var shift: UInt64
+    var kept: Int
 
     def __init__(out self):
         self.keys = List[UInt64]()
@@ -119,6 +186,7 @@ struct _Partition(Movable):
         self.counts = List[UInt16]()
         self.positions = List[UInt64]()
         self.shift = 63
+        self.kept = 0
 
     @inline(.always)
     def _slot(self, high: UInt64) -> Int:
@@ -137,8 +205,9 @@ struct _Partition(Movable):
         var capacity = 16
         while capacity < 2 * n + 1:
             capacity *= 2
-        self.keys = List[UInt64](length=capacity, fill=EMPTY)
+        self.keys = List[UInt64](length=capacity, fill=0)
         self.shift = UInt64(64 - log2_floor(capacity))
+        self.kept = n
         self.starts = List[UInt32](length=capacity, fill=0)
         self.counts = List[UInt16](length=capacity, fill=0)
         self.positions = List[UInt64](length=total, fill=0)
@@ -151,7 +220,7 @@ struct _Partition(Movable):
                 continue
             var high = key >> YAK_COUNTER_BITS
             var i = self._slot(high)
-            while self.keys[i] != EMPTY:
+            while self.counts[i] != 0:
                 i = (i + 1) & (len(self.keys) - 1)
             self.keys[i] = high << YAK_COUNTER_BITS
             self.starts[i] = UInt32(offset)
@@ -165,13 +234,11 @@ struct _Partition(Movable):
             return -1
         var high = hash >> YAK_COUNTER_BITS
         var i = self._slot(high)
-        while True:
-            var key = self.keys[i]
-            if key == EMPTY:
-                return -1
-            if key >> YAK_COUNTER_BITS == high:
+        while self.counts[i] != 0:
+            if self.keys[i] >> YAK_COUNTER_BITS == high:
                 return i
             i = (i + 1) & (len(self.keys) - 1)
+        return -1
 
     def insert(mut self, hash: UInt64, position: UInt64):
         """`ha_pt_insert_list`: one occurrence, if the hash is kept and has room."""
@@ -225,26 +292,58 @@ struct _BucketTask[sketches_origin: ImmOrigin, buckets_origin: MutOrigin](Parall
                 bucket.append(pack_position(Int(m.rid), Int(m.pos), Int(m.rev), Int(m.span)))
 
 
-struct _InsertTask[buckets_origin: ImmOrigin, partitions_origin: MutOrigin](ParallelTask):
-    """Inserts every thread's bucket of one partition, in read order, into that partition."""
+struct _CountTask[buckets_origin: ImmOrigin, counts_origin: MutOrigin](ParallelTask):
+    """Counts one partition's minimizer hashes from every thread's bucket."""
 
+    var buckets: ImmPointer[List[List[UInt64]], Self.buckets_origin]
+    var runs: Int
+    var counts: MutPointer[CountTable, Self.counts_origin]
+
+    def __init__(
+        out self,
+        buckets: ImmPointer[List[List[UInt64]], Self.buckets_origin],
+        runs: Int,
+        counts: MutPointer[CountTable, Self.counts_origin],
+    ):
+        self.buckets = buckets
+        self.runs = runs
+        self.counts = counts
+
+    def run(self, p: Int):
+        ref table = self.counts[unsafe_offset=p]
+        for t in range(self.runs):
+            ref bucket = self.buckets[unsafe_offset=t][p]
+            var i = 0
+            while i < len(bucket):
+                table.add(bucket[i])
+                i += 2
+
+
+struct _LayoutTask[counts_origin: ImmOrigin, buckets_origin: ImmOrigin, partitions_origin: MutOrigin](ParallelTask):
+    """Lays out one partition's kept hashes and fills in their occurrences from every thread's bucket, in read
+    order."""
+
+    var counts: ImmPointer[CountTable, Self.counts_origin]
     var buckets: ImmPointer[List[List[UInt64]], Self.buckets_origin]
     var runs: Int
     var partitions: MutPointer[_Partition, Self.partitions_origin]
 
     def __init__(
         out self,
+        counts: ImmPointer[CountTable, Self.counts_origin],
         buckets: ImmPointer[List[List[UInt64]], Self.buckets_origin],
         runs: Int,
         partitions: MutPointer[_Partition, Self.partitions_origin],
     ):
+        self.counts = counts
         self.buckets = buckets
         self.runs = runs
         self.partitions = partitions
 
     def run(self, p: Int):
         ref part = self.partitions[unsafe_offset=p]
-        if len(part.keys) == 0:
+        part.build(self.counts[unsafe_offset=p], 2, YAK_MAX_COUNT - 1)
+        if part.kept == 0:
             return
         for t in range(self.runs):
             ref bucket = self.buckets[unsafe_offset=t][p]
@@ -271,37 +370,8 @@ struct PositionTable(Movable):
     def __init__(out self, sketches: List[Sketch], threads: Int = 1, min_hist_count: Int = 5):
         """Counts the sketches' minimizers, takes the peaks (the histogram's low point searched from
         `min_hist_count`, hifiasm's `min_hist_kmer_cnt`), keeps the hashes occurring 2 to 4094 times and lays
-        their occurrences out."""
-        var counts = List[CountTable](capacity=PARTITIONS)
-        for _ in range(PARTITIONS):
-            counts.append(CountTable())
-        var collected = 0
-        for s in range(len(sketches)):
-            for m in sketches[s].mz:
-                counts[Int(m.x & (PARTITIONS - 1))].add(m.x)
-                collected += 1
-        var cnt = List[Int](length=YAK_N_COUNTS, fill=0)
-        var total_distinct = 0
-        for p in range(PARTITIONS):
-            total_distinct += counts[p].size
-            for key in counts[p].keys:
-                if key != EMPTY:
-                    cnt[Int(key & YAK_MAX_COUNT)] += 1
-        self.peaks = analyze_count(cnt, min_hist_count)
-        self.collected = collected
-        self.counted = total_distinct
-        self.partitions = List[_Partition](capacity=PARTITIONS)
-        self.distinct = 0
-        self.indexed = 0
-        for p in range(PARTITIONS):
-            var part = _Partition()
-            part.build(counts[p], 2, YAK_MAX_COUNT - 1)
-            self.indexed += len(part.positions)
-            self.partitions.append(part^)
-        for p in range(PARTITIONS):
-            for key in self.partitions[p].keys:
-                if key != EMPTY:
-                    self.distinct += 1
+        their occurrences out. Every pass runs in parallel: the minimizers are first bucketed by partition on
+        each thread, then each partition is counted, laid out and filled on its own."""
         var runs = max(1, threads)
         var buckets = List[List[List[UInt64]]](capacity=runs)
         for _ in range(runs):
@@ -311,8 +381,30 @@ struct PositionTable(Movable):
             buckets.append(mine^)
         var bucket_task = _BucketTask(sketches.unsafe_ptr(), len(sketches), runs, buckets.unsafe_ptr())
         parallel_for(bucket_task, runs, threads)
-        var task = _InsertTask(buckets.unsafe_ptr().as_imm(), runs, self.partitions.unsafe_ptr())
-        parallel_for(task, PARTITIONS, threads)
+        var counts = List[CountTable](capacity=PARTITIONS)
+        for _ in range(PARTITIONS):
+            counts.append(CountTable())
+        var count_task = _CountTask(buckets.unsafe_ptr().as_imm(), runs, counts.unsafe_ptr())
+        parallel_for(count_task, PARTITIONS, threads)
+        self.peaks = analyze_count(partition_histogram(counts, threads), min_hist_count)
+        self.collected = 0
+        for s in range(len(sketches)):
+            self.collected += len(sketches[s].mz)
+        self.counted = 0
+        for p in range(PARTITIONS):
+            self.counted += counts[p].size
+        self.partitions = List[_Partition](capacity=PARTITIONS)
+        for _ in range(PARTITIONS):
+            self.partitions.append(_Partition())
+        var layout = _LayoutTask(
+            counts.unsafe_ptr().as_imm(), buckets.unsafe_ptr().as_imm(), runs, self.partitions.unsafe_ptr()
+        )
+        parallel_for(layout, PARTITIONS, threads)
+        self.distinct = 0
+        self.indexed = 0
+        for p in range(PARTITIONS):
+            self.distinct += self.partitions[p].kept
+            self.indexed += len(self.partitions[p].positions)
 
     @inline(.always)
     def get(self, hash: UInt64) -> Tuple[Int, Int]:

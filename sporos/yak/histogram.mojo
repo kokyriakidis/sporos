@@ -45,7 +45,6 @@ def analyze_count(cnt: List[Int], start_cnt: Int) -> Peaks:
             if cnt[m] < min_v:
                 min_v = cnt[m]
         if Float64(max2) < Float64(max_v) * 0.05 or Float64(min_v) > Float64(max2) * 0.95:
-            max2 = -1
             max2_i = -1
     # A smaller peak on the high end.
     var max3: Int = -1
@@ -65,7 +64,6 @@ def analyze_count(cnt: List[Int], start_cnt: Int) -> Peaks:
             or Float64(min_v) > Float64(max3) * 0.95
             or Float64(max3_i) > Float64(max_i) * 2.5
         ):
-            max3 = -1
             max3_i = -1
     if max3_i > 0:
         return Peaks(max3_i, max_i)

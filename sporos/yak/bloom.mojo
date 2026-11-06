@@ -5,6 +5,7 @@ count table on its second sighting only and the error k-mers seen once never tak
 
 from std.ffi import external_call
 from std.sys.info import CompilationTarget
+from std.sys.intrinsics import PrefetchOptions, prefetch
 
 
 comptime BLK_SHIFT = 9
@@ -47,6 +48,8 @@ struct BloomFilters(Movable):
         if self.raw == -1:
             raise Error(t"cannot map {bytes} bytes for the Bloom filters")
         self.base = (self.raw + HUGE - 1) & ~(HUGE - 1)
+        # Huge pages: the 16 GB of a full-size filter fault in 2 MB at a time. With 4 KB pages, xaros took about
+        # five times longer over the eight million faults.
         comptime if CompilationTarget.is_linux():
             comptime MADV_HUGEPAGE: Int32 = 14
             _ = external_call["madvise", Int32](self.base, bytes, MADV_HUGEPAGE)
@@ -55,6 +58,16 @@ struct BloomFilters(Movable):
         _ = external_call["munmap", Int32](self.raw, self.raw_bytes)
 
     @inline(.always)
+    @inline(.always)
+    def prefetch(self, filter: Int, hash: UInt64):
+        """Starts loading the block `insert(filter, hash)` will touch."""
+        var x = UInt64(self.n_shift - BLK_SHIFT)
+        var y = Int(hash & ((UInt64(1) << x) - 1))
+        var p = MutPointer[UInt8, MutUntrackedOrigin](
+            unsafe_from_address=self.base + (filter << (self.n_shift - 3)) + (y << (BLK_SHIFT - 3))
+        )
+        prefetch[PrefetchOptions().for_write().high_locality()](p)
+
     def insert(self, filter: Int, hash: UInt64) -> Int:
         """`yak_bf_insert` into filter `filter`: sets the k-mer's bits and returns how many were already set (all
         `BF_N_HASHES` when the k-mer was seen before)."""

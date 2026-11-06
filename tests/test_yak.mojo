@@ -22,7 +22,7 @@ from sporos.yak import (
     yak_hash64_64,
     yak_hash64_64_lanes,
 )
-from sporos.yak.hash import HASH_LANES
+from sporos.yak.hash import HASH_LANES, hpc_run_starts
 from reference import naive_hpc_kmer_planes, yak_test_sequence
 
 
@@ -68,6 +68,37 @@ def test_nt4() raises:
     for c in range(256):
         var code = nt4(UInt8(c))
         assert_true(code <= 4)
+
+
+def test_hpc_run_starts() raises:
+    """The vector run finder against a scalar model, on bytes of every kind (lowercase, U, N, junk) in runs, at
+    lengths on both sides of the vector width."""
+    var alphabet = "ACGTacgtUuNn-*R".as_bytes()
+    var codes = List[UInt8]()
+    var starts = List[UInt32]()
+    var state: UInt64 = 7
+    for n in range(0, 200):
+        var seq = List[UInt8](capacity=n)
+        while len(seq) < n:
+            state = state * 6364136223846793005 + 1442695040888963407
+            var c = alphabet[Int((state >> 33) % UInt64(len(alphabet)))]
+            var run = 1 + Int((state >> 20) % 6)
+            for _ in range(run):
+                if len(seq) < n:
+                    seq.append(c)
+        for hpc in range(2):
+            var is_hpc = hpc == 1
+            var runs = hpc_run_starts(Span(seq), codes, starts, is_hpc)
+            var expected = List[Int]()
+            for i in range(n):
+                var c = nt4(seq[i])
+                if not is_hpc or i == 0 or c == 4 or c != nt4(seq[i - 1]):
+                    expected.append(i)
+            assert_equal(runs, len(expected))
+            for r in range(runs):
+                assert_equal(Int(starts[r]), expected[r])
+                assert_equal(codes[1 + Int(starts[r])], nt4(seq[expected[r]]))
+            assert_equal(Int(starts[runs]), n)
 
 
 def test_hpc_kmer_hashes_against_brute_force() raises:

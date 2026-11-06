@@ -9,8 +9,11 @@ high-occurrence minimizers long enough (`sample_dist`), those that are minima of
 kept, else the few smallest, and the rest of the high-occurrence ones are dropped.
 """
 
+from std.bit import count_trailing_zeros
+from std.memory import pack_bits
+
 from sporos.yak.filter import FilterTable
-from sporos.yak.hash import HASH_LANES, Kmer, nt4, yak_hash64_64, yak_hash64_64_lanes
+from sporos.yak.hash import HASH_LANES, Kmer, hpc_run_starts, yak_hash64_64, yak_hash64_64_lanes
 
 comptime _DUMMY_X = UInt64.MAX
 comptime _DUMMY_RID = (UInt32(1) << 28) - 1
@@ -66,38 +69,6 @@ def mz_lt(a: Minimizer, b: Minimizer) -> Bool:
     return mzcmp(a, b) < 0
 
 
-struct _TinyQueue:
-    """`tiny_queue_t`: the raw lengths of the last k homopolymer runs."""
-
-    var a: Array[Int32, 64]
-    var front: Int
-    var count: Int
-
-    def __init__(out self):
-        self.a = Array[Int32, 64](fill=0)
-        self.front = 0
-        self.count = 0
-
-    @inline(.always)
-    def push(mut self, x: Int):
-        self.a[(self.count + self.front) & 0x3F] = Int32(x)
-        self.count += 1
-
-    @inline(.always)
-    def shift(mut self) -> Int:
-        if self.count == 0:
-            return -1
-        var x = Int(self.a[self.front])
-        self.front = (self.front + 1) & 0x3F
-        self.count -= 1
-        return x
-
-    @inline(.always)
-    def reset(mut self):
-        self.front = 0
-        self.count = 0
-
-
 struct Sketch(Movable):
     """One read's minimizers (`p`) and, for each, its `l` (letters since the last ambiguous one when it was
     buffered) with `select_mz_h`'s mark (`mt`)."""
@@ -123,12 +94,13 @@ struct Sketch(Movable):
         self.mt.append(UInt64(l))
 
 
-struct _Events:
-    """What the serial scan of a read leaves for the hashing and the window: one event per position the window
+struct SketchScratch(Movable):
+    """The working memory of `sketch_read`, kept by a caller sketching many reads so that it is allocated once.
+    What the serial scan of a read leaves for the hashing and the window: one event per position the window
     sees (a homopolymer run of A/C/G/T, or an ambiguous letter; symmetric k-mers are not events), with its `l`
     and, for a whole k-mer, its index among the k-mers (-1 otherwise); per k-mer, its END position, strand,
-    span and canonical planes, then its hash. Sized for the read once; `events` and `kmers` say how much is
-    used."""
+    span and canonical planes, then its hash; per event, its window key. `events` and `kmers` say how much of
+    it the last read used."""
 
     var l: List[Int32]
     var kmer: List[Int32]
@@ -138,26 +110,54 @@ struct _Events:
     var plane0: List[UInt64]
     var plane1: List[UInt64]
     var hash: List[UInt64]
+    var codes: List[UInt8]
+    var starts: List[UInt32]
+    var count: List[UInt32]
+    var x: List[UInt64]
     var events: Int
     var kmers: Int
 
-    def __init__(out self, capacity: Int):
-        self.l = List[Int32](length=capacity, fill=0)
-        self.kmer = List[Int32](length=capacity, fill=0)
-        self.pos = List[UInt32](length=capacity, fill=0)
-        self.rev = List[UInt8](length=capacity, fill=0)
-        self.span = List[UInt8](length=capacity, fill=0)
-        self.plane0 = List[UInt64](length=capacity, fill=0)
-        self.plane1 = List[UInt64](length=capacity, fill=0)
-        self.hash = List[UInt64](length=capacity, fill=0)
+    def __init__(out self):
+        self.l = List[Int32]()
+        self.kmer = List[Int32]()
+        self.pos = List[UInt32]()
+        self.rev = List[UInt8]()
+        self.span = List[UInt8]()
+        self.plane0 = List[UInt64]()
+        self.plane1 = List[UInt64]()
+        self.hash = List[UInt64]()
+        self.codes = List[UInt8]()
+        self.starts = List[UInt32]()
+        self.count = List[UInt32]()
+        self.x = List[UInt64]()
         self.events = 0
         self.kmers = 0
 
+    def fit(mut self, capacity: Int):
+        """Room for `capacity` events and k-mers; what a read leaves is overwritten, never read, by the next."""
+        if len(self.l) >= capacity:
+            return
+        self.l.resize(unsafe_uninit_length=capacity)
+        self.kmer.resize(unsafe_uninit_length=capacity)
+        self.pos.resize(unsafe_uninit_length=capacity)
+        self.rev.resize(unsafe_uninit_length=capacity)
+        self.span.resize(unsafe_uninit_length=capacity)
+        self.plane0.resize(unsafe_uninit_length=capacity)
+        self.plane1.resize(unsafe_uninit_length=capacity)
+        self.hash.resize(unsafe_uninit_length=capacity)
 
-def _scan(seq: Span[UInt8, _], k: Int, is_hpc: Bool, mut ev: _Events) -> Int:
-    """The serial part of `mz1_ha_sketch`: homopolymer runs, the rolling planes, `l`, the span; returns `tl`."""
-    var length = len(seq)
-    var src = seq.unsafe_ptr()
+
+@no_inline
+def _scan(seq: Span[UInt8, _], k: Int, is_hpc: Bool, mut ev: SketchScratch) -> Int:
+    """The serial part of `mz1_ha_sketch`: homopolymer runs, the rolling planes, `l`, the span; returns `tl`.
+    The runs come from `hpc_run_starts`, so this loop steps once per run (each ambiguous letter its own). The C
+    keeps the span in a queue of the last k run lengths, emptied at an ambiguous letter; a k-mer is used only
+    once `l >= k`, and by then at least k runs (symmetric k-mers' runs too) have passed since that letter, so
+    the queue is full and its sum is the raw distance from the start of the run k runs back to this run's end.
+    Without compression every run is one letter and that distance is k, as the C has it."""
+    var runs = hpc_run_starts(seq, ev.codes, ev.starts, is_hpc)
+    var codes = ev.codes.unsafe_ptr().unsafe_offset(1)
+    var starts = ev.starts.unsafe_ptr()
     var el = ev.l.unsafe_ptr()
     var ek = ev.kmer.unsafe_ptr()
     var epos = ev.pos.unsafe_ptr()
@@ -166,61 +166,44 @@ def _scan(seq: Span[UInt8, _], k: Int, is_hpc: Bool, mut ev: _Events) -> Int:
     var e0 = ev.plane0.unsafe_ptr()
     var e1 = ev.plane1.unsafe_ptr()
     var kmer = Kmer.empty(k)
-    var tq = _TinyQueue()
     var l = 0
     var tl = 0
-    var kmer_span = 0
     var events = 0
     var kmers = 0
-    var i = 0
-    while i < length:
-        var c = nt4(src[unsafe_offset=i])
+    for r in range(runs):
+        var c = codes[unsafe_offset=Int(starts[unsafe_offset=r])]
+        var km: Int32 = -1
         if c < 4:
-            if is_hpc:
-                var skip_len = 1
-                if i + 1 < length and nt4(src[unsafe_offset=i + 1]) == c:
-                    skip_len = 2
-                    while i + skip_len < length and nt4(src[unsafe_offset=i + skip_len]) == c:
-                        skip_len += 1
-                    i += skip_len - 1
-                tq.push(skip_len)
-                kmer_span += skip_len
-                if tq.count > k:
-                    kmer_span -= tq.shift()
-            else:
-                kmer_span = l + 1 if l + 1 < k else k
             kmer.push(c)
             if kmer.symmetric():
                 # `continue` in the C: a symmetric k-mer neither enters the buffer nor advances it.
-                i += 1
                 continue
             l += 1
             tl += 1
-            if l >= k and kmer_span < 256:
-                var planes = kmer.canonical()
-                ek[unsafe_offset=events] = Int32(kmers)
-                epos[unsafe_offset=kmers] = UInt32(i)
-                erev[unsafe_offset=kmers] = UInt8(1 if kmer.reverse_is_canonical() else 0)
-                espan[unsafe_offset=kmers] = UInt8(kmer_span)
-                e0[unsafe_offset=kmers] = planes[0]
-                e1[unsafe_offset=kmers] = planes[1]
-                kmers += 1
-            else:
-                ek[unsafe_offset=events] = -1
+            if l >= k:
+                var end = Int(starts[unsafe_offset=r + 1])
+                var span = end - Int(starts[unsafe_offset=r + 1 - k])
+                if span < 256:
+                    var planes = kmer.canonical()
+                    km = Int32(kmers)
+                    epos[unsafe_offset=kmers] = UInt32(end - 1)
+                    erev[unsafe_offset=kmers] = UInt8(1 if kmer.reverse_is_canonical() else 0)
+                    espan[unsafe_offset=kmers] = UInt8(span)
+                    e0[unsafe_offset=kmers] = planes[0]
+                    e1[unsafe_offset=kmers] = planes[1]
+                    kmers += 1
         else:
             l = 0
-            tq.reset()
-            kmer_span = 0
-            ek[unsafe_offset=events] = -1
+        ek[unsafe_offset=events] = km
         el[unsafe_offset=events] = Int32(l)
         events += 1
-        i += 1
     ev.events = events
     ev.kmers = kmers
     return tl
 
 
-def _hash_all(mut ev: _Events):
+@no_inline
+def _hash_all(mut ev: SketchScratch):
     """Every k-mer's `yak_hash_long`, eight at a time."""
     comptime LANES = HASH_LANES
     var n = ev.kmers
@@ -239,6 +222,183 @@ def _hash_all(mut ev: _Events):
         i += 1
 
 
+comptime _DUMMY_KEY = (UInt128(_DUMMY_RID) << 64) | UInt128(_DUMMY_X)
+comptime _LANES = 64
+"""The window is kept in blocks of this many slots, one bit each in a slot mask."""
+comptime _PAD_COUNT = UInt32.MAX
+"""The count of a slot past the window's end: above every real one, so it is never a minimum."""
+
+
+@inline(.always)
+def _key(count: UInt32, x: UInt64) -> UInt128:
+    return (UInt128(count) << 64) | UInt128(x)
+
+
+@inline(.always)
+def _emit(ev: SketchScratch, e: Int, mut out: Sketch):
+    """Writes event `e`'s minimizer with its `l`."""
+    var km = Int(ev.kmer[e])
+    out.push(Minimizer(ev.x[e], ev.count[e], ev.pos[km], ev.rev[km], ev.span[km]), Int(ev.l[e]))
+
+
+struct _Window:
+    """`mz1_ha_sketch`'s ring buffer as arrays: each slot's count, hash and event (-1 for the C's initial
+    dummies), padded to whole blocks of `_LANES` slots past `w` with slots that never win."""
+
+    var count: List[UInt32]
+    var x: List[UInt64]
+    var event: List[Int]
+    var blocks: Int
+
+    def __init__(out self, w: Int):
+        self.blocks = (w + _LANES - 1) // _LANES
+        var n = self.blocks * _LANES
+        self.count = List[UInt32](length=n, fill=_PAD_COUNT)
+        self.x = List[UInt64](length=n, fill=_DUMMY_X)
+        self.event = List[Int](length=n, fill=-1)
+        for j in range(w):
+            self.count[j] = _DUMMY_RID
+
+    @inline(.always)
+    def ties(self, count: UInt32, x: UInt64, block: Int) -> UInt64:
+        """The slots of `block` holding the key `(count, x)`, as bits."""
+        var at = block * _LANES
+        var c = self.count.unsafe_ptr().unsafe_load[width=_LANES](at)
+        var h = self.x.unsafe_ptr().unsafe_load[width=_LANES](at)
+        return UInt64(pack_bits[DType.uint64](c.eq(count) & h.eq(x)))
+
+    def minimum(self) -> Tuple[UInt32, UInt64]:
+        """The smallest key in the window, by count then hash: the count first over every slot, then the hash
+        over the slots with that count."""
+        var cp = self.count.unsafe_ptr()
+        var xp = self.x.unsafe_ptr()
+        var best_count = _PAD_COUNT
+        for b in range(self.blocks):
+            best_count = min(best_count, cp.unsafe_load[width=_LANES](b * _LANES).reduce_min())
+        var best_x = _DUMMY_X
+        for b in range(self.blocks):
+            var c = cp.unsafe_load[width=_LANES](b * _LANES)
+            var h = xp.unsafe_load[width=_LANES](b * _LANES)
+            best_x = min(best_x, c.eq(best_count).select(h, SIMD[DType.uint64, _LANES](_DUMMY_X)).reduce_min())
+        return (best_count, best_x)
+
+
+@inline(.always)
+def _bit(j: Int) -> UInt64:
+    return UInt64(1) << UInt64(j & (_LANES - 1))
+
+
+def _emit_ties(
+    ev: SketchScratch, win: _Window, count: UInt32, x: UInt64, after: Int, upto: Int, skip: Int, mut out: Sketch
+):
+    """Writes, in the C's ring order (slots `after + 1 ..` then `0 .. upto - 1`), every window slot other than
+    `skip` holding the key `(count, x)`."""
+    for b in range(win.blocks):
+        var bits = win.ties(count, x, b)
+        while bits != 0:
+            var j = b * _LANES + Int(count_trailing_zeros(bits))
+            bits &= bits - 1
+            if j > after and j != skip:
+                _emit(ev, win.event[j], out)
+    for b in range(win.blocks):
+        var bits = win.ties(count, x, b)
+        while bits != 0:
+            var j = b * _LANES + Int(count_trailing_zeros(bits))
+            bits &= bits - 1
+            if j >= upto:
+                break
+            if j != skip:
+                _emit(ev, win.event[j], out)
+
+
+@no_inline
+def _window(mut ev: SketchScratch, w: Int, k: Int, filter: FilterTable, mut out: Sketch):
+    """`mz1_ha_sketch`'s window over the events: the minimizers, as the C writes them. Each event is first
+    reduced to its `mzcmp` key, its count and hash (the dummy's for an ambiguous letter, a short k-mer or a
+    filtered one); the window keeps them as arrays and event indices, and a minimizer is built only when it is
+    written. When the minimum leaves the window, the new one is found a block of slots at a time, and one mask
+    of the slots equal to it gives both the one the C picks (the newest, as its `>=` scan ends on the last) and
+    the identical k-mers it writes with it. Two events in the window never share a position, so the C's `pos
+    !=` tie test is a test of slot identity."""
+    var events = ev.events
+    if len(ev.count) < events:
+        ev.count.resize(unsafe_uninit_length=events)
+        ev.x.resize(unsafe_uninit_length=events)
+    var kc = ev.count.unsafe_ptr()
+    var kx = ev.x.unsafe_ptr()
+    var ek = ev.kmer.unsafe_ptr()
+    var el = ev.l.unsafe_ptr()
+    var hp = ev.hash.unsafe_ptr()
+    for e in range(events):
+        var count = _DUMMY_RID
+        var x = _DUMMY_X
+        var km = Int(ek[unsafe_offset=e])
+        if km >= 0:
+            var y = hp[unsafe_offset=km]
+            var cnt = filter.count(y)
+            if cnt < _FILTERED:
+                count = UInt32(cnt)
+                x = y
+        kc[unsafe_offset=e] = count
+        kx[unsafe_offset=e] = x
+
+    var win = _Window(w)
+    var wc = win.count.unsafe_ptr()
+    var wx = win.x.unsafe_ptr()
+    var we = win.event.unsafe_ptr()
+    var buf_pos = 0
+    var min_pos = 0
+    var min_count = _DUMMY_RID
+    var min_x = _DUMMY_X
+    var min_e = -1
+    for e in range(events):
+        var l = Int(el[unsafe_offset=e])
+        var count = kc[unsafe_offset=e]
+        var x = kx[unsafe_offset=e]
+        wc[unsafe_offset=buf_pos] = count
+        wx[unsafe_offset=buf_pos] = x
+        we[unsafe_offset=buf_pos] = e
+        if l == w + k - 1 and min_x != _DUMMY_X:
+            # The first window: identical k-mers were not stored yet.
+            _emit_ties(ev, win, min_count, min_x, buf_pos, buf_pos, min_pos, out)
+        if _key(min_count, min_x) >= _key(count, x):
+            # A new minimum: write the old one.
+            if l >= w + k and min_x != _DUMMY_X:
+                _emit(ev, min_e, out)
+            min_count = count
+            min_x = x
+            min_e = e
+            min_pos = buf_pos
+        elif buf_pos == min_pos:
+            # The old minimum left the window: write it, find the new one over the whole buffer.
+            if l >= w + k - 1 and min_x != _DUMMY_X:
+                _emit(ev, min_e, out)
+            var best = win.minimum()
+            min_count = best[0]
+            min_x = best[1]
+            # The newest slot with the minimum: the last at or before `buf_pos`, else the last after it.
+            var newest = -1
+            var oldest_side = -1
+            for b in range(win.blocks):
+                var bits = win.ties(min_count, min_x, b)
+                while bits != 0:
+                    var j = b * _LANES + Int(count_trailing_zeros(bits))
+                    bits &= bits - 1
+                    if j <= buf_pos:
+                        newest = j
+                    else:
+                        oldest_side = j
+            min_pos = newest if newest >= 0 else oldest_side
+            min_e = we[unsafe_offset=min_pos]
+            if l >= w + k - 1 and min_x != _DUMMY_X:
+                _emit_ties(ev, win, min_count, min_x, buf_pos, buf_pos + 1, min_pos, out)
+        buf_pos += 1
+        if buf_pos == w:
+            buf_pos = 0
+    if min_x != _DUMMY_X:
+        _emit(ev, min_e, out)
+
+
 def sketch_read(
     seq: Span[UInt8, _],
     w: Int,
@@ -249,75 +409,33 @@ def sketch_read(
     rewin: Int,
     mut out: Sketch,
 ):
-    """`mz1_ha_sketch` with `hf` the filter (an empty `FilterTable()` for none), `sample_dist` and `ws = rewin`, `pt` none, `rid` left
-    as the k-mer counts' residue of 0 (the caller sets it). In three passes with the C's result: the serial scan,
-    the hashes eight k-mers at a time, then the window over the events."""
+    """`mz1_ha_sketch` with `hf` the filter (an empty `FilterTable()` for none), `sample_dist` and `ws = rewin`,
+    `pt` none, `rid` left as the k-mer counts' residue of 0 (the caller sets it). In three passes with the C's
+    result: the serial scan, the hashes `HASH_LANES` k-mers at a time, then the window over the events."""
+    var scratch = SketchScratch()
+    sketch_read(seq, w, k, is_hpc, filter, sample_dist, rewin, out, scratch)
+
+
+def sketch_read(
+    seq: Span[UInt8, _],
+    w: Int,
+    k: Int,
+    is_hpc: Bool,
+    filter: FilterTable,
+    sample_dist: Int,
+    rewin: Int,
+    mut out: Sketch,
+    mut ev: SketchScratch,
+):
+    """`sketch_read` in the working memory `ev`."""
     out.clear()
     var length = len(seq)
     if length <= 0:
         return
-    var ev = _Events(length + 16)
+    ev.fit(length + 16)
     var tl = _scan(seq, k, is_hpc, ev)
     _hash_all(ev)
-    var buf = List[Minimizer](length=w, fill=Minimizer.dummy())
-    var buf_p = List[Int](length=w, fill=0)
-    var buf_pos = 0
-    var min_pos = 0
-    var min_m = Minimizer.dummy()
-    var min_s = Int(UInt32.MAX)
-    for e in range(ev.events):
-        var l = Int(ev.l[e])
-        var info = Minimizer.dummy()
-        var km = Int(ev.kmer[e])
-        if km >= 0:
-            var y = ev.hash[km]
-            var cnt = filter.count(y)
-            if cnt < _FILTERED:
-                info = Minimizer(y, UInt32(cnt), ev.pos[km], ev.rev[km], ev.span[km])
-        buf[buf_pos] = info
-        buf_p[buf_pos] = l
-        if l == w + k - 1 and not min_m.is_dummy():
-            # The first window: identical k-mers were not stored yet.
-            for j in range(buf_pos + 1, w):
-                if mzcmp(min_m, buf[j]) == 0 and buf[j].pos != min_m.pos:
-                    out.push(buf[j], buf_p[j])
-            for j in range(0, buf_pos):
-                if mzcmp(min_m, buf[j]) == 0 and buf[j].pos != min_m.pos:
-                    out.push(buf[j], buf_p[j])
-        if mzcmp(min_m, info) >= 0:
-            # A new minimum: write the old one.
-            if l >= w + k and not min_m.is_dummy():
-                out.push(min_m, min_s)
-            min_m = info
-            min_pos = buf_pos
-            min_s = buf_p[buf_pos]
-        elif buf_pos == min_pos:
-            # The old minimum left the window: write it, find the new one over the whole buffer.
-            if l >= w + k - 1 and not min_m.is_dummy():
-                out.push(min_m, min_s)
-            min_m = Minimizer.dummy()
-            for j in range(buf_pos + 1, w):
-                if mzcmp(min_m, buf[j]) >= 0:
-                    min_m = buf[j]
-                    min_pos = j
-                    min_s = buf_p[j]
-            for j in range(0, buf_pos + 1):
-                if mzcmp(min_m, buf[j]) >= 0:
-                    min_m = buf[j]
-                    min_pos = j
-                    min_s = buf_p[j]
-            if l >= w + k - 1 and not min_m.is_dummy():
-                for j in range(buf_pos + 1, w):
-                    if mzcmp(min_m, buf[j]) == 0 and min_m.pos != buf[j].pos:
-                        out.push(buf[j], buf_p[j])
-                for j in range(0, buf_pos + 1):
-                    if mzcmp(min_m, buf[j]) == 0 and min_m.pos != buf[j].pos:
-                        out.push(buf[j], buf_p[j])
-        buf_pos += 1
-        if buf_pos == w:
-            buf_pos = 0
-    if not min_m.is_dummy():
-        out.push(min_m, min_s)
+    _window(ev, w, k, filter, out)
     out.compressed_length = tl
     if sample_dist > w:
         select_mz_h(out, length, sample_dist, rewin, k, tl)
