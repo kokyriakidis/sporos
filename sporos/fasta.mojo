@@ -544,6 +544,14 @@ struct _InflateTask[data_origin: ImmOrigin, blocks_origin: ImmOrigin, lib_origin
 def _inflate_bgzf(data: Span[UInt8, _], lib: OwnedDLHandle, threads: Int) raises -> List[UInt8]:
     """Inflates a BGZF file block-parallel: block headers give every block's
     compressed range and output size up front."""
+    var out = List[UInt8]()
+    _inflate_bgzf_into(data, lib, threads, out)
+    return out^
+
+
+def _inflate_bgzf_into(data: Span[UInt8, _], lib: OwnedDLHandle, threads: Int, mut out: List[UInt8]) raises:
+    """`_inflate_bgzf`, appended to `out`."""
+    var base = len(out)
     var blocks = List[Int]()
     var total = 0
     var at = 0
@@ -574,14 +582,14 @@ def _inflate_bgzf(data: Span[UInt8, _], lib: OwnedDLHandle, threads: Int) raises
         blocks.append(isize)
         total += isize
         at = end
-    var out = List[UInt8](unsafe_uninit_length=total)
+    out.resize(unsafe_uninit_length=base + total)
     var count = len(blocks) // 4
     var per_task = max(1, ceildiv(count, max(1, threads) * 16))
     var failed = List[Int](length=1, fill=0)
     var task = _InflateTask(
         data.unsafe_ptr().as_imm(),
         blocks.unsafe_ptr().as_imm(),
-        out.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+        out.unsafe_ptr().unsafe_offset(base).unsafe_origin_cast[MutUntrackedOrigin](),
         Pointer(to=lib),
         per_task,
         count,
@@ -593,7 +601,6 @@ def _inflate_bgzf(data: Span[UInt8, _], lib: OwnedDLHandle, threads: Int) raises
         raise Error("BGZF inflation failed")
     if at < n:
         out.extend(Span(_inflate_gzip(data[at:], lib)))
-    return out^
 
 
 def _inflate_gzip(data: Span[UInt8, _], lib: OwnedDLHandle) raises -> List[UInt8]:

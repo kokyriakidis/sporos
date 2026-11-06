@@ -1,7 +1,8 @@
 from std.testing import assert_equal, assert_true, TestSuite
 from std.ffi import external_call
 
-from sporos.fasta import FastaRecords, parse_sequences, read_fasta
+from sporos.fasta import FastaRecords, parse_sequences, read_fasta, read_file
+from sporos.stream import ByteStream
 
 
 def _is(records: FastaRecords, i: Int, expected: StringSlice) -> Bool:
@@ -112,6 +113,53 @@ def test_parallel_parse_matches_serial() raises:
     for i in range(len(serial.data)):
         if parallel.data[i] != serial.data[i]:
             raise Error(String(t"byte {i} differs"))
+
+
+def _streamed(path: String, chunk: Int, whole_limit: Int) raises -> Tuple[List[UInt8], Int]:
+    """Every chunk of `path` streamed, joined, and how many chunks there were."""
+    var stream = ByteStream(path, 2, chunk, whole_limit)
+    var out = List[UInt8]()
+    var chunks = 0
+    while stream.next(out):
+        chunks += 1
+    return (out^, chunks)
+
+
+def test_byte_stream_matches_read_file() raises:
+    """Plain, gzip (inflated whole, and streamed through zlib), BGZF, and BGZF followed by a plain gzip member:
+    the chunks join to exactly what `read_file` reads, at chunk sizes that split blocks and lines."""
+    var base = String("build/test_io_stream.fq")
+    with open(base, "w") as f:
+        for r in range(3000):
+            f.write("@read", r, " some description\n")
+            var length = 100 + (r * 131) % 700
+            var seq = String()
+            for i in range(length):
+                seq += "ACGTN"[byte=(r * 7 + i * i) % 5 if i % 9 != 0 else 0]
+            f.write(seq, "\n+\n")
+            var qual = String()
+            for _ in range(length):
+                qual += "I"
+            f.write(qual, "\n")
+    assert_equal(_system("gzip -kfc " + base + " > " + base + ".gz"), 0)
+    var paths: List[String] = [base, base + ".gz"]
+    if _system("command -v bgzip > /dev/null") == 0:
+        assert_equal(_system("bgzip -c " + base + " > " + base + ".bgz"), 0)
+        assert_equal(_system("(bgzip -c " + base + "; gzip -c " + base + ") > " + base + ".mixed.gz"), 0)
+        paths.append(base + ".bgz")
+        paths.append(base + ".mixed.gz")
+    for path in paths:
+        var expected = read_file(path, 2)
+        assert_true(len(expected) > 1000000)
+        for chunk in [4096, 100000, 1 << 26]:
+            for whole_limit in [0, 1 << 30]:
+                var got = _streamed(path, chunk, whole_limit)
+                assert_equal(len(got[0]), len(expected))
+                for i in range(len(expected)):
+                    if got[0][i] != expected[i]:
+                        assert_equal(i, -1)
+                if chunk == 4096 and whole_limit == 0:
+                    assert_true(got[1] > 10)
 
 
 def main() raises:

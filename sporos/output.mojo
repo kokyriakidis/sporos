@@ -15,7 +15,9 @@ struct OutputBuffer(Movable):
     var fd: Int32
 
     def __init__(out self, fd: Int32 = 1):
-        self.buf = List[UInt8](capacity=_FLUSH_AT + 4096)
+        # A buffer that writes holds a flush block; one that only accumulates (often one per record, its bytes
+        # handed over by `take`) grows as it fills, so that it never carries a megabyte for a line.
+        self.buf = List[UInt8](capacity=_FLUSH_AT + 4096 if fd >= 0 else 0)
         self.fd = fd
 
     def write(mut self, text: StringSlice):
