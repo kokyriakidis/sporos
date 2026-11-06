@@ -6,6 +6,9 @@ letter in bit k-1). The canonical hash is `yak_hash64_64` of the two planes of t
 """
 
 
+from std.sys import get_defined_int, simd_width_of
+
+
 comptime _LETTERS: UInt32 = (1 << 0) | (1 << 2) | (1 << 6) | (1 << 19) | (1 << 20)
 """The lowercase letters a, c, g, t and u as bits counted from `a`."""
 
@@ -34,8 +37,9 @@ def yak_hash64_64(key: UInt64) -> UInt64:
     return k
 
 
-comptime HASH_LANES = 8
-"""Keys hashed at once: eight 64-bit lanes, one AVX-512 register."""
+comptime HASH_LANES = get_defined_int["SPOROS_HASH_LANES", simd_width_of[DType.uint64]()]()
+"""Keys hashed at once: the target's native 64-bit lanes (8 with AVX-512, 4 with AVX2, 2 with NEON) unless the
+build sets `-D SPOROS_HASH_LANES=n`. The hash is wrapping integer arithmetic, the same in every lane width."""
 
 
 @inline(.always)

@@ -22,6 +22,7 @@ from sporos.yak import (
     yak_hash64_64,
     yak_hash64_64_lanes,
 )
+from sporos.yak.hash import HASH_LANES
 from reference import naive_hpc_kmer_planes, yak_test_sequence
 
 
@@ -50,9 +51,12 @@ def test_yak_hash_matches_c() raises:
     assert_equal(yak_hash64_64(1), UInt64(6614235796240398542))
     assert_equal(yak_hash64_64(123456789), UInt64(16581954974024456952))
     assert_equal(yak_hash64_64(UInt64.MAX), UInt64(2272383144869939092))
-    var keys = SIMD[DType.uint64, 8](0, 1, 123456789, UInt64.MAX, 5, 6, 7, 8)
+    var samples: List[UInt64] = [0, 1, 123456789, UInt64.MAX, 5, 6, 7, 8]
+    var keys = SIMD[DType.uint64, HASH_LANES]()
+    for i in range(HASH_LANES):
+        keys[i] = samples[i % len(samples)]
     var lanes = yak_hash64_64_lanes(keys)
-    for i in range(8):
+    for i in range(HASH_LANES):
         assert_equal(lanes[i], yak_hash64_64(keys[i]))
 
 

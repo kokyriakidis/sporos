@@ -53,6 +53,9 @@ test-mem-oracle = { cmd = "mkdir -p build/mem_oracle && python3 tests/mem_oracle
 build-bench-reads = { cmd = "mojo build -D ASSERT=none -I . -I tests -I benchmarks benchmarks/bench_reads.mojo -o build/bench_reads", depends-on = ["prepare"] }
 # Per-call overhead on read-sized sequences: `pixi run bench-reads`.
 bench-reads = { cmd = "./build/bench_reads", depends-on = ["build-bench-reads"] }
+build-bench-yak = { cmd = "mojo build -D ASSERT=none -I . -I tests -I benchmarks benchmarks/bench_yak.mojo -o build/bench_yak", depends-on = ["prepare"] }
+# Single-thread sporos.yak hashing and sketch, with checksums for comparing builds: `pixi run bench-yak [length]`.
+bench-yak = { cmd = "./build/bench_yak", depends-on = ["build-bench-yak"] }
 build-bench-index = { cmd = "mojo build -D ASSERT=none -I . -I tests -I benchmarks benchmarks/bench_index.mojo -o build/bench_index", depends-on = ["prepare"] }
 # Seed-index build and lookup throughput: `pixi run bench-index <reference.fa> <reads.fa> [k] [w] [max_occ]`.
 bench-index = { cmd = "./build/bench_index", depends-on = ["build-bench-index"] }
