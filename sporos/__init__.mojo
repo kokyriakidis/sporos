@@ -13,6 +13,8 @@ is implementation and may change.
 - Building blocks: `SeqText`, `MemParams`, `MemIndex`, `find_mems` -> `Mem`,
   `sort_mems`, `filter_mums`, `filter_by_occurrences`, `occurrence_counts`, `find_smems` (MEM
   engine); `FMIndex` (SMEMs of reads, saved and loaded indexes).
+- yak's k-mer counting and hifiasm's minimizer seeds, bit for bit as their C code (`sporos.yak`):
+  `KmerCounts`, `FilterTable`, `analyze_count`, `sketch_read` -> `Sketch`, `sketch_all`, `PositionTable`.
 - `default_threads()`: one thread per physical core.
 """
 
@@ -39,3 +41,4 @@ from .parallel import default_threads
 from .reference import Match, Reference
 from .syncmers import syncmer_positions
 from .text import SeqText
+from .yak import FilterTable, KmerCounts, PositionTable, Sketch, analyze_count, sketch_all, sketch_read

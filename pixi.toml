@@ -34,8 +34,9 @@ build-test-batch = { cmd = "mojo build -I . -I tests tests/test_batch.mojo -o bu
 build-test-io = { cmd = "mojo build -I . -I tests tests/test_io.mojo -o build/test_io", depends-on = ["prepare"] }
 build-test-fmindex = { cmd = "mojo build -I . -I tests tests/test_fmindex.mojo -o build/test_fmindex", depends-on = ["prepare"] }
 build-test-api = { cmd = "mojo build -I . -I tests tests/test_api.mojo -o build/test_api", depends-on = ["prepare"] }
+build-test-yak = { cmd = "mojo build -I . -I tests tests/test_yak.mojo -o build/test_yak", depends-on = ["prepare"] }
 # Every kernel held to a brute-force oracle (tests/reference.mojo).
-test = { cmd = "./build/test_io && ./build/test_seeds && ./build/test_batch && ./build/test_mems && ./build/test_index && ./build/test_fmindex && ./build/test_api", depends-on = ["build-test-io", "build-test-seeds", "build-test-batch", "build-test-mems", "build-test-index", "build-test-fmindex", "build-test-api"] }
+test = { cmd = "./build/test_io && ./build/test_seeds && ./build/test_batch && ./build/test_mems && ./build/test_index && ./build/test_fmindex && ./build/test_api && ./build/test_yak", depends-on = ["build-test-io", "build-test-seeds", "build-test-batch", "build-test-mems", "build-test-index", "build-test-fmindex", "build-test-api", "build-test-yak"] }
 build-bench-seeds = { cmd = "mojo build -D ASSERT=none -I . -I tests -I benchmarks benchmarks/bench_seeds.mojo -o build/bench_seeds", depends-on = ["prepare"] }
 # Single-thread minimizer/syncmer throughput on random DNA: `pixi run bench-seeds [length]`.
 bench-seeds = { cmd = "./build/bench_seeds", depends-on = ["build-bench-seeds"] }

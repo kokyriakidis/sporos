@@ -146,3 +146,66 @@ def canonical_kmer_of(codes: List[UInt8], start: Int, k: Int) -> Tuple[UInt128, 
     if rc < fwd:
         return (rc, True)
     return (fwd, False)
+
+
+def yak_test_sequence(n: Int, seed: Int) -> List[UInt8]:
+    """The sequences the hifiasm sketch digests in `test_yak.mojo` were computed on: an LCG's ACGT letters with
+    homopolymer runs and the odd `N`, the same generator as the C program that ran hifiasm's own sketch."""
+    comptime letters = "ACGT"
+    var out = List[UInt8](capacity=n)
+    var state = UInt64(seed)
+    while len(out) < n:
+        state = state * 6364136223846793005 + 1442695040888963407
+        var c = letters.as_bytes()[Int((state >> 33) & 3)]
+        if (state >> 40) & 511 == 0:
+            c = UInt8(ord("N"))
+        var run = 2 + Int((state >> 24) % 5) if (state >> 20) & 15 == 0 else 1
+        for _ in range(run):
+            if len(out) < n:
+                out.append(c)
+    return out^
+
+
+def _yak_code(c: UInt8) -> Int:
+    var u = c | 0x20
+    if u == UInt8(ord("a")):
+        return 0
+    if u == UInt8(ord("c")):
+        return 1
+    if u == UInt8(ord("g")):
+        return 2
+    if u == UInt8(ord("t")) or u == UInt8(ord("u")):
+        return 3
+    return 4
+
+
+def naive_hpc_kmer_planes(seq: List[UInt8], k: Int) -> List[Tuple[UInt64, UInt64, UInt64, UInt64]]:
+    """Every homopolymer-compressed k-mer of `seq` (runs of non-ACGT letters cut it) as yak's four planes, built
+    from scratch for each window: `x0`, `x1` the forward low and high bits with the oldest letter in bit k-1,
+    `x2`, `x3` the reverse complement's with the oldest letter in bit 0."""
+    var out = List[Tuple[UInt64, UInt64, UInt64, UInt64]]()
+    var segment = List[Int]()
+
+    def flush(segment: List[Int]) {mut out, k}:
+        for start in range(len(segment) - k + 1):
+            var x0: UInt64 = 0
+            var x1: UInt64 = 0
+            var x2: UInt64 = 0
+            var x3: UInt64 = 0
+            for j in range(k):
+                var c = segment[start + j]
+                x0 |= UInt64(c & 1) << UInt64(k - 1 - j)
+                x1 |= UInt64(c >> 1) << UInt64(k - 1 - j)
+                x2 |= UInt64(1 - (c & 1)) << UInt64(j)
+                x3 |= UInt64(1 - (c >> 1)) << UInt64(j)
+            out.append((x0, x1, x2, x3))
+
+    for byte in seq:
+        var c = _yak_code(byte)
+        if c == 4:
+            flush(segment)
+            segment.clear()
+        elif len(segment) == 0 or segment[len(segment) - 1] != c:
+            segment.append(c)
+    flush(segment)
+    return out^

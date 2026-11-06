@@ -298,6 +298,32 @@ def main() raises:
 </details>
 
 <details>
+<summary><b>hifiasm's seeds</b>: <code>sporos.yak</code>, yak's k-mer counting and hifiasm's minimizers</summary>
+
+The seeding of hifiasm's overlapper, bit for bit as its C code: homopolymer-compressed k-mers up to k = 63 with
+yak's hash, counted exactly or through yak's blocked Bloom filter, the coverage peaks and the high-occurrence
+filter, hifiasm's minimizer sketch with its re-seeding of high-occurrence stretches, and the position table of
+every minimizer's occurrences. hifiasmCandidatesMojo builds hifiasm's candidate overlaps on them.
+
+```mojo
+from sporos import FilterTable, KmerCounts, PositionTable, analyze_count, read_fasta, sketch_all
+
+
+def main() raises:
+    var reads = read_fasta("reads.fq.gz", threads=8)
+    var counts = KmerCounts(reads, 51, threads=8)  # bf_shift=37: yak's Bloom filter, 16 GB; 0 counts exactly
+    var peaks = analyze_count(counts.histogram(), 5)  # peaks.hom, peaks.het
+    var filter = FilterTable(counts, cutoff=peaks.hom * 5)  # hifiasm drops k-mers over 5x the coverage
+    var sketches = sketch_all(reads, filter, w=51, k=51, threads=8, sample_dist=500, rewin=1000)
+    var table = PositionTable(sketches, threads=8)
+    for m in sketches[0].mz:  # read 0's minimizers: END position, span, strand, hash
+        var found = table.get(m.x)  # where its occurrences start in its partition, and how many
+        print(m.pos, m.span, m.rev, m.x, found[1])
+```
+
+</details>
+
+<details>
 <summary><b>Building blocks</b>: <code>SeqText</code>, <code>MemIndex</code>, <code>find_mems</code>, <code>occurrence_counts</code>, <code>FMIndex</code></summary>
 
 `Reference` wraps these; use them directly to control indexes and sampling.
