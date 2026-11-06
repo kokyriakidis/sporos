@@ -108,6 +108,21 @@ struct PackedReads(Movable, Sized):
             at += BASES_PER_WORD
         self.ambiguous_starts.append(len(self.ambiguous))
 
+    def extend(mut self, var other: PackedReads):
+        """Appends `other`'s reads after these, in order (their words copied, their offsets moved)."""
+        var word_base = len(self.words)
+        var ambiguous_base = len(self.ambiguous)
+        for r in range(len(other.word_starts)):
+            self.word_starts.append(other.word_starts[r] + word_base)
+        for r in range(1, len(other.ambiguous_starts)):
+            self.ambiguous_starts.append(other.ambiguous_starts[r] + ambiguous_base)
+        self.words.extend(Span(other.words))
+        self.ambiguous.extend(Span(other.ambiguous))
+        self.lengths.extend(Span(other.lengths))
+        var names = other.names^
+        other.names = List[String]()
+        self.names.extend(names^)
+
     def total_length(self) -> Int:
         var total = 0
         for length in self.lengths:

@@ -4,13 +4,17 @@ How each kind of file streams:
 - plain: read a chunk at a time;
 - BGZF (bgzip): compressed chunks, whose complete blocks are inflated in parallel with libdeflate, the partial
   last block carried into the next chunk; a plain gzip member after them continues through zlib;
-- other gzip: through zlib's `gzread`, as hifiasm's kseq reads it (libdeflate cannot stream), unless the file
-  is at most `whole_limit` bytes compressed, which libdeflate inflates in one call, faster;
+- other gzip at most `whole_limit` bytes compressed: inflated in one call by libdeflate;
+- larger gzip: decoded on `threads` threads by rapidgzip (rapidgzip-core, Rust, through the C interface in
+  rapidgzip-ffi: `libsporos_rapidgzip`), which finds DEFLATE blocks mid-stream and decodes them in parallel;
+  without that library, through zlib's `gzread`, one thread, as hifiasm's kseq reads it;
 - pipes and anything `stat` gives no size for: read whole (`read_file`).
 """
 
 from std.ffi import OwnedDLHandle, external_call
-from std.os import stat
+from std.os import getenv, stat
+from std.os.path import dirname
+from std.sys import argv
 from std.sys.info import CompilationTarget
 
 from sporos.fasta import _inflate_bgzf_into, _is_bgzf, _load_libdeflate, read_file
@@ -25,6 +29,36 @@ comptime _BGZF = 1
 comptime _ZLIB = 2
 comptime _WHOLE = 3
 comptime _DONE = 4
+comptime _RAPIDGZIP = 5
+
+comptime RAPIDGZIP_LIBRARY = "libsporos_rapidgzip" + (".dylib" if CompilationTarget.is_macos() else ".so")
+comptime _RAPIDGZIP_ABI = 1
+
+
+def load_rapidgzip() -> Optional[OwnedDLHandle]:
+    """`libsporos_rapidgzip` (`pixi run build-rapidgzip`), if it can be found: at $SPOROS_RAPIDGZIP_LIB, beside the
+    running program, in the environment pixi sets up ($CONDA_PREFIX/lib), or on the loader's path; and only if its
+    interface is the one this code speaks."""
+    var names = List[String]()
+    var env = getenv("SPOROS_RAPIDGZIP_LIB")
+    if env:
+        names.append(env)
+    var args = argv()
+    if len(args) > 0:
+        var dir = dirname(String(args[0]))
+        names.append((dir if dir else ".") + "/" + RAPIDGZIP_LIBRARY)
+    var prefix = getenv("CONDA_PREFIX")
+    if prefix:
+        names.append(prefix + "/lib/" + RAPIDGZIP_LIBRARY)
+    names.append(RAPIDGZIP_LIBRARY)
+    for name in names:
+        try:
+            var lib = OwnedDLHandle(name)
+            if Int(lib.get_function[UInt32]("srgz_abi")()) == _RAPIDGZIP_ABI:
+                return lib^
+        except:
+            pass
+    return None
 
 
 struct ByteStream(Movable):
@@ -39,6 +73,9 @@ struct ByteStream(Movable):
     var zlib: Optional[OwnedDLHandle]
     var gz: Int
     """zlib's `gzFile`, 0 when not open."""
+    var rapidgzip: Optional[OwnedDLHandle]
+    var rgz: Int
+    """rapidgzip's stream, 0 when not open."""
     var carry: List[UInt8]
     """BGZF bytes read but not inflated yet: the start of a block."""
     var carry_offset: Int
@@ -46,8 +83,16 @@ struct ByteStream(Movable):
     var at_eof: Bool
 
     def __init__(
-        out self, path: String, threads: Int = 1, chunk: Int = DEFAULT_CHUNK, whole_limit: Int = WHOLE_GZIP_LIMIT
+        out self,
+        path: String,
+        threads: Int = 1,
+        chunk: Int = DEFAULT_CHUNK,
+        whole_limit: Int = WHOLE_GZIP_LIMIT,
+        use_rapidgzip: Bool = True,
     ) raises:
+        """`path`'s bytes, `chunk` of them per `next`, on `threads` threads where the kind of file allows;
+        `use_rapidgzip=False` keeps large gzip on zlib even where rapidgzip is found. $SPOROS_GZIP_WHOLE_LIMIT, when
+        set, replaces `whole_limit` (0: every gzip file streams)."""
         self.path = path
         self.threads = max(1, threads)
         self.chunk = max(1 << 12, chunk)
@@ -55,9 +100,15 @@ struct ByteStream(Movable):
         self.libdeflate = None
         self.zlib = None
         self.gz = 0
+        self.rapidgzip = None
+        self.rgz = 0
         self.carry = List[UInt8]()
         self.carry_offset = 0
         self.at_eof = False
+        var limit = whole_limit
+        var env = getenv("SPOROS_GZIP_WHOLE_LIMIT")
+        if env:
+            limit = Int(env)
         var size = Int(stat(path).st_size)
         if size <= 0:
             self.kind = _WHOLE
@@ -75,11 +126,17 @@ struct ByteStream(Movable):
         if self.libdeflate and got >= 18 and _is_bgzf(Span(head)[:got]):
             self.kind = _BGZF
             self.file = open(path, "r")
-        elif self.libdeflate and size <= whole_limit:
+        elif self.libdeflate and size <= limit:
             self.kind = _WHOLE
         else:
-            self.kind = _ZLIB
-            self._open_zlib(0)
+            if use_rapidgzip:
+                self.rapidgzip = load_rapidgzip()
+            if self.rapidgzip:
+                self.kind = _RAPIDGZIP
+                self._open_rapidgzip()
+            else:
+                self.kind = _ZLIB
+                self._open_zlib(0)
 
     def __deinit__(deinit self):
         if self.gz != 0 and self.zlib:
@@ -87,6 +144,48 @@ struct ByteStream(Movable):
                 _ = self.zlib.value().get_function[Int32]("gzclose")(self.gz)
             except:
                 pass
+        if self.rgz != 0 and self.rapidgzip:
+            try:
+                self.rapidgzip.value().get_function[NoneType]("srgz_close")(self.rgz)
+            except:
+                pass
+
+    def _rapidgzip_error(self) raises -> String:
+        var length = 0
+        var text = self.rapidgzip.value().get_function[MutPointer[UInt8, MutUntrackedOrigin]]("srgz_error")(
+            Pointer(to=length)
+        )
+        return String(unsafe_from_utf8=Span(unsafe_ptr=text, length=length))
+
+    def _open_rapidgzip(mut self) raises:
+        var path = self.path.as_bytes()
+        var handle = 0
+        var status = self.rapidgzip.value().get_function[Int64]("srgz_open")(
+            path.unsafe_ptr(), len(path), UInt32(self.threads), Pointer(to=handle)
+        )
+        if status < 0:
+            var message = self._rapidgzip_error()
+            raise Error(message)
+        self.rgz = handle
+        self.kind = _RAPIDGZIP
+
+    def _next_rapidgzip(mut self, mut out: List[UInt8]) raises -> Bool:
+        if self.rgz == 0:
+            return False
+        ref lib = self.rapidgzip.value()
+        var old = len(out)
+        out.resize(unsafe_uninit_length=old + self.chunk)
+        var got = Int(lib.get_function[Int64]("srgz_read")(self.rgz, out.unsafe_ptr().unsafe_offset(old), self.chunk))
+        if got < 0:
+            out.resize(unsafe_uninit_length=old)
+            var message = self._rapidgzip_error()
+            raise Error(message)
+        out.resize(unsafe_uninit_length=old + got)
+        if got < self.chunk:
+            # The end, verified by the library: every member's CRC32 and size.
+            lib.get_function[NoneType]("srgz_close")(self.rgz)
+            self.rgz = 0
+        return got > 0
 
     def _open_zlib(mut self, offset: Int) raises:
         """Continues the file through zlib from byte `offset`."""
@@ -106,6 +205,21 @@ struct ByteStream(Movable):
         _ = self.zlib.value().get_function[Int32]("gzbuffer")(self.gz, UInt32(1 << 20))
         self.kind = _ZLIB
 
+    def decoder(self) -> String:
+        """What reads the file: "plain", "bgzf" (libdeflate, block-parallel), "libdeflate" (whole), "zlib" or
+        "rapidgzip" ("done" once used up)."""
+        if self.kind == _PLAIN:
+            return "plain"
+        if self.kind == _BGZF:
+            return "bgzf"
+        if self.kind == _ZLIB:
+            return "zlib"
+        if self.kind == _WHOLE:
+            return "libdeflate"
+        if self.kind == _RAPIDGZIP:
+            return "rapidgzip"
+        return "done"
+
     def next(mut self, mut out: List[UInt8]) raises -> Bool:
         """Appends the next chunk of bytes to `out`; False once the file is used up (nothing appended)."""
         if self.kind == _PLAIN:
@@ -114,6 +228,8 @@ struct ByteStream(Movable):
             return self._next_bgzf(out)
         if self.kind == _ZLIB:
             return self._next_zlib(out)
+        if self.kind == _RAPIDGZIP:
+            return self._next_rapidgzip(out)
         if self.kind == _WHOLE:
             self.kind = _DONE
             if len(out) == 0:

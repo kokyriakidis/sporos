@@ -34,6 +34,9 @@ build-test-batch = { cmd = "mojo build -I . -I tests tests/test_batch.mojo -o bu
 build-test-io = { cmd = "mojo build -I . -I tests tests/test_io.mojo -o build/test_io", depends-on = ["prepare"] }
 build-test-fmindex = { cmd = "mojo build -I . -I tests tests/test_fmindex.mojo -o build/test_fmindex", depends-on = ["prepare"] }
 build-test-api = { cmd = "mojo build -I . -I tests tests/test_api.mojo -o build/test_api", depends-on = ["prepare"] }
+# rapidgzip behind its C interface (rapidgzip-ffi): optional; ByteStream decodes large gzip with it when found,
+# here through SPOROS_RAPIDGZIP_LIB or beside the program. Needs cargo (Rust >= 1.88).
+build-rapidgzip = { cmd = "cargo build --release --locked --manifest-path rapidgzip-ffi/Cargo.toml --target-dir build/cargo && cp build/cargo/release/libsporos_rapidgzip.* build/", env = { RUSTFLAGS = "-C target-cpu=native" }, depends-on = ["prepare"] }
 build-test-yak = { cmd = "mojo build -I . -I tests tests/test_yak.mojo -o build/test_yak", depends-on = ["prepare"] }
 # Every kernel held to a brute-force oracle (tests/reference.mojo).
 test = { cmd = "./build/test_io && ./build/test_seeds && ./build/test_batch && ./build/test_mems && ./build/test_index && ./build/test_fmindex && ./build/test_api && ./build/test_yak", depends-on = ["build-test-io", "build-test-seeds", "build-test-batch", "build-test-mems", "build-test-index", "build-test-fmindex", "build-test-api", "build-test-yak"] }

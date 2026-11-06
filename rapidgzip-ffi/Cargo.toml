@@ -1,0 +1,22 @@
+[package]
+name = "sporos-rapidgzip"
+version = "0.1.0"
+authors = ["Konstantinos Kyriakidis <kkyriaki@ucsc.edu>"]
+edition = "2024"
+# rapidgzip-core needs 1.87; its workspace pins 1.88.
+rust-version = "1.88"
+description = "rapidgzip-core behind a C interface, for sporos: one gzip file decoded by many threads, read in order"
+license = "MIT"
+publish = false
+
+[lib]
+name = "sporos_rapidgzip"
+crate-type = ["cdylib"]
+
+[dependencies]
+rapidgzip-core = "=0.3.1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

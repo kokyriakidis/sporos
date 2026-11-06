@@ -119,6 +119,12 @@ pixi run test             # optional: every kernel against its brute-force oracl
 The C and Python builds are self-contained folders that run without Mojo; building an FM-index also needs
 libsais, which they find through pixi's environment.
 
+Optional: `pixi run build-rapidgzip` (needs Rust 1.88 or newer) builds `build/libsporos_rapidgzip`, which
+puts [rapidgzip-rust](https://github.com/COMBINE-lab/rapidgzip-rust) behind a C interface (`rapidgzip-ffi/`).
+Where it is found ($SPOROS_RAPIDGZIP_LIB, beside the program, or in pixi's environment), `ByteStream` decodes
+large gzip files on every thread instead of zlib's one: 52.7 GB of HiFi FASTQ in 12 s on 64 cores, against
+324 s for `zcat`.
+
 ## Command line
 
 ```sh

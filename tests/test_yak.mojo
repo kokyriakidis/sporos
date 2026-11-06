@@ -265,6 +265,31 @@ def test_packed_reads_round_trip() raises:
             assert_equal(buf[i], nt4(seqs[r][i]))
 
 
+def test_packed_reads_extend() raises:
+    """Two stores appended one after the other decode as one store built in one go."""
+    var one = PackedReads()
+    var first = PackedReads()
+    var second = PackedReads()
+    for r in range(20):
+        var seq = yak_test_sequence(50 + 37 * r, 70 + r)
+        one.append(String(t"r{r}"), Span(seq))
+        if r < 7:
+            first.append(String(t"r{r}"), Span(seq))
+        else:
+            second.append(String(t"r{r}"), Span(seq))
+    first.extend(second^)
+    assert_equal(len(first), len(one))
+    var a = List[UInt8](length=1024, fill=0)
+    var b = List[UInt8](length=1024, fill=0)
+    for r in range(len(one)):
+        assert_true(first.names[r] == one.names[r])
+        assert_equal(first.lengths[r], one.lengths[r])
+        one.decode(r, a.unsafe_ptr())
+        first.decode(r, b.unsafe_ptr())
+        for i in range(one.lengths[r]):
+            assert_equal(a[i], b[i])
+
+
 def _table_reads() -> PackedReads:
     var seqs = List[List[UInt8]]()
     var shared = yak_test_sequence(4000, 41)

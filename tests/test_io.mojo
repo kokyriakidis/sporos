@@ -2,7 +2,7 @@ from std.testing import assert_equal, assert_true, TestSuite
 from std.ffi import external_call
 
 from sporos.fasta import FastaRecords, parse_sequences, read_fasta, read_file
-from sporos.stream import ByteStream
+from sporos.stream import RAPIDGZIP_LIBRARY, ByteStream, load_rapidgzip
 
 
 def _is(records: FastaRecords, i: Int, expected: StringSlice) -> Bool:
@@ -115,9 +115,9 @@ def test_parallel_parse_matches_serial() raises:
             raise Error(String(t"byte {i} differs"))
 
 
-def _streamed(path: String, chunk: Int, whole_limit: Int) raises -> Tuple[List[UInt8], Int]:
+def _streamed(path: String, chunk: Int, whole_limit: Int, rapidgzip: Bool) raises -> Tuple[List[UInt8], Int]:
     """Every chunk of `path` streamed, joined, and how many chunks there were."""
-    var stream = ByteStream(path, 2, chunk, whole_limit)
+    var stream = ByteStream(path, 2, chunk, whole_limit, rapidgzip)
     var out = List[UInt8]()
     var chunks = 0
     while stream.next(out):
@@ -125,9 +125,17 @@ def _streamed(path: String, chunk: Int, whole_limit: Int) raises -> Tuple[List[U
     return (out^, chunks)
 
 
+def test_rapidgzip_found_when_built() raises:
+    """Where `pixi run build-rapidgzip` has run, the library loads (so the stream test covers it)."""
+    var built = _system("test -f build/" + String(RAPIDGZIP_LIBRARY)) == 0
+    if built:
+        assert_true(Bool(load_rapidgzip()))
+
+
 def test_byte_stream_matches_read_file() raises:
-    """Plain, gzip (inflated whole, and streamed through zlib), BGZF, and BGZF followed by a plain gzip member:
-    the chunks join to exactly what `read_file` reads, at chunk sizes that split blocks and lines."""
+    """Plain, gzip (inflated whole, and streamed through zlib and, where libsporos_rapidgzip is found, rapidgzip),
+    BGZF, and BGZF followed by a plain gzip member: the chunks join to exactly what `read_file` reads, at chunk
+    sizes that split blocks and lines."""
     var base = String("build/test_io_stream.fq")
     with open(base, "w") as f:
         for r in range(3000):
@@ -153,13 +161,16 @@ def test_byte_stream_matches_read_file() raises:
         assert_true(len(expected) > 1000000)
         for chunk in [4096, 100000, 1 << 26]:
             for whole_limit in [0, 1 << 30]:
-                var got = _streamed(path, chunk, whole_limit)
-                assert_equal(len(got[0]), len(expected))
-                for i in range(len(expected)):
-                    if got[0][i] != expected[i]:
-                        assert_equal(i, -1)
-                if chunk == 4096 and whole_limit == 0:
-                    assert_true(got[1] > 10)
+                for rapidgzip in [False, True]:
+                    if rapidgzip and (whole_limit != 0 or not load_rapidgzip()):
+                        continue
+                    var got = _streamed(path, chunk, whole_limit, rapidgzip)
+                    assert_equal(len(got[0]), len(expected))
+                    for i in range(len(expected)):
+                        if got[0][i] != expected[i]:
+                            assert_equal(i, -1)
+                    if chunk == 4096 and whole_limit == 0:
+                        assert_true(got[1] > 10)
 
 
 def main() raises:
