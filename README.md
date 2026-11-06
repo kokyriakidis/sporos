@@ -303,20 +303,25 @@ def main() raises:
 The seeding of hifiasm's overlapper, bit for bit as its C code: homopolymer-compressed k-mers up to k = 63 with
 yak's hash, counted exactly or through yak's blocked Bloom filter, the coverage peaks and the high-occurrence
 filter, hifiasm's minimizer sketch with its re-seeding of high-occurrence stretches, and the position table of
-every minimizer's occurrences. hifiasmCandidatesMojo builds hifiasm's candidate overlaps on them.
+every minimizer's occurrences, built as hifiasm builds it without keeping any read's sketch. The reads are
+`PackedReads`, two bits per base. hifiasmCandidatesMojo builds hifiasm's candidate overlaps on them.
 
 ```mojo
-from sporos import FilterTable, KmerCounts, PositionTable, analyze_count, read_fasta, sketch_all
+from sporos import FilterTable, KmerCounts, PackedReads, PositionTable, analyze_count, read_fasta
+from sporos.yak import Sketch, SketchScratch, sketch_read
 
 
 def main() raises:
-    var reads = read_fasta("reads.fq.gz", threads=8)
+    var reads = PackedReads(read_fasta("reads.fq.gz", threads=8))  # two bits per base, as hifiasm keeps them
     var counts = KmerCounts(reads, 51, threads=8)  # bf_shift=37: yak's Bloom filter, 16 GB; 0 counts exactly
     var peaks = analyze_count(counts.histogram(threads=8), 5)  # peaks.hom, peaks.het
     var filter = FilterTable(counts, cutoff=peaks.hom * 5, threads=8)  # hifiasm drops k-mers over 5x the coverage
-    var sketches = sketch_all(reads, filter, w=51, k=51, threads=8, sample_dist=500, rewin=1000)
-    var table = PositionTable(sketches, threads=8)
-    for m in sketches[0].mz:  # read 0's minimizers: END position, span, strand, hash
+    # The reads sketched twice, a batch at a time (count, then place); no sketch is kept.
+    var table = PositionTable(reads, filter, w=51, k=51, threads=8, sample_dist=500, rewin=1000)
+    var sketch = Sketch()
+    var scratch = SketchScratch()  # reused from read to read
+    sketch_read(reads, 0, 51, 51, True, filter, 500, 1000, sketch, scratch)
+    for m in sketch.mz:  # read 0's minimizers: END position, span, strand, hash
         var found = table.get(m.x)  # where its occurrences start in its partition, and how many
         print(m.pos, m.span, m.rev, m.x, found[1])
 ```

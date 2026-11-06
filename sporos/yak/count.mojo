@@ -7,11 +7,12 @@ per-partition buffers, then every partition inserts its buffers, through its Blo
 
 from std.bit import count_leading_zeros
 
-from sporos.fasta import FastaRecords
 from sporos.parallel import ParallelTask, parallel_for
 
 from sporos.yak.bloom import BF_N_HASHES, DEFAULT_BF_SHIFT, BloomFilters
-from sporos.yak.hash import HASH_LANES, Kmer, hpc_run_starts, nt4, yak_hash64_64, yak_hash64_64_lanes
+from sporos.alphabet import encode_into
+from sporos.packed import PackedReads
+from sporos.yak.hash import HASH_LANES, Kmer, fit_codes, nt4, run_starts, yak_hash64_64, yak_hash64_64_lanes
 
 
 comptime YAK_COUNTER_BITS = 12
@@ -149,12 +150,28 @@ struct HpcScratch(Movable):
         self.planes = List[UInt64]()
 
 
-@no_inline
 def hpc_kmer_hashes(seq: Span[UInt8, _], k: Int, mut out: List[UInt64], mut scratch: HpcScratch):
-    """`hpc_kmer_hashes` through `scratch`. The read's homopolymer runs are found a vector at a time
-    (`hpc_run_starts`), the rolling k-mer steps once per run, and the k-mers' canonical planes are hashed
-    `HASH_LANES` at a time."""
-    var runs = hpc_run_starts(seq, scratch.codes, scratch.starts)
+    """`hpc_kmer_hashes` through `scratch`."""
+    var n = len(seq)
+    fit_codes(scratch.codes, n)
+    encode_into(seq, scratch.codes.unsafe_ptr().unsafe_offset(1), 4)
+    _hashes_of_codes(n, k, out, scratch)
+
+
+def hpc_kmer_hashes(reads: PackedReads, r: Int, k: Int, mut out: List[UInt64], mut scratch: HpcScratch):
+    """`hpc_kmer_hashes` of read `r` of `reads`, decoded straight to codes."""
+    var n = reads.lengths[r]
+    fit_codes(scratch.codes, n)
+    reads.decode(r, scratch.codes.unsafe_ptr().unsafe_offset(1))
+    _hashes_of_codes(n, k, out, scratch)
+
+
+@no_inline
+def _hashes_of_codes(length: Int, k: Int, mut out: List[UInt64], mut scratch: HpcScratch):
+    """The hashes of the compressed k-mers of the `length` codes in `scratch.codes[1:]`. The homopolymer runs are
+    found a vector at a time (`run_starts`), the rolling k-mer steps once per run, and the k-mers' canonical
+    planes are hashed `HASH_LANES` at a time."""
+    var runs = run_starts(scratch.codes, length, scratch.starts)
     var start = len(out)
     out.resize(unsafe_uninit_length=start + runs)
     var need = 2 * runs + 2 * HASH_LANES
@@ -209,11 +226,39 @@ struct _Block(Movable):
         self.offsets = List[Int]()
 
 
+def share_by_bases(lengths: List[Int], first: Int, last: Int, runs: Int, index: Int) -> Tuple[Int, Int]:
+    """Run `index`'s reads among `first ..< last` split `runs` ways: the contiguous range whose bases are its
+    equal share (a range starts at the first read starting at or past its share), so the runs take about the
+    same time however the read lengths vary, and the runs in order are the reads in order."""
+    var total = 0
+    for r in range(first, last):
+        total += lengths[r]
+    var lo = last
+    var hi = last
+    var before = 0
+    var r = first
+    while r < last:
+        if before * runs >= total * index:
+            lo = r
+            break
+        before += lengths[r]
+        r += 1
+    while r < last:
+        if before * runs >= total * (index + 1):
+            hi = r
+            break
+        before += lengths[r]
+        r += 1
+    if index == runs - 1:
+        hi = last
+    return (lo, hi)
+
+
 struct _ScanTask[records_origin: ImmOrigin, blocks_origin: MutOrigin](ParallelTask):
     """Hashes the k-mers of one run of reads, then groups them by partition with a counting sort, which keeps
     each partition's hashes in read order. Tracked origins keep the inputs alive while the task runs."""
 
-    var records: ImmPointer[FastaRecords, Self.records_origin]
+    var records: ImmPointer[PackedReads, Self.records_origin]
     var first: Int
     var last: Int
     var runs: Int
@@ -222,7 +267,7 @@ struct _ScanTask[records_origin: ImmOrigin, blocks_origin: MutOrigin](ParallelTa
 
     def __init__(
         out self,
-        records: ImmPointer[FastaRecords, Self.records_origin],
+        records: ImmPointer[PackedReads, Self.records_origin],
         first: Int,
         last: Int,
         runs: Int,
@@ -236,36 +281,8 @@ struct _ScanTask[records_origin: ImmOrigin, blocks_origin: MutOrigin](ParallelTa
         self.k = k
         self.blocks = blocks
 
-    def _share(self, index: Int) -> Tuple[Int, Int]:
-        """Run `index`'s reads: the contiguous range whose bases are its equal share of the block's (a range
-        starts at the first read starting at or past its share), so the runs take the same time however the
-        read lengths vary, and the runs in order are the block's reads in order."""
-        ref lengths = self.records[].lengths
-        var total = 0
-        for r in range(self.first, self.last):
-            total += lengths[r]
-        var lo = self.last
-        var hi = self.last
-        var before = 0
-        var r = self.first
-        while r < self.last:
-            if before * self.runs >= total * index:
-                lo = r
-                break
-            before += lengths[r]
-            r += 1
-        while r < self.last:
-            if before * self.runs >= total * (index + 1):
-                hi = r
-                break
-            before += lengths[r]
-            r += 1
-        if index == self.runs - 1:
-            hi = self.last
-        return (lo, hi)
-
     def run(self, index: Int):
-        var range_ = self._share(index)
+        var range_ = share_by_bases(self.records[].lengths, self.first, self.last, self.runs, index)
         var lo = range_[0]
         var hi = range_[1]
         # A read has at most as many k-mers as letters: room for all of them up front, as `List.resize` grows
@@ -280,7 +297,7 @@ struct _ScanTask[records_origin: ImmOrigin, blocks_origin: MutOrigin](ParallelTa
         var op = offsets.unsafe_ptr()
         for r in range(lo, hi):
             var before = len(hashes)
-            hpc_kmer_hashes(self.records[].seq(r), self.k, hashes, scratch)
+            hpc_kmer_hashes(self.records[], r, self.k, hashes, scratch)
             var fresh = hashes.unsafe_ptr()
             for i in range(before, len(hashes)):
                 op[unsafe_offset=Int(fresh[unsafe_offset=i] & (PARTITIONS - 1)) + 1] += 1
@@ -365,7 +382,7 @@ struct KmerCounts(Movable):
 
     def __init__(
         out self,
-        records: FastaRecords,
+        records: PackedReads,
         k: Int,
         threads: Int = 1,
         block: Int = 1 << 24,

@@ -13,7 +13,9 @@ from std.bit import count_trailing_zeros
 from std.memory import pack_bits
 
 from sporos.yak.filter import FilterTable
-from sporos.yak.hash import HASH_LANES, Kmer, hpc_run_starts, yak_hash64_64, yak_hash64_64_lanes
+from sporos.alphabet import encode_into
+from sporos.packed import PackedReads
+from sporos.yak.hash import HASH_LANES, Kmer, fit_codes, run_starts, yak_hash64_64, yak_hash64_64_lanes
 
 comptime _DUMMY_X = UInt64.MAX
 comptime _DUMMY_RID = (UInt32(1) << 28) - 1
@@ -148,14 +150,14 @@ struct SketchScratch(Movable):
 
 
 @no_inline
-def _scan(seq: Span[UInt8, _], k: Int, is_hpc: Bool, mut ev: SketchScratch) -> Int:
+def _scan(length: Int, k: Int, is_hpc: Bool, mut ev: SketchScratch) -> Int:
     """The serial part of `mz1_ha_sketch`: homopolymer runs, the rolling planes, `l`, the span; returns `tl`.
-    The runs come from `hpc_run_starts`, so this loop steps once per run (each ambiguous letter its own). The C
+    The read's codes are in `ev.codes[1 : length + 1]`; the runs come from `run_starts`, so this loop steps once per run (each ambiguous letter its own). The C
     keeps the span in a queue of the last k run lengths, emptied at an ambiguous letter; a k-mer is used only
     once `l >= k`, and by then at least k runs (symmetric k-mers' runs too) have passed since that letter, so
     the queue is full and its sum is the raw distance from the start of the run k runs back to this run's end.
     Without compression every run is one letter and that distance is k, as the C has it."""
-    var runs = hpc_run_starts(seq, ev.codes, ev.starts, is_hpc)
+    var runs = run_starts(ev.codes, length, ev.starts, is_hpc)
     var codes = ev.codes.unsafe_ptr().unsafe_offset(1)
     var starts = ev.starts.unsafe_ptr()
     var el = ev.l.unsafe_ptr()
@@ -428,12 +430,48 @@ def sketch_read(
     mut ev: SketchScratch,
 ):
     """`sketch_read` in the working memory `ev`."""
-    out.clear()
     var length = len(seq)
+    fit_codes(ev.codes, length)
+    encode_into(seq, ev.codes.unsafe_ptr().unsafe_offset(1), 4)
+    _sketch_codes(length, w, k, is_hpc, filter, sample_dist, rewin, out, ev)
+
+
+def sketch_read(
+    reads: PackedReads,
+    r: Int,
+    w: Int,
+    k: Int,
+    is_hpc: Bool,
+    filter: FilterTable,
+    sample_dist: Int,
+    rewin: Int,
+    mut out: Sketch,
+    mut ev: SketchScratch,
+):
+    """`sketch_read` of read `r` of `reads`, decoded straight to codes in `ev`."""
+    var length = reads.lengths[r]
+    fit_codes(ev.codes, length)
+    reads.decode(r, ev.codes.unsafe_ptr().unsafe_offset(1))
+    _sketch_codes(length, w, k, is_hpc, filter, sample_dist, rewin, out, ev)
+
+
+def _sketch_codes(
+    length: Int,
+    w: Int,
+    k: Int,
+    is_hpc: Bool,
+    filter: FilterTable,
+    sample_dist: Int,
+    rewin: Int,
+    mut out: Sketch,
+    mut ev: SketchScratch,
+):
+    """`sketch_read` of the `length` codes in `ev.codes[1:]`."""
+    out.clear()
     if length <= 0:
         return
     ev.fit(length + 16)
-    var tl = _scan(seq, k, is_hpc, ev)
+    var tl = _scan(length, k, is_hpc, ev)
     _hash_all(ev)
     _window(ev, w, k, filter, out)
     out.compressed_length = tl

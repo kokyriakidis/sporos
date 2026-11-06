@@ -5,13 +5,14 @@ hifiasm's filtered sketch with its re-seeding is held to the C code on real read
 
 from std.testing import assert_equal, assert_true, TestSuite
 
-from sporos.fasta import FastaRecords
+from sporos.packed import PackedReads
 from sporos.yak import (
     BloomFilters,
     FilterTable,
     KmerCounts,
     PositionTable,
     Sketch,
+    SketchScratch,
     analyze_count,
     hpc_kmer_hashes,
     nt4,
@@ -26,13 +27,10 @@ from sporos.yak.hash import HASH_LANES, hpc_run_starts
 from reference import naive_hpc_kmer_planes, yak_test_sequence
 
 
-def _records(seqs: List[List[UInt8]]) -> FastaRecords:
-    var records = FastaRecords()
+def _records(seqs: List[List[UInt8]]) -> PackedReads:
+    var records = PackedReads()
     for i in range(len(seqs)):
-        records.names.append(String(t"r{i}"))
-        records.starts.append(len(records.data))
-        records.lengths.append(len(seqs[i]))
-        records.data.extend(Span(seqs[i]))
+        records.append(String(t"r{i}"), Span(seqs[i]))
     return records^
 
 
@@ -232,20 +230,62 @@ def test_sketch_matches_hifiasm() raises:
         var d = _digest(out)
         assert_equal(d[0], c[5])
         assert_equal(d[1], c[6])
+        # The same read packed two bits per base and decoded straight to codes.
+        var packed = PackedReads()
+        packed.append("r", Span(seq))
+        var scratch = SketchScratch()
+        sketch_read(packed, 0, c[3], c[2], c[4], none, 0, 1000, out, scratch)
+        var p = _digest(out)
+        assert_equal(p[0], c[5])
+        assert_equal(p[1], c[6])
 
 
-def test_position_table_against_brute_force() raises:
+def test_packed_reads_round_trip() raises:
+    """Every byte value, in runs, at lengths around the word size: decoding gives `nt4`'s code of each letter."""
+    var reads = PackedReads()
+    var seqs = List[List[UInt8]]()
+    var state: UInt64 = 3
+    for n in range(0, 140):
+        var seq = List[UInt8](capacity=n)
+        while len(seq) < n:
+            state = state * 6364136223846793005 + 1442695040888963407
+            var c = UInt8((state >> 33) & 255)
+            if (state >> 20) & 3 != 0:
+                c = "ACGTacgtNU".as_bytes()[Int((state >> 41) % 10)]
+            for _ in range(1 + Int((state >> 50) % 4)):
+                if len(seq) < n:
+                    seq.append(c)
+        reads.append(String(t"r{n}"), Span(seq))
+        seqs.append(seq^)
+    var buf = List[UInt8](length=256, fill=0)
+    for r in range(len(reads)):
+        assert_equal(reads.lengths[r], len(seqs[r]))
+        reads.decode(r, buf.unsafe_ptr())
+        for i in range(len(seqs[r])):
+            assert_equal(buf[i], nt4(seqs[r][i]))
+
+
+def _table_reads() -> PackedReads:
     var seqs = List[List[UInt8]]()
     var shared = yak_test_sequence(4000, 41)
     for r in range(6):
         var s = shared.copy()
         s.extend(Span(yak_test_sequence(1000, 50 + r)))
         seqs.append(s^)
-    var records = _records(seqs)
-    var sketches = sketch_all(records, FilterTable(), 11, 15, 2, 0, 1000)
-    var table = PositionTable(sketches, 2)
+    return _records(seqs)
+
+
+def test_position_table_against_brute_force() raises:
+    """The two-pass table against the stored sketches: every hash seen 2 to 4094 times, its occurrences in read
+    order; and batches of a few reads give the same table as one batch."""
+    var reads = _table_reads()
+    var sketches = sketch_all(reads, FilterTable(), 11, 15, 2, 0, 1000)
+    var table = PositionTable(reads, FilterTable(), 11, 15, 2, 0, 1000)
+    var batched = PositionTable(reads, FilterTable(), 11, 15, 3, 0, 1000, batch=9000)
     var occurrences = Dict[UInt64, List[Tuple[Int, Int]]]()
+    var collected = 0
     for r in range(len(sketches)):
+        collected += len(sketches[r].mz)
         for m in sketches[r].mz:
             if m.x not in occurrences:
                 occurrences[m.x] = List[Tuple[Int, Int]]()
@@ -254,6 +294,8 @@ def test_position_table_against_brute_force() raises:
     var positions = 0
     for entry in occurrences.items():
         var found = table.get(entry.key)
+        var again = batched.get(entry.key)
+        assert_equal(again[1], found[1])
         var n = len(entry.value)
         if n < 2 or n > 4094:
             assert_equal(found[1], 0)
@@ -265,9 +307,12 @@ def test_position_table_against_brute_force() raises:
             var p = table.position(entry.key, found[0] + i)
             assert_equal(position_rid(p), entry.value[i][0])
             assert_equal(position_pos(p), entry.value[i][1])
+            assert_equal(batched.position(entry.key, again[0] + i), p)
     assert_true(kept > 100)
+    assert_equal(table.collected, collected)
     assert_equal(table.distinct, kept)
     assert_equal(table.indexed, positions)
+    assert_equal(batched.indexed, positions)
 
 
 def main() raises:

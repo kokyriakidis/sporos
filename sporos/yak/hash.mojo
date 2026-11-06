@@ -124,18 +124,29 @@ def hpc_run_starts(seq: Span[UInt8, _], mut codes: List[UInt8], mut starts: List
     """The runs a homopolymer-compressed scan of `seq` steps through: `codes[1 + i]` is base `i`'s yak code (4
     for anything but A/C/G/T/U), and `starts[r]` where run `r` begins, `starts[runs] = len(seq)`; returns the
     number of runs. A run is a stretch of one letter (with `is_hpc`; else every base is its own run), and every
-    ambiguous base is a run of its own, as hifiasm steps over them one by one. The codes are decoded
-    `_RUN_WIDTH` bases at a time, and a run starts wherever a code differs from the one before it (or is 4),
-    found as the bits of a vector comparison."""
+    ambiguous base is a run of its own, as hifiasm steps over them one by one."""
     var n = len(seq)
-    if len(codes) < n + 1 + _RUN_WIDTH:
-        codes.resize(unsafe_uninit_length=n + 1 + _RUN_WIDTH)
+    fit_codes(codes, n)
+    encode_into(seq, codes.unsafe_ptr().unsafe_offset(1), 4)
+    return run_starts(codes, n, starts, is_hpc)
+
+
+def fit_codes(mut codes: List[UInt8], n: Int):
+    """Sizes a codes buffer for `run_starts` on `n` bases: a sentinel, the codes, and a padded tail (packed reads
+    decode whole words)."""
+    var need = n + 1 + 2 * _RUN_WIDTH
+    if len(codes) < need:
+        codes.resize(unsafe_uninit_length=need)
+    codes.unsafe_ptr()[unsafe_offset=0] = 255
+
+
+def run_starts(codes: List[UInt8], n: Int, mut starts: List[UInt32], is_hpc: Bool = True) -> Int:
+    """`hpc_run_starts` on codes already in `codes[1 : n + 1]` (`codes[0]` a sentinel no code equals, as
+    `fit_codes` leaves it). A run starts wherever a code differs from the one before it (or is 4), found
+    `_RUN_WIDTH` bases at a time as the bits of a vector comparison."""
     if len(starts) < n + 1:
         starts.resize(unsafe_uninit_length=n + 1)
     var cp = codes.unsafe_ptr()
-    # A sentinel no code equals, so the first base starts a run.
-    cp[unsafe_offset=0] = 255
-    encode_into(seq, cp.unsafe_offset(1), 4)
     var sp = starts.unsafe_ptr()
     var runs = 0
     if not is_hpc:

@@ -15,7 +15,11 @@ the same answers as its C code, bit for bit, and are the seeding of the `hcm` pa
 - `sketch_read` -> `Sketch` of `Minimizer` (`sketch`): hifiasm's minimizers (`mz1_ha_sketch`), ordered by the
   filter's count, then the hash, with its re-seeding of high-occurrence stretches (`select_mz_h`); `SketchScratch`
   keeps its working memory across reads, and `sketch_all` sketches every read in parallel, longest first.
-- `PositionTable` (`table`): every occurrence of each minimizer kept (2 to 4094 occurrences), by hash.
+- `PositionTable` (`table`): every occurrence of each minimizer kept (2 to 4094 occurrences), by hash, built as
+  hifiasm builds it: the reads sketched in batches, once to count and once to place, no sketch kept.
+
+The read sets are `PackedReads` (`sporos.packed`), two bits per base as hifiasm keeps them; the scans decode
+them straight to codes.
 """
 
 from .bloom import DEFAULT_BF_SHIFT, BloomFilters
@@ -24,4 +28,4 @@ from .filter import FilterTable
 from .hash import Kmer, nt4, yak_hash64_64, yak_hash64_64_lanes
 from .histogram import Peaks, analyze_count
 from .sketch import Minimizer, Sketch, SketchScratch, mzcmp, select_mz_h, sketch_read
-from .table import PositionTable, position_pos, position_rev, position_rid, position_span, sketch_all
+from .table import DEFAULT_BATCH, PositionTable, position_pos, position_rev, position_rid, position_span, sketch_all
